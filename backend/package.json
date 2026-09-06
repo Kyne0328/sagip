@@ -1,0 +1,29 @@
+{
+  "name": "@sagip/backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "start": "tsx src/main.ts",
+    "dev": "tsx src/devServer.ts",
+    "test": "tsx --test test/**/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src test --ext .ts"
+  },
+  "dependencies": {
+    "pg": "^8.16.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.15.5",
+    "@typescript-eslint/eslint-plugin": "^8.42.0",
+    "@typescript-eslint/parser": "^8.42.0",
+    "eslint": "^8.57.1",
+    "pg-mem": "^3.0.5",
+    "tsx": "^4.20.5",
+    "typescript": "^6.0.3"
+  }
+}
