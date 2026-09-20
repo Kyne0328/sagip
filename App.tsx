@@ -62,7 +62,8 @@ export default function App() {
         {!showForm ? (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Create SOS"
+            accessibilityLabel="Create emergency SOS report"
+            accessibilityHint="Opens emergency category selection to save SOS locally on this device"
             style={styles.sosButton}
             onPress={() => setShowForm(true)}>
             <Text style={styles.sosButtonText}>SOS</Text>
@@ -92,7 +93,8 @@ export default function App() {
             ))}
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Save SOS on this device"
+              accessibilityLabel={saving ? "Saving emergency report locally" : "Save SOS now on this device"}
+              accessibilityHint="Commits emergency report immediately to authoritative local storage"
               disabled={!emergencyType || !urgency || saving}
               onPress={() => {
                 save();
@@ -113,7 +115,7 @@ export default function App() {
           </View>
         ) : null}
 
-        <View style={styles.statusCard}>
+        <View accessibilityLiveRegion="polite" style={styles.statusCard}>
           <Text style={styles.sectionTitle}>Local SOS status</Text>
           {loading ? (
             <Text style={styles.statusText}>Checking this device…</Text>

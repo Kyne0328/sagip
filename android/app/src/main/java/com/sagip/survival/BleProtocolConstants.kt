@@ -9,10 +9,12 @@ object BleProtocolConstants {
   val CHARACTERISTIC_OFFER_UUID: UUID = UUID.fromString("00005347-5031-1000-8000-00805F9B0001")
   val CHARACTERISTIC_CHUNK_UUID: UUID = UUID.fromString("00005347-5031-1000-8000-00805F9B0002")
   val CHARACTERISTIC_ACK_UUID: UUID = UUID.fromString("00005347-5031-1000-8000-00805F9B0003")
+  val CHARACTERISTIC_RETURN_ACK_UUID: UUID = UUID.fromString("00005347-5031-1000-8000-00805F9B0004")
   val CLIENT_CONFIG_DESCRIPTOR_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
   const val OFFER_PAYLOAD_SIZE = 49 // 1 byte version + 16 bytes UUID + 32 bytes digest
   const val ACK_PAYLOAD_SIZE = 40   // 4 bytes magic + 16 bytes msg UUID + 16 bytes receipt UUID + 8 bytes timestamp
+  const val RETURN_ACK_PAYLOAD_SIZE = 56 // 4 bytes magic + 16 bytes report UUID + 16 bytes callsign + 1 byte status + 2 bytes ETA + 8 bytes timestamp + 5 bytes reserved + 4 bytes CRC32
 
   val ACK_MAGIC = byteArrayOf('S'.code.toByte(), 'G'.code.toByte(), 'K'.code.toByte(), '1'.code.toByte())
 

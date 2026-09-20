@@ -50,6 +50,26 @@ class BlePeripheralManager(
       }
     }
 
+    override fun onCharacteristicReadRequest(
+      device: BluetoothDevice,
+      requestId: Int,
+      offset: Int,
+      characteristic: BluetoothGattCharacteristic,
+    ) {
+      if (characteristic.uuid == BleProtocolConstants.CHARACTERISTIC_RETURN_ACK_UUID) {
+        val latestAck = repository.findLatestResponderAck()
+        if (latestAck != null) {
+          val encoded = BleReturnAckCodec.encode(latestAck)
+          val responseBytes = if (offset < encoded.size) encoded.copyOfRange(offset, encoded.size) else ByteArray(0)
+          gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, responseBytes)
+        } else {
+          gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, ByteArray(0))
+        }
+        return
+      }
+      gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, null)
+    }
+
     override fun onCharacteristicWriteRequest(
       device: BluetoothDevice,
       requestId: Int,
@@ -73,6 +93,9 @@ class BlePeripheralManager(
         BleProtocolConstants.CHARACTERISTIC_CHUNK_UUID -> {
           handleChunkWrite(device, requestId, value, responseNeeded)
         }
+        BleProtocolConstants.CHARACTERISTIC_RETURN_ACK_UUID -> {
+          handleReturnAckWrite(device, requestId, value, responseNeeded)
+        }
         else -> {
           if (responseNeeded) {
             gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_FAILURE, 0, null)
@@ -92,6 +115,25 @@ class BlePeripheralManager(
     ) {
       if (responseNeeded) {
         gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
+      }
+    }
+  }
+
+  private fun handleReturnAckWrite(
+    device: BluetoothDevice,
+    requestId: Int,
+    value: ByteArray,
+    responseNeeded: Boolean,
+  ) {
+    try {
+      val ack = BleReturnAckCodec.decode(value)
+      repository.recordResponderAck(ack)
+      if (responseNeeded) {
+        gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
+      }
+    } catch (_: Exception) {
+      if (responseNeeded) {
+        gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_FAILURE, 0, null)
       }
     }
   }
@@ -143,9 +185,16 @@ class BlePeripheralManager(
     )
     ackChar.addDescriptor(ackDescriptor)
 
+    val returnAckChar = BluetoothGattCharacteristic(
+      BleProtocolConstants.CHARACTERISTIC_RETURN_ACK_UUID,
+      BluetoothGattCharacteristic.PROPERTY_READ or BluetoothGattCharacteristic.PROPERTY_WRITE,
+      BluetoothGattCharacteristic.PERMISSION_READ or BluetoothGattCharacteristic.PERMISSION_WRITE,
+    )
+
     service.addCharacteristic(offerChar)
     service.addCharacteristic(chunkChar)
     service.addCharacteristic(ackChar)
+    service.addCharacteristic(returnAckChar)
 
     gattServer?.addService(service)
   }

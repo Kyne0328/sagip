@@ -772,6 +772,27 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
     }
   }
 
+  fun findLatestResponderAck(): ResponderAck? {
+    val sql = """
+      SELECT ack_id, report_id, responder_id, callsign, status, note, acknowledged_at
+      FROM responder_acks
+      ORDER BY acknowledged_at DESC
+      LIMIT 1
+    """.trimIndent()
+    return database.readableDatabase.rawQuery(sql, null).use { cursor ->
+      if (!cursor.moveToFirst()) null
+      else ResponderAck(
+        ackId = cursor.getString(0),
+        reportId = cursor.getString(1),
+        responderId = cursor.getString(2),
+        callsign = if (cursor.isNull(3)) null else cursor.getString(3),
+        status = cursor.getString(4),
+        note = if (cursor.isNull(5)) null else cursor.getString(5),
+        acknowledgedAt = cursor.getLong(6),
+      )
+    }
+  }
+
   companion object {
     const val LIFECYCLE_LOCALLY_COMMITTED = "LOCALLY_COMMITTED"
     const val LIFECYCLE_RELAYED = "RELAYED"

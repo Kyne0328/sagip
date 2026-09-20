@@ -39,20 +39,23 @@ beforeEach(() => {
   core.listEmergencyReports.mockResolvedValue([]);
 });
 
-test('shows an offline-safe SOS entry point', async () => {
+test('shows an offline-safe SOS entry point with accessibility attributes', async () => {
   const renderer = await renderApp();
-  expect(renderer.root.findByProps({accessibilityLabel: 'Create SOS'})).toBeTruthy();
-  expect(renderer.root.findAllByType('Text' as never).length).toBeGreaterThan(0);
+  const sosBtn = renderer.root.findByProps({accessibilityLabel: 'Create emergency SOS report'});
+  expect(sosBtn).toBeTruthy();
+  expect(sosBtn.props.accessibilityRole).toBe('button');
+  expect(sosBtn.props.accessibilityHint).toContain('save SOS locally');
+  expect(renderer.root.findByProps({accessibilityLiveRegion: 'polite'})).toBeTruthy();
 });
 
 test('creates a local SOS and tells the user it is pending delivery', async () => {
   core.createEmergencyReport.mockResolvedValue(report);
   const renderer = await renderApp();
 
-  await act(async () => renderer.root.findByProps({accessibilityLabel: 'Create SOS'}).props.onPress());
+  await act(async () => renderer.root.findByProps({accessibilityLabel: 'Create emergency SOS report'}).props.onPress());
   await act(async () => renderer.root.findByProps({accessibilityLabel: 'Medical'}).props.onPress());
   await act(async () => renderer.root.findByProps({accessibilityLabel: 'Immediate danger'}).props.onPress());
-  await act(async () => renderer.root.findByProps({accessibilityLabel: 'Save SOS on this device'}).props.onPress());
+  await act(async () => renderer.root.findByProps({accessibilityLabel: 'Save SOS now on this device'}).props.onPress());
 
   expect(core.createEmergencyReport).toHaveBeenCalledWith({
     emergencyType: 'MEDICAL',
@@ -66,14 +69,15 @@ test('does not claim success when persistence fails', async () => {
   core.createEmergencyReport.mockRejectedValue(new Error('disk full'));
   const renderer = await renderApp();
 
-  await act(async () => renderer.root.findByProps({accessibilityLabel: 'Create SOS'}).props.onPress());
+  await act(async () => renderer.root.findByProps({accessibilityLabel: 'Create emergency SOS report'}).props.onPress());
   await act(async () => renderer.root.findByProps({accessibilityLabel: 'Medical'}).props.onPress());
   await act(async () => renderer.root.findByProps({accessibilityLabel: 'Immediate danger'}).props.onPress());
-  await act(async () => renderer.root.findByProps({accessibilityLabel: 'Save SOS on this device'}).props.onPress());
+  await act(async () => renderer.root.findByProps({accessibilityLabel: 'Save SOS now on this device'}).props.onPress());
 
   expect(JSON.stringify(renderer.toJSON())).toContain('SOS was not saved. Please try again.');
   expect(JSON.stringify(renderer.toJSON())).not.toContain('SOS saved on this device. You do not need internet.');
 });
+
 
 test('restores a pending local report on launch', async () => {
   core.listEmergencyReports.mockResolvedValue([report]);

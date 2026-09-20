@@ -97,6 +97,7 @@ class BleCentralManager(
     private var offerChar: BluetoothGattCharacteristic? = null
     private var chunkChar: BluetoothGattCharacteristic? = null
     private var ackChar: BluetoothGattCharacteristic? = null
+    private var returnAckChar: BluetoothGattCharacteristic? = null
     private var chunksToSend = listOf<ByteArray>()
     private var chunkIndex = 0
 
@@ -138,10 +139,19 @@ class BleCentralManager(
       offerChar = service.getCharacteristic(BleProtocolConstants.CHARACTERISTIC_OFFER_UUID)
       chunkChar = service.getCharacteristic(BleProtocolConstants.CHARACTERISTIC_CHUNK_UUID)
       ackChar = service.getCharacteristic(BleProtocolConstants.CHARACTERISTIC_ACK_UUID)
+      returnAckChar = service.getCharacteristic(BleProtocolConstants.CHARACTERISTIC_RETURN_ACK_UUID)
 
       if (offerChar == null || chunkChar == null || ackChar == null) {
         gatt.disconnect()
         return
+      }
+
+      // Read return ACK if available from peer
+      returnAckChar?.let { rChar ->
+        try {
+          gatt.readCharacteristic(rChar)
+        } catch (_: SecurityException) {
+        }
       }
 
       // Enable notifications on ACK characteristic
@@ -203,6 +213,9 @@ class BleCentralManager(
         if (chunkIndex < chunksToSend.size) {
           sendNextChunk(gatt)
         }
+      } else if (characteristic.uuid == BleProtocolConstants.CHARACTERISTIC_RETURN_ACK_UUID) {
+        // Return ACK write completed
+        gatt.disconnect()
       }
     }
 
@@ -216,15 +229,40 @@ class BleCentralManager(
         val decision = OfferDecision.fromCode(decisionByte)
 
         if (decision == OfferDecision.ACCEPT) {
-          val payloadLimit = maxOf(20, negotiatedMtu - BleChunkCodec.FRAME_OVERHEAD)
+          val payloadLimit = maxOf(16, negotiatedMtu - BleChunkCodec.FRAME_OVERHEAD)
           chunksToSend = BleChunkCodec.encodeChunks(work.envelopeBytes, payloadLimit)
           chunkIndex = 0
           sendNextChunk(gatt)
         } else {
-          // Peer already has it or rejected, disconnect
-          gatt.disconnect()
+          // Peer already has it or rejected, check if we can share a return ACK before disconnecting
+          syncReturnAckAndFinish(gatt)
+        }
+      } else if (characteristic.uuid == BleProtocolConstants.CHARACTERISTIC_RETURN_ACK_UUID) {
+        if (status == BluetoothGatt.GATT_SUCCESS) {
+          val bytes = characteristic.value
+          if (bytes != null && bytes.size == BleReturnAckCodec.RETURN_ACK_FRAME_SIZE) {
+            try {
+              val ack = BleReturnAckCodec.decode(bytes)
+              repository.recordResponderAck(ack)
+            } catch (_: Exception) {
+            }
+          }
         }
       }
+    }
+
+    private fun syncReturnAckAndFinish(gatt: BluetoothGatt) {
+      val localAck = repository.findLatestResponderAck()
+      val rChar = returnAckChar
+      if (localAck != null && rChar != null) {
+        try {
+          rChar.value = BleReturnAckCodec.encode(localAck)
+          gatt.writeCharacteristic(rChar)
+          return
+        } catch (_: SecurityException) {
+        }
+      }
+      gatt.disconnect()
     }
 
     private fun sendNextChunk(gatt: BluetoothGatt) {
@@ -271,7 +309,7 @@ class BleCentralManager(
             now = ack.third,
           )
         }
-        gatt.disconnect()
+        syncReturnAckAndFinish(gatt)
       }
     }
   }

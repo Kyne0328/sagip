@@ -9,11 +9,15 @@ import {
   ResponderValidationError,
 } from '../responder/service.js';
 import type {ResponderIdentity, ResponderStatus} from '../responder/types.js';
+import {SlidingWindowRateLimiter} from './rateLimiter.js';
 
 export interface SagipServerDependencies {
   ingestEnvelope(bytes: Buffer): Promise<ServerReceipt>;
   responderService?: ResponderService;
+  rateLimiter?: SlidingWindowRateLimiter;
 }
+
+const defaultRateLimiter = new SlidingWindowRateLimiter();
 
 class RequestBodyTooLargeError extends Error {}
 
@@ -33,6 +37,19 @@ async function handleRequest(
     const parsedUrl = new URL(rawUrl, 'http://localhost');
     const pathname = parsedUrl.pathname;
     const method = request.method ?? 'GET';
+
+    // Check rate limit on public endpoints
+    const isPublicRateLimitedEndpoint = pathname === '/v1/envelopes' || /^\/v1\/reports\/[0-9a-fA-F-]+\/status$/u.test(pathname);
+    if (isPublicRateLimitedEndpoint) {
+      const clientIp = request.socket.remoteAddress ?? '127.0.0.1';
+      const limiter = deps.rateLimiter ?? defaultRateLimiter;
+      if (!limiter.isAllowed(clientIp)) {
+        request.resume();
+        response.setHeader('retry-after', '60');
+        sendJson(response, 429, {error: 'TOO_MANY_REQUESTS'});
+        return;
+      }
+    }
 
     // 1. Envelope ingestion: POST /v1/envelopes
     if (pathname === '/v1/envelopes') {

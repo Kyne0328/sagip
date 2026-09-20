@@ -55,4 +55,10 @@ class BleManifestHandshakeTest {
     }
     assertTrue("Should fail on short ack", ackFailed)
   }
+
+  @Test
+  fun `verifies return ACK characteristic UUID and payload size constant`() {
+    assertEquals("00005347-5031-1000-8000-00805f9b0004", BleProtocolConstants.CHARACTERISTIC_RETURN_ACK_UUID.toString().lowercase())
+    assertEquals(56, BleProtocolConstants.RETURN_ACK_PAYLOAD_SIZE)
+  }
 }
