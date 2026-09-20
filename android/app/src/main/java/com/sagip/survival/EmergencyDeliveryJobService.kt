@@ -20,7 +20,7 @@ class EmergencyDeliveryJobService : JobService() {
       try {
         val database = SagipDatabase(applicationContext)
         val repository = EmergencyRepository(database)
-        val sender = HttpEnvelopeSender(database = database)
+        val sender = HttpEnvelopeSender()
         val worker = DeliveryWorker(
           repository = repository,
           sender = sender,

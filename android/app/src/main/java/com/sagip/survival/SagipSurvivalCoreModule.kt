@@ -20,9 +20,8 @@ class SagipSurvivalCoreModule(
     EnvelopePreparationService(repository, AndroidKeystoreSigningIdentity())
   }
   private val executor = Executors.newSingleThreadExecutor()
-  private val defaultEndpointUrl = "http://10.0.2.2:8080/v1/envelopes"
   private val sender by lazy {
-    HttpEnvelopeSender(defaultEndpointUrl)
+    HttpEnvelopeSender()
   }
   private val deliveryWorker by lazy {
     DeliveryWorker(repository, sender)

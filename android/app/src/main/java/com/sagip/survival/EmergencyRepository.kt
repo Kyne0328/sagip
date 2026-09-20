@@ -520,9 +520,12 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
     if (seenByMsgId) return true
 
     if (payloadDigest != null) {
+      val digestHex = payloadDigest.joinToString("") { byte ->
+        "%02X".format(byte.toInt() and 0xFF)
+      }
       val seenByDigest = db.rawQuery(
-        "SELECT 1 FROM seen_messages WHERE digest = ?",
-        arrayOf(payloadDigest),
+        "SELECT 1 FROM seen_messages WHERE hex(digest) = ?",
+        arrayOf(digestHex),
       ).use { cursor -> cursor.moveToFirst() }
       if (seenByDigest) return true
     }
@@ -620,7 +623,7 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
     }
   }
 
-  fun listDueInbound(now: Long, limit: Int = 20): List<InboundEnvelope> {
+  override fun listDueInbound(now: Long, limit: Int): List<InboundEnvelope> {
     val db = database.readableDatabase
     return db.rawQuery(
       """
@@ -652,7 +655,7 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
     }
   }
 
-  fun markInboundServerAccepted(messageId: String, now: Long = System.currentTimeMillis()) {
+  override fun markInboundServerAccepted(messageId: String, now: Long) {
     val db = database.writableDatabase
     db.execSQL(
       "UPDATE inbound_envelopes SET delivery_state = ? WHERE message_id = ?",
@@ -660,10 +663,10 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
     )
   }
 
-  fun scheduleInboundRetry(
+  override fun scheduleInboundRetry(
     messageId: String,
-    now: Long = System.currentTimeMillis(),
-    jitterUnit: Double = Math.random(),
+    now: Long,
+    jitterUnit: Double,
   ): Long {
     val db = database.writableDatabase
     db.beginTransaction()
@@ -710,7 +713,7 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
 
   override fun recordResponderAck(
     ack: ResponderAck,
-    now: Long = System.currentTimeMillis(),
+    now: Long,
   ): Boolean {
     val db = database.writableDatabase
     db.beginTransaction()

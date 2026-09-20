@@ -181,7 +181,7 @@ class BleCentralManager(
         return
       }
 
-      val offerBytes = BleProtocolConstants.encodeOffer(decoded.messageId, decoded.payloadDigest)
+      val offerBytes = BleProtocolConstants.encodeOffer(UUID.fromString(decoded.messageId), decoded.payloadDigest)
       offerChar?.value = offerBytes
       try {
         gatt.writeCharacteristic(offerChar)
@@ -294,7 +294,7 @@ class BleCentralManager(
           return
         }
 
-        if (ack.first == decoded.messageId) {
+        if (ack.first.toString() == decoded.messageId) {
           // Record successful peer relay receipt in SQLite
           repository.recordRelayReceipt(
             receiptId = ack.second.toString(),
