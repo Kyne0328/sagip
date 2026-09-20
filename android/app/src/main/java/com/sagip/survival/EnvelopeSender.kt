@@ -9,6 +9,7 @@ import java.net.URL
  */
 interface EnvelopeSender {
     suspend fun send(envelope: OutboundEnvelope): DeliveryTransportResult
+    suspend fun checkReportStatus(reportId: String): ResponderAck? = null
 }
 
 data class OutboundEnvelope(
@@ -63,6 +64,30 @@ class HttpEnvelopeSender(
         }
     }
 
+    override suspend fun checkReportStatus(reportId: String): ResponderAck? {
+        return try {
+            val statusUrl = if (endpointUrl.contains("/v1/envelopes")) {
+                endpointUrl.replace("/v1/envelopes", "/v1/reports/$reportId/status")
+            } else {
+                "$endpointUrl/reports/$reportId/status"
+            }
+            val url = URL(statusUrl)
+            val connection = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = connectTimeoutMs
+                readTimeout = readTimeoutMs
+            }
+            if (connection.responseCode == HttpURLConnection.HTTP_OK) {
+                val responseBody = connection.inputStream.bufferedReader().use { it.readText() }
+                parseResponderAck(reportId, responseBody)
+            } else {
+                null
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     companion object {
         fun parseServerReceipt(jsonString: String): ServerReceipt {
             val receiptVersion = extractInt(jsonString, "receiptVersion", "receipt_version")
@@ -84,13 +109,37 @@ class HttpEnvelopeSender(
             )
         }
 
-        private fun extractString(json: String, vararg keys: String): String {
+        fun parseResponderAck(reportId: String, jsonString: String): ResponderAck? {
+            if (!jsonString.contains("latestAck") || jsonString.contains(""""latestAck"\s*:\s*null""".toRegex())) {
+                return null
+            }
+            val ackId = extractOptionalString(jsonString, "ackId", "ack_id") ?: return null
+            val callsign = extractOptionalString(jsonString, "callsign")
+            val status = extractOptionalString(jsonString, "status") ?: "ACKNOWLEDGED"
+            val note = extractOptionalString(jsonString, "note")
+            return ResponderAck(
+                ackId = ackId,
+                reportId = reportId,
+                responderId = "SERVER",
+                callsign = callsign,
+                status = status,
+                note = note,
+                acknowledgedAt = System.currentTimeMillis(),
+            )
+        }
+
+        private fun extractOptionalString(json: String, vararg keys: String): String? {
             for (key in keys) {
                 val regex = """"$key"\s*:\s*"([^"]+)"""".toRegex()
                 val match = regex.find(json)
                 if (match != null) return match.groupValues[1]
             }
-            throw IllegalArgumentException("Missing field ${keys.joinToString(" or ")} in receipt")
+            return null
+        }
+
+        private fun extractString(json: String, vararg keys: String): String {
+            return extractOptionalString(json, *keys)
+                ?: throw IllegalArgumentException("Missing field ${keys.joinToString(" or ")} in receipt")
         }
 
         private fun extractInt(json: String, vararg keys: String): Int {

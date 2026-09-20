@@ -9,6 +9,7 @@ class DeliveryWorker(
     private val sender: EnvelopeSender,
     private val transport: String = "INTERNET",
     private val relayStore: RelayDeliveryStore? = repository as? RelayDeliveryStore,
+    private val ackStore: ResponderAckStore? = repository as? ResponderAckStore,
 ) {
     suspend fun runOnce(now: Long = System.currentTimeMillis()): Int {
         var completed = 0
@@ -70,6 +71,15 @@ class DeliveryWorker(
                     is DeliveryTransportResult.PermanentFailure -> {
                         store.markInboundServerAccepted(inbound.messageId, now = now)
                     }
+                }
+            }
+        }
+
+        ackStore?.let { store ->
+            for (reportId in store.listReportsAwaitingAck(5)) {
+                val ack = sender.checkReportStatus(reportId)
+                if (ack != null) {
+                    store.recordResponderAck(ack, now = now)
                 }
             }
         }

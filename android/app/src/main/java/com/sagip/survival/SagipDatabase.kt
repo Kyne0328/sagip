@@ -36,6 +36,10 @@ class SagipDatabase(context: Context) :
       Schema.MIGRATE_4_TO_5.forEach(db::execSQL)
       currentVersion = 5
     }
+    if (currentVersion == 5 && newVersion >= 6) {
+      Schema.MIGRATE_5_TO_6.forEach(db::execSQL)
+      currentVersion = 6
+    }
 
     if (currentVersion != newVersion) {
       throw IllegalStateException("Unsupported SAGIP database migration: $oldVersion -> $newVersion")

@@ -46,6 +46,16 @@ data class RelayReceipt(
   val acknowledgedAt: Long,
 )
 
+data class ResponderAck(
+  val ackId: String,
+  val reportId: String,
+  val responderId: String,
+  val callsign: String?,
+  val status: String,
+  val note: String?,
+  val acknowledgedAt: Long,
+)
+
 data class BleManifestOffer(
   val protocolVersion: Int,
   val messageId: String,

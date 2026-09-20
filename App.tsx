@@ -120,7 +120,20 @@ export default function App() {
           ) : latest ? (
             <>
               <Text style={styles.savedText}>Saved on this device</Text>
-              {latest.deliveryState === 'SERVER_ACCEPTED' ? (
+              {latest.deliveryState === 'RESPONDER_ACKNOWLEDGED' ? (
+                <>
+                  <Text style={styles.responderText}>Responder acknowledged</Text>
+                  <Text style={styles.responderSubtext}>
+                    {[
+                      'Help is on the way',
+                      latest.responderAck?.callsign ? `· ${latest.responderAck.callsign}` : null,
+                      latest.responderAck?.note ? `(${latest.responderAck.note})` : null,
+                    ]
+                      .filter(Boolean)
+                      .join(' ')}
+                  </Text>
+                </>
+              ) : latest.deliveryState === 'SERVER_ACCEPTED' ? (
                 <Text style={styles.acceptedText}>Server accepted</Text>
               ) : latest.deliveryState === 'PERMANENT_FAILURE' ? (
                 <Text style={styles.failedText}>Delivery failed permanently</Text>
@@ -191,6 +204,8 @@ const styles = StyleSheet.create({
   pendingText: {fontSize: 16, fontWeight: '800', color: '#8A5B18'},
   relayedText: {fontSize: 16, fontWeight: '800', color: '#B26B00'},
   acceptedText: {fontSize: 16, fontWeight: '800', color: '#1B6B38'},
+  responderText: {fontSize: 16, fontWeight: '800', color: '#0D6857'},
+  responderSubtext: {fontSize: 14, fontWeight: '700', color: '#0D6857'},
   failedText: {fontSize: 16, fontWeight: '800', color: '#B33A32'},
   statusText: {fontSize: 15, lineHeight: 22, color: '#56615D'},
 });

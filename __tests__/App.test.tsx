@@ -106,3 +106,24 @@ test('renders relayed to nearby SAGIP device when report is relayed to peer', as
   expect(JSON.stringify(renderer.toJSON())).toContain('Relayed to nearby SAGIP device');
   expect(JSON.stringify(renderer.toJSON())).not.toContain('Pending delivery');
 });
+
+test('renders responder acknowledged delivery state with callsign and note', async () => {
+  core.listEmergencyReports.mockResolvedValue([{
+    ...report,
+    deliveryState: 'RESPONDER_ACKNOWLEDGED' as const,
+    lifecycleState: 'RESPONDER_ACKNOWLEDGED' as const,
+    responderAck: {
+      ackId: 'ack-123',
+      responderId: 'resp-456',
+      callsign: 'RESCUE-ALPHA-1',
+      status: 'ACKNOWLEDGED',
+      note: 'Boat team deployed',
+      acknowledgedAt: 1758369600000,
+    },
+  }]);
+  const renderer = await renderApp();
+
+  expect(JSON.stringify(renderer.toJSON())).toContain('Saved on this device');
+  expect(JSON.stringify(renderer.toJSON())).toContain('Responder acknowledged');
+  expect(JSON.stringify(renderer.toJSON())).toContain('Help is on the way · RESCUE-ALPHA-1 (Boat team deployed)');
+});

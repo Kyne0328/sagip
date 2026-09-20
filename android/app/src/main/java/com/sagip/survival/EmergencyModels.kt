@@ -36,6 +36,7 @@ data class EmergencyReportSummary(
   val lifecycleState: String,
   val deliveryState: String,
   val location: LocationSnapshot?,
+  val responderAck: ResponderAck? = null,
 )
 
 data class EnvelopePreparationSource(
@@ -105,6 +106,11 @@ interface RelayDeliveryStore {
   fun listDueInbound(now: Long, limit: Int = 20): List<InboundEnvelope>
   fun markInboundServerAccepted(messageId: String, now: Long = System.currentTimeMillis())
   fun scheduleInboundRetry(messageId: String, now: Long = System.currentTimeMillis(), jitterUnit: Double = Math.random()): Long
+}
+
+interface ResponderAckStore {
+  fun listReportsAwaitingAck(limit: Int = 10): List<String>
+  fun recordResponderAck(ack: ResponderAck, now: Long = System.currentTimeMillis()): Boolean
 }
 
 

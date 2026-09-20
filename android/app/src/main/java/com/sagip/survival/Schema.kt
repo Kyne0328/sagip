@@ -1,7 +1,7 @@
 package com.sagip.survival
 
 object Schema {
-  const val VERSION = 5
+  const val VERSION = 6
 
   val CREATE_STATEMENTS = listOf(
     """
@@ -116,6 +116,18 @@ object Schema {
         FOREIGN KEY (message_id) REFERENCES outbound_envelopes(message_id) ON DELETE CASCADE
       )
     """.trimIndent(),
+    """
+      CREATE TABLE responder_acks (
+        ack_id TEXT PRIMARY KEY NOT NULL,
+        report_id TEXT NOT NULL,
+        responder_id TEXT NOT NULL,
+        callsign TEXT,
+        status TEXT NOT NULL,
+        note TEXT,
+        acknowledged_at INTEGER NOT NULL,
+        FOREIGN KEY (report_id) REFERENCES reports(report_id) ON DELETE CASCADE
+      )
+    """.trimIndent(),
     "CREATE INDEX idx_outbound_due ON outbound_envelopes(delivery_state, next_attempt_at, priority, created_at)",
     "CREATE INDEX idx_outbound_ready_due ON outbound_envelopes(preparation_state, delivery_state, next_attempt_at, priority, created_at)",
     "CREATE INDEX idx_delivery_attempts_message ON delivery_attempts(message_id, started_at)",
@@ -123,6 +135,7 @@ object Schema {
     "CREATE INDEX idx_inbound_due ON inbound_envelopes(delivery_state, next_attempt_at, priority, received_at)",
     "CREATE INDEX idx_seen_messages_digest ON seen_messages(digest)",
     "CREATE INDEX idx_relay_receipts_message ON relay_receipts(message_id)",
+    "CREATE INDEX idx_responder_acks_report ON responder_acks(report_id)",
   )
 
   val MIGRATE_1_TO_2 = listOf(
@@ -191,5 +204,21 @@ object Schema {
     "CREATE INDEX idx_inbound_due ON inbound_envelopes(delivery_state, next_attempt_at, priority, received_at)",
     "CREATE INDEX idx_seen_messages_digest ON seen_messages(digest)",
     "CREATE INDEX idx_relay_receipts_message ON relay_receipts(message_id)",
+  )
+
+  val MIGRATE_5_TO_6 = listOf(
+    """
+      CREATE TABLE responder_acks (
+        ack_id TEXT PRIMARY KEY NOT NULL,
+        report_id TEXT NOT NULL,
+        responder_id TEXT NOT NULL,
+        callsign TEXT,
+        status TEXT NOT NULL,
+        note TEXT,
+        acknowledged_at INTEGER NOT NULL,
+        FOREIGN KEY (report_id) REFERENCES reports(report_id) ON DELETE CASCADE
+      )
+    """.trimIndent(),
+    "CREATE INDEX idx_responder_acks_report ON responder_acks(report_id)",
   )
 }

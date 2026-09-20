@@ -101,6 +101,27 @@ describe('SurvivalCore', () => {
     ]);
   });
 
+  it('accepts responder acknowledged delivery state and parses responderAck from native storage', async () => {
+    const ackSummary = {
+      ...nativeSummary,
+      deliveryState: 'RESPONDER_ACKNOWLEDGED' as const,
+      lifecycleState: 'RESPONDER_ACKNOWLEDGED' as const,
+      responderAck: {
+        ackId: 'ack-1',
+        responderId: 'resp-1',
+        callsign: 'RESCUE-1',
+        status: 'ACKNOWLEDGED',
+        note: 'En route',
+        acknowledgedAt: 1788565100000,
+      },
+    };
+    nativeCore.listEmergencyReports.mockResolvedValue([ackSummary]);
+
+    await expect(SurvivalCore.listEmergencyReports()).resolves.toEqual([
+      ackSummary,
+    ]);
+  });
+
   it('triggers delivery and returns processed envelope count', async () => {
     nativeCore.triggerDelivery.mockResolvedValue(3);
 

@@ -195,4 +195,51 @@ class DeliveryWorkerTest {
     assertEquals(1, sender.sentEnvelopes.size)
     assertEquals("msg-inbound-1", sender.sentEnvelopes.first().messageId)
   }
+
+  private class FakeResponderAckStore : ResponderAckStore {
+    val reportsAwaitingAck = mutableListOf<String>()
+    val recordedAcks = mutableListOf<ResponderAck>()
+
+    override fun listReportsAwaitingAck(limit: Int): List<String> = reportsAwaitingAck.take(limit)
+
+    override fun recordResponderAck(ack: ResponderAck, now: Long): Boolean {
+      recordedAcks += ack
+      reportsAwaitingAck.remove(ack.reportId)
+      return true
+    }
+  }
+
+  @Test
+  fun `runOnce checks and records responder acknowledgement for accepted reports`() = runBlocking {
+    val store = FakeOutboundDeliveryStore(mutableListOf())
+    val ackStore = FakeResponderAckStore().apply {
+      reportsAwaitingAck += "rep-1"
+    }
+    val expectedAck = ResponderAck(
+      ackId = "ack-1",
+      reportId = "rep-1",
+      responderId = "SERVER",
+      callsign = "MEDIC-1",
+      status = "ACKNOWLEDGED",
+      note = "En route",
+      acknowledgedAt = 2000L,
+    )
+    val sender = object : EnvelopeSender {
+      override suspend fun send(envelope: OutboundEnvelope): DeliveryTransportResult {
+        return DeliveryTransportResult.RetryableFailure("none")
+      }
+      override suspend fun checkReportStatus(reportId: String): ResponderAck? {
+        return if (reportId == "rep-1") expectedAck else null
+      }
+    }
+    val worker = DeliveryWorker(store, sender, ackStore = ackStore)
+
+    worker.runOnce(now = 2000L)
+
+    assertEquals(1, ackStore.recordedAcks.size)
+    assertEquals("ack-1", ackStore.recordedAcks.first().ackId)
+    assertEquals("MEDIC-1", ackStore.recordedAcks.first().callsign)
+    assertEquals("ACKNOWLEDGED", ackStore.recordedAcks.first().status)
+    assertTrue(ackStore.reportsAwaitingAck.isEmpty())
+  }
 }

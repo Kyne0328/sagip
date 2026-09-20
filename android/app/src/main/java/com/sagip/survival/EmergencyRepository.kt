@@ -5,7 +5,7 @@ import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import java.util.UUID
 
-class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliveryStore, RelayDeliveryStore {
+class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliveryStore, RelayDeliveryStore, ResponderAckStore {
 
   fun createReport(
     input: CreateEmergencyReportInput,
@@ -96,23 +96,47 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
     val sql = """
       SELECT r.report_id, r.created_at, r.emergency_type, r.urgency, r.lifecycle_state,
              o.delivery_state,
-             l.latitude, l.longitude, l.accuracy_meters, l.captured_at, l.source, l.freshness
+             l.latitude, l.longitude, l.accuracy_meters, l.captured_at, l.source, l.freshness,
+             ra.ack_id, ra.responder_id, ra.callsign, ra.status, ra.note, ra.acknowledged_at
       FROM reports r
       JOIN outbound_envelopes o ON o.report_id = r.report_id
       LEFT JOIN locations l ON l.report_id = r.report_id
+      LEFT JOIN (
+        SELECT report_id, ack_id, responder_id, callsign, status, note, acknowledged_at
+        FROM responder_acks
+        GROUP BY report_id
+        HAVING acknowledged_at = MAX(acknowledged_at)
+      ) ra ON ra.report_id = r.report_id
       ORDER BY r.created_at DESC, r.report_id DESC
     """.trimIndent()
 
     database.readableDatabase.rawQuery(sql, null).use { cursor ->
       while (cursor.moveToNext()) {
+        val ackIdIndex = cursor.getColumnIndexOrThrow("ack_id")
+        val responderAck = if (!cursor.isNull(ackIdIndex)) {
+          ResponderAck(
+            ackId = cursor.getString(ackIdIndex),
+            reportId = cursor.getString(cursor.getColumnIndexOrThrow("report_id")),
+            responderId = cursor.getString(cursor.getColumnIndexOrThrow("responder_id")),
+            callsign = if (cursor.isNull(cursor.getColumnIndexOrThrow("callsign"))) null else cursor.getString(cursor.getColumnIndexOrThrow("callsign")),
+            status = cursor.getString(cursor.getColumnIndexOrThrow("status")),
+            note = if (cursor.isNull(cursor.getColumnIndexOrThrow("note"))) null else cursor.getString(cursor.getColumnIndexOrThrow("note")),
+            acknowledgedAt = cursor.getLong(cursor.getColumnIndexOrThrow("acknowledged_at")),
+          )
+        } else null
+
+        val rawDeliveryState = cursor.getString(cursor.getColumnIndexOrThrow("delivery_state"))
+        val deliveryState = if (responderAck != null) DELIVERY_RESPONDER_ACKNOWLEDGED else rawDeliveryState
+
         reports += EmergencyReportSummary(
           reportId = cursor.getString(cursor.getColumnIndexOrThrow("report_id")),
           createdAt = cursor.getLong(cursor.getColumnIndexOrThrow("created_at")),
           emergencyType = EmergencyType.valueOf(cursor.getString(cursor.getColumnIndexOrThrow("emergency_type"))),
           urgency = Urgency.valueOf(cursor.getString(cursor.getColumnIndexOrThrow("urgency"))),
-          lifecycleState = cursor.getString(cursor.getColumnIndexOrThrow("lifecycle_state")),
-          deliveryState = cursor.getString(cursor.getColumnIndexOrThrow("delivery_state")),
+          lifecycleState = if (responderAck != null) LIFECYCLE_RESPONDER_ACKNOWLEDGED else cursor.getString(cursor.getColumnIndexOrThrow("lifecycle_state")),
+          deliveryState = deliveryState,
           location = readLocation(cursor),
+          responderAck = responderAck,
         )
       }
     }
@@ -664,12 +688,98 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
     }
   }
 
+  override fun listReportsAwaitingAck(limit: Int): List<String> {
+    val sql = """
+      SELECT r.report_id
+      FROM reports r
+      JOIN outbound_envelopes o ON o.report_id = r.report_id
+      WHERE o.delivery_state = ? AND r.report_id NOT IN (SELECT report_id FROM responder_acks)
+      LIMIT ?
+    """.trimIndent()
+    return database.readableDatabase.rawQuery(
+      sql,
+      arrayOf(DELIVERY_SERVER_ACCEPTED, limit.toString()),
+    ).use { cursor ->
+      val result = mutableListOf<String>()
+      while (cursor.moveToNext()) {
+        result.add(cursor.getString(0))
+      }
+      result
+    }
+  }
+
+  override fun recordResponderAck(
+    ack: ResponderAck,
+    now: Long = System.currentTimeMillis(),
+  ): Boolean {
+    val db = database.writableDatabase
+    db.beginTransaction()
+    try {
+      val count = db.rawQuery(
+        "SELECT 1 FROM reports WHERE report_id = ?",
+        arrayOf(ack.reportId),
+      ).use { cursor -> cursor.count }
+      if (count == 0) return false
+
+      insertOrThrow(
+        db,
+        "responder_acks",
+        ContentValues().apply {
+          put("ack_id", ack.ackId)
+          put("report_id", ack.reportId)
+          put("responder_id", ack.responderId)
+          put("callsign", ack.callsign)
+          put("status", ack.status)
+          put("note", ack.note)
+          put("acknowledged_at", ack.acknowledgedAt)
+        },
+      )
+      db.execSQL(
+        "UPDATE reports SET lifecycle_state = ? WHERE report_id = ?",
+        arrayOf<Any?>(LIFECYCLE_RESPONDER_ACKNOWLEDGED, ack.reportId),
+      )
+      db.execSQL(
+        "UPDATE outbound_envelopes SET delivery_state = ? WHERE report_id = ?",
+        arrayOf<Any?>(DELIVERY_RESPONDER_ACKNOWLEDGED, ack.reportId),
+      )
+      insertDeliveryEvent(db, ack.reportId, ack.reportId, EVENT_RESPONDER_ACKNOWLEDGED, now)
+      db.setTransactionSuccessful()
+      return true
+    } finally {
+      db.endTransaction()
+    }
+  }
+
+  fun findResponderAck(reportId: String): ResponderAck? {
+    val sql = """
+      SELECT ack_id, report_id, responder_id, callsign, status, note, acknowledged_at
+      FROM responder_acks
+      WHERE report_id = ?
+      ORDER BY acknowledged_at DESC
+      LIMIT 1
+    """.trimIndent()
+    return database.readableDatabase.rawQuery(sql, arrayOf(reportId)).use { cursor ->
+      if (!cursor.moveToFirst()) null
+      else ResponderAck(
+        ackId = cursor.getString(0),
+        reportId = cursor.getString(1),
+        responderId = cursor.getString(2),
+        callsign = if (cursor.isNull(3)) null else cursor.getString(3),
+        status = cursor.getString(4),
+        note = if (cursor.isNull(5)) null else cursor.getString(5),
+        acknowledgedAt = cursor.getLong(6),
+      )
+    }
+  }
+
   companion object {
     const val LIFECYCLE_LOCALLY_COMMITTED = "LOCALLY_COMMITTED"
     const val LIFECYCLE_RELAYED = "RELAYED"
+    const val LIFECYCLE_RESPONDER_ACKNOWLEDGED = "RESPONDER_ACKNOWLEDGED"
     const val DELIVERY_PENDING = "DELIVERY_PENDING"
     const val DELIVERY_RELAYED_TO_PEER = "RELAYED_TO_PEER"
     const val DELIVERY_SERVER_ACCEPTED = "SERVER_ACCEPTED"
+    const val DELIVERY_RESPONDER_ACKNOWLEDGED = "RESPONDER_ACKNOWLEDGED"
     const val DELIVERY_PERMANENT_FAILURE = "PERMANENT_FAILURE"
     const val PREPARATION_NEEDS = "NEEDS_PREPARATION"
     const val PREPARATION_READY = "READY"
@@ -680,6 +790,7 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
     const val EVENT_SERVER_ACCEPTED = "SERVER_ACCEPTED"
     const val EVENT_DELIVERY_FAILED = "DELIVERY_FAILED"
     const val EVENT_RELAYED_TO_PEER = "RELAYED_TO_PEER"
+    const val EVENT_RESPONDER_ACKNOWLEDGED = "RESPONDER_ACKNOWLEDGED"
     const val ATTEMPT_LEASE_MS = 60_000L
   }
 }

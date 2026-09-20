@@ -168,6 +168,21 @@ class SagipSurvivalCoreModule(
           },
         )
       }
+      if (summary.responderAck == null) {
+        putNull("responderAck")
+      } else {
+        putMap(
+          "responderAck",
+          Arguments.createMap().apply {
+            putString("ackId", summary.responderAck.ackId)
+            putString("responderId", summary.responderAck.responderId)
+            summary.responderAck.callsign?.let { putString("callsign", it) } ?: putNull("callsign")
+            putString("status", summary.responderAck.status)
+            summary.responderAck.note?.let { putString("note", it) } ?: putNull("note")
+            putDouble("acknowledgedAt", summary.responderAck.acknowledgedAt.toDouble())
+          },
+        )
+      }
     }
   }
 

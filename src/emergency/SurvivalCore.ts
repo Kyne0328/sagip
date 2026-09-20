@@ -58,6 +58,34 @@ function parseLocation(value: unknown): LocationSnapshot | null {
   };
 }
 
+const VALID_LIFECYCLES = ['LOCALLY_COMMITTED', 'RELAYED', 'RESPONDER_ACKNOWLEDGED'];
+
+function parseResponderAck(value: unknown): EmergencyReportSummary['responderAck'] {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (!isRecord(value)) {
+    return null;
+  }
+  const {ackId, responderId, callsign, status, note, acknowledgedAt} = value;
+  if (
+    typeof ackId !== 'string' ||
+    typeof responderId !== 'string' ||
+    typeof status !== 'string' ||
+    typeof acknowledgedAt !== 'number'
+  ) {
+    return null;
+  }
+  return {
+    ackId,
+    responderId,
+    callsign: typeof callsign === 'string' ? callsign : null,
+    status,
+    note: typeof note === 'string' ? note : null,
+    acknowledgedAt,
+  };
+}
+
 function parseSummary(value: unknown): EmergencyReportSummary {
   if (!isRecord(value)) {
     throw new Error('Invalid emergency report response from native core');
@@ -71,6 +99,7 @@ function parseSummary(value: unknown): EmergencyReportSummary {
     lifecycleState,
     deliveryState,
     location,
+    responderAck,
   } = value;
 
   if (
@@ -79,20 +108,22 @@ function parseSummary(value: unknown): EmergencyReportSummary {
     typeof createdAt !== 'number' ||
     !EMERGENCY_TYPES.includes(emergencyType as never) ||
     !URGENCIES.includes(urgency as never) ||
-    lifecycleState !== 'LOCALLY_COMMITTED' ||
+    !VALID_LIFECYCLES.includes(lifecycleState as string) ||
     !DELIVERY_STATES.includes(deliveryState as never)
   ) {
     throw new Error('Invalid emergency report response from native core');
   }
 
+  const ack = parseResponderAck(responderAck);
   return {
     reportId,
     createdAt,
     emergencyType: emergencyType as EmergencyReportSummary['emergencyType'],
     urgency: urgency as EmergencyReportSummary['urgency'],
-    lifecycleState,
+    lifecycleState: lifecycleState as EmergencyReportSummary['lifecycleState'],
     deliveryState: deliveryState as EmergencyReportSummary['deliveryState'],
     location: parseLocation(location),
+    ...(ack ? {responderAck: ack} : {}),
   };
 }
 

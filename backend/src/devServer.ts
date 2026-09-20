@@ -1,3 +1,4 @@
+import {createHash, randomUUID} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 
 import {applyMigrations} from './db/migrate.js';
@@ -5,6 +6,7 @@ import {createMemoryPostgresPool} from './db/memoryPool.js';
 import {createPool} from './db/pool.js';
 import {createSagipServer} from './http/createServer.js';
 import {IngestionService} from './ingestion/service.js';
+import {ResponderService} from './responder/service.js';
 
 const MIGRATIONS_DIR = fileURLToPath(new URL('../migrations/', import.meta.url));
 
@@ -22,7 +24,18 @@ async function startDevServer(): Promise<void> {
     await applyMigrations(pool, MIGRATIONS_DIR);
     console.log('[SAGIP Dev] Database schema up to date.');
 
+    // Seed dev responder
+    const devToken = 'sagip-dev-token';
+    const devTokenHash = createHash('sha256').update(devToken, 'utf8').digest('hex');
+    await pool.query(
+      `INSERT INTO responder_identities(responder_id, callsign, role, api_key_hash, registered_at)
+       VALUES ($1, $2, $3, $4, NOW())
+       ON CONFLICT (callsign) DO NOTHING`,
+      [randomUUID(), 'RESCUE-LEAD-1', 'DISPATCHER', devTokenHash],
+    );
+
     const ingestion = new IngestionService(pool);
+    const responderService = new ResponderService(pool);
 
     const server = createSagipServer({
       ingestEnvelope: async bytes => {
@@ -39,6 +52,7 @@ async function startDevServer(): Promise<void> {
           throw error;
         }
       },
+      responderService,
     });
 
     await new Promise<void>((resolve, reject) => {

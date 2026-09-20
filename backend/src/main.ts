@@ -4,6 +4,7 @@ import {applyMigrations} from './db/migrate.js';
 import {createPool} from './db/pool.js';
 import {createSagipServer} from './http/createServer.js';
 import {IngestionService} from './ingestion/service.js';
+import {ResponderService} from './responder/service.js';
 
 const MIGRATIONS_DIR = fileURLToPath(new URL('../migrations/', import.meta.url));
 
@@ -18,8 +19,10 @@ async function main(): Promise<void> {
   try {
     await applyMigrations(pool, MIGRATIONS_DIR);
     const ingestion = new IngestionService(pool);
+    const responderService = new ResponderService(pool);
     const server = createSagipServer({
       ingestEnvelope: bytes => ingestion.ingestEnvelope(bytes),
+      responderService,
     });
 
     await new Promise<void>((resolve, reject) => {
