@@ -148,4 +148,51 @@ class DeliveryWorkerTest {
     assertEquals("HTTP_400", store.failedMessages.first().second)
     assertTrue(store.acceptedReceipts.isEmpty())
   }
+
+  private class FakeRelayDeliveryStore(
+    var inboundList: MutableList<InboundEnvelope> = mutableListOf(),
+  ) : RelayDeliveryStore {
+    val acceptedInbound = mutableListOf<String>()
+    val retriedInbound = mutableListOf<String>()
+
+    override fun listDueInbound(now: Long, limit: Int): List<InboundEnvelope> = inboundList.toList()
+
+    override fun markInboundServerAccepted(messageId: String, now: Long) {
+      acceptedInbound += messageId
+      inboundList.removeAll { it.messageId == messageId }
+    }
+
+    override fun scheduleInboundRetry(messageId: String, now: Long, jitterUnit: Double): Long {
+      retriedInbound += messageId
+      inboundList.removeAll { it.messageId == messageId }
+      return now + 5000L
+    }
+  }
+
+  @Test
+  fun `runOnce also delivers due inbound relay envelopes to server`() = runBlocking {
+    val store = FakeOutboundDeliveryStore(mutableListOf())
+    val inbound = InboundEnvelope(
+      inboundId = "in-1",
+      messageId = "msg-inbound-1",
+      envelopeBytes = byteArrayOf(1, 2, 3),
+      receivedAt = 1000L,
+      originKeyId = byteArrayOf(4, 5, 6),
+    )
+    val relayStore = FakeRelayDeliveryStore(mutableListOf(inbound))
+    val sender = FakeEnvelopeSender(
+      DeliveryTransportResult.Accepted(
+        ServerReceipt("rcpt-relay", "msg-inbound-1", "rep-inbound", 1, "2026-09-20T12:00:00Z"),
+      ),
+    )
+    val worker = DeliveryWorker(store, sender, relayStore = relayStore)
+
+    val count = worker.runOnce(now = 2000L)
+
+    assertEquals(1, count)
+    assertEquals(1, relayStore.acceptedInbound.size)
+    assertEquals("msg-inbound-1", relayStore.acceptedInbound.first())
+    assertEquals(1, sender.sentEnvelopes.size)
+    assertEquals("msg-inbound-1", sender.sentEnvelopes.first().messageId)
+  }
 }

@@ -16,10 +16,17 @@ export type LifecycleState = 'LOCALLY_COMMITTED';
 
 export const DELIVERY_STATES = [
   'DELIVERY_PENDING',
+  'RELAYED_TO_PEER',
   'SERVER_ACCEPTED',
   'PERMANENT_FAILURE',
 ] as const;
 export type DeliveryState = (typeof DELIVERY_STATES)[number];
+
+export interface BleRelayStatus {
+  isScanning: boolean;
+  isAdvertising: boolean;
+  peerCount: number;
+}
 
 export interface LocationSnapshot {
   latitude: number;

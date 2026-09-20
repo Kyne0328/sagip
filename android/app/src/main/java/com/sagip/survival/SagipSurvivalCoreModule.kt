@@ -32,14 +32,24 @@ class SagipSurvivalCoreModule(
       triggerBackgroundDelivery()
     }
   }
+  private val blePeripheral by lazy {
+    BlePeripheralManager(reactContext.applicationContext, repository)
+  }
+  private val bleCentral by lazy {
+    BleCentralManager(reactContext.applicationContext, repository)
+  }
 
   init {
     connectivityMonitor.startListening()
+    blePeripheral.start()
+    bleCentral.startScanning()
   }
 
   override fun invalidate() {
     super.invalidate()
     connectivityMonitor.stopListening()
+    blePeripheral.stop()
+    bleCentral.stopScanning()
     executor.shutdown()
   }
 
@@ -66,6 +76,30 @@ class SagipSurvivalCoreModule(
         promise.resolve(0)
       }
     }
+  }
+
+  @ReactMethod
+  fun getRelayStatus(promise: Promise) {
+    val map = Arguments.createMap().apply {
+      putBoolean("isScanning", bleCentral.isScanning())
+      putBoolean("isAdvertising", blePeripheral.isRunning())
+      putInt("peerCount", bleCentral.getDiscoveredPeerCount())
+    }
+    promise.resolve(map)
+  }
+
+  @ReactMethod
+  fun startBleRelay(promise: Promise) {
+    blePeripheral.start()
+    bleCentral.startScanning()
+    promise.resolve(true)
+  }
+
+  @ReactMethod
+  fun stopBleRelay(promise: Promise) {
+    blePeripheral.stop()
+    bleCentral.stopScanning()
+    promise.resolve(true)
   }
 
   @ReactMethod

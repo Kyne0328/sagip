@@ -94,3 +94,15 @@ test('renders server accepted delivery state when report is accepted', async () 
   expect(JSON.stringify(renderer.toJSON())).toContain('Server accepted');
   expect(JSON.stringify(renderer.toJSON())).not.toContain('Pending delivery');
 });
+
+test('renders relayed to nearby SAGIP device when report is relayed to peer', async () => {
+  core.listEmergencyReports.mockResolvedValue([{
+    ...report,
+    deliveryState: 'RELAYED_TO_PEER' as const,
+  }]);
+  const renderer = await renderApp();
+
+  expect(JSON.stringify(renderer.toJSON())).toContain('Saved on this device');
+  expect(JSON.stringify(renderer.toJSON())).toContain('Relayed to nearby SAGIP device');
+  expect(JSON.stringify(renderer.toJSON())).not.toContain('Pending delivery');
+});

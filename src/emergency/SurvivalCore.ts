@@ -4,6 +4,7 @@ import {
   DELIVERY_STATES,
   EMERGENCY_TYPES,
   URGENCIES,
+  type BleRelayStatus,
   type CreateEmergencyReportInput,
   type EmergencyReportSummary,
   type LocationSnapshot,
@@ -15,6 +16,9 @@ interface NativeSurvivalCore {
   ): Promise<unknown>;
   listEmergencyReports(): Promise<unknown>;
   triggerDelivery(): Promise<unknown>;
+  getRelayStatus(): Promise<unknown>;
+  startBleRelay(): Promise<unknown>;
+  stopBleRelay(): Promise<unknown>;
 }
 
 const nativeCore = NativeModules.SagipSurvivalCore as NativeSurvivalCore | undefined;
@@ -92,6 +96,18 @@ function parseSummary(value: unknown): EmergencyReportSummary {
   };
 }
 
+function parseRelayStatus(value: unknown): BleRelayStatus {
+  if (!isRecord(value)) {
+    return {isScanning: false, isAdvertising: false, peerCount: 0};
+  }
+  return {
+    isScanning: typeof value.isScanning === 'boolean' ? value.isScanning : false,
+    isAdvertising:
+      typeof value.isAdvertising === 'boolean' ? value.isAdvertising : false,
+    peerCount: typeof value.peerCount === 'number' ? value.peerCount : 0,
+  };
+}
+
 function requireNativeCore(): NativeSurvivalCore {
   if (!nativeCore) {
     throw new Error('Sagip Survival Core native module is unavailable');
@@ -120,5 +136,19 @@ export const SurvivalCore = {
       return 0;
     }
     return value;
+  },
+
+  async getRelayStatus(): Promise<BleRelayStatus> {
+    return parseRelayStatus(await requireNativeCore().getRelayStatus());
+  },
+
+  async startBleRelay(): Promise<boolean> {
+    const value = await requireNativeCore().startBleRelay();
+    return typeof value === 'boolean' ? value : false;
+  },
+
+  async stopBleRelay(): Promise<boolean> {
+    const value = await requireNativeCore().stopBleRelay();
+    return typeof value === 'boolean' ? value : false;
   },
 };

@@ -7,7 +7,7 @@ import org.junit.Test
 class SchemaTest {
   @Test
   fun `schema version is explicit and preparation state is present`() {
-    assertEquals(4, Schema.VERSION)
+    assertEquals(5, Schema.VERSION)
     val ddl = Schema.CREATE_STATEMENTS.joinToString("\n")
     listOf(
       "reports",
@@ -16,6 +16,10 @@ class SchemaTest {
       "outbound_envelopes",
       "delivery_events",
       "delivery_attempts",
+      "server_receipts",
+      "inbound_envelopes",
+      "seen_messages",
+      "relay_receipts",
     ).forEach {
       assertTrue("missing table $it", ddl.contains("CREATE TABLE $it"))
     }
@@ -24,6 +28,9 @@ class SchemaTest {
     assertTrue(ddl.contains("attempt_count INTEGER NOT NULL DEFAULT 0"))
     assertTrue(ddl.contains("preparation_state TEXT NOT NULL DEFAULT 'NEEDS_PREPARATION'"))
     assertTrue(ddl.contains("FOREIGN KEY (message_id) REFERENCES outbound_envelopes"))
+    assertTrue(ddl.contains("CREATE TABLE inbound_envelopes"))
+    assertTrue(ddl.contains("CREATE TABLE seen_messages"))
+    assertTrue(ddl.contains("CREATE TABLE relay_receipts"))
   }
 
   @Test
@@ -47,6 +54,16 @@ class SchemaTest {
     val migration = Schema.MIGRATE_3_TO_4.joinToString("\n")
     assertTrue(migration.contains("CREATE TABLE server_receipts"))
     assertTrue(migration.contains("message_id TEXT NOT NULL UNIQUE"))
+    assertTrue(!migration.contains("DROP TABLE"))
+  }
+
+  @Test
+  fun `v4 to v5 migration is non destructive and adds relay tables`() {
+    val migration = Schema.MIGRATE_4_TO_5.joinToString("\n")
+    assertTrue(migration.contains("CREATE TABLE inbound_envelopes"))
+    assertTrue(migration.contains("CREATE TABLE seen_messages"))
+    assertTrue(migration.contains("CREATE TABLE relay_receipts"))
+    assertTrue(migration.contains("idx_inbound_due"))
     assertTrue(!migration.contains("DROP TABLE"))
   }
 }

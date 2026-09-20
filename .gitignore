@@ -78,3 +78,7 @@ yarn-error.log
 !.yarn/releases
 !.yarn/sdks
 !.yarn/versions
+
+# Local agent rules and instructions
+AGENTS.md
+.agents/

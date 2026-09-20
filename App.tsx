@@ -124,6 +124,8 @@ export default function App() {
                 <Text style={styles.acceptedText}>Server accepted</Text>
               ) : latest.deliveryState === 'PERMANENT_FAILURE' ? (
                 <Text style={styles.failedText}>Delivery failed permanently</Text>
+              ) : latest.deliveryState === 'RELAYED_TO_PEER' ? (
+                <Text style={styles.relayedText}>Relayed to nearby SAGIP device</Text>
               ) : (
                 <Text style={styles.pendingText}>Pending delivery</Text>
               )}
@@ -187,6 +189,7 @@ const styles = StyleSheet.create({
   statusCard: {borderRadius: 20, padding: 18, backgroundColor: '#FFFFFF', gap: 8, marginTop: 4},
   savedText: {fontSize: 18, fontWeight: '800', color: '#21302B'},
   pendingText: {fontSize: 16, fontWeight: '800', color: '#8A5B18'},
+  relayedText: {fontSize: 16, fontWeight: '800', color: '#B26B00'},
   acceptedText: {fontSize: 16, fontWeight: '800', color: '#1B6B38'},
   failedText: {fontSize: 16, fontWeight: '800', color: '#B33A32'},
   statusText: {fontSize: 15, lineHeight: 22, color: '#56615D'},

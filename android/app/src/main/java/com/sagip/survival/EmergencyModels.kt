@@ -101,4 +101,10 @@ interface OutboundDeliveryStore {
   fun markDeliveryFailed(messageId: String, reason: String? = null, now: Long = System.currentTimeMillis())
 }
 
+interface RelayDeliveryStore {
+  fun listDueInbound(now: Long, limit: Int = 20): List<InboundEnvelope>
+  fun markInboundServerAccepted(messageId: String, now: Long = System.currentTimeMillis())
+  fun scheduleInboundRetry(messageId: String, now: Long = System.currentTimeMillis(), jitterUnit: Double = Math.random()): Long
+}
+
 

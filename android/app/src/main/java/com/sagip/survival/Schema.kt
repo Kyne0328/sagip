@@ -1,7 +1,7 @@
 package com.sagip.survival
 
 object Schema {
-  const val VERSION = 4
+  const val VERSION = 5
 
   val CREATE_STATEMENTS = listOf(
     """
@@ -77,9 +77,52 @@ object Schema {
         FOREIGN KEY (message_id) REFERENCES outbound_envelopes(message_id) ON DELETE CASCADE
       )
     """.trimIndent(),
+    """
+      CREATE TABLE server_receipts (
+        receipt_id TEXT PRIMARY KEY NOT NULL,
+        message_id TEXT NOT NULL UNIQUE,
+        report_id TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        accepted_at TEXT NOT NULL,
+        FOREIGN KEY (message_id) REFERENCES outbound_envelopes(message_id) ON DELETE CASCADE
+      )
+    """.trimIndent(),
+    """
+      CREATE TABLE inbound_envelopes (
+        inbound_id TEXT PRIMARY KEY NOT NULL,
+        message_id TEXT NOT NULL UNIQUE,
+        envelope_bytes BLOB NOT NULL,
+        received_at INTEGER NOT NULL,
+        origin_key_id BLOB NOT NULL,
+        priority INTEGER NOT NULL DEFAULT 100,
+        delivery_state TEXT NOT NULL DEFAULT 'DELIVERY_PENDING',
+        next_attempt_at INTEGER NOT NULL DEFAULT 0,
+        attempt_count INTEGER NOT NULL DEFAULT 0
+      )
+    """.trimIndent(),
+    """
+      CREATE TABLE seen_messages (
+        message_id TEXT PRIMARY KEY NOT NULL,
+        digest BLOB NOT NULL,
+        first_seen_at INTEGER NOT NULL
+      )
+    """.trimIndent(),
+    """
+      CREATE TABLE relay_receipts (
+        receipt_id TEXT PRIMARY KEY NOT NULL,
+        message_id TEXT NOT NULL,
+        peer_identifier TEXT NOT NULL,
+        acknowledged_at INTEGER NOT NULL,
+        FOREIGN KEY (message_id) REFERENCES outbound_envelopes(message_id) ON DELETE CASCADE
+      )
+    """.trimIndent(),
     "CREATE INDEX idx_outbound_due ON outbound_envelopes(delivery_state, next_attempt_at, priority, created_at)",
     "CREATE INDEX idx_outbound_ready_due ON outbound_envelopes(preparation_state, delivery_state, next_attempt_at, priority, created_at)",
     "CREATE INDEX idx_delivery_attempts_message ON delivery_attempts(message_id, started_at)",
+    "CREATE INDEX idx_server_receipts_report ON server_receipts(report_id)",
+    "CREATE INDEX idx_inbound_due ON inbound_envelopes(delivery_state, next_attempt_at, priority, received_at)",
+    "CREATE INDEX idx_seen_messages_digest ON seen_messages(digest)",
+    "CREATE INDEX idx_relay_receipts_message ON relay_receipts(message_id)",
   )
 
   val MIGRATE_1_TO_2 = listOf(
@@ -113,5 +156,40 @@ object Schema {
   val MIGRATE_3_TO_4 = listOf(
     "CREATE TABLE server_receipts (receipt_id TEXT PRIMARY KEY NOT NULL, message_id TEXT NOT NULL UNIQUE, report_id TEXT NOT NULL, revision INTEGER NOT NULL, accepted_at TEXT NOT NULL, FOREIGN KEY (message_id) REFERENCES outbound_envelopes(message_id) ON DELETE CASCADE)",
     "CREATE INDEX idx_server_receipts_report ON server_receipts(report_id)",
+  )
+
+  val MIGRATE_4_TO_5 = listOf(
+    """
+      CREATE TABLE inbound_envelopes (
+        inbound_id TEXT PRIMARY KEY NOT NULL,
+        message_id TEXT NOT NULL UNIQUE,
+        envelope_bytes BLOB NOT NULL,
+        received_at INTEGER NOT NULL,
+        origin_key_id BLOB NOT NULL,
+        priority INTEGER NOT NULL DEFAULT 100,
+        delivery_state TEXT NOT NULL DEFAULT 'DELIVERY_PENDING',
+        next_attempt_at INTEGER NOT NULL DEFAULT 0,
+        attempt_count INTEGER NOT NULL DEFAULT 0
+      )
+    """.trimIndent(),
+    """
+      CREATE TABLE seen_messages (
+        message_id TEXT PRIMARY KEY NOT NULL,
+        digest BLOB NOT NULL,
+        first_seen_at INTEGER NOT NULL
+      )
+    """.trimIndent(),
+    """
+      CREATE TABLE relay_receipts (
+        receipt_id TEXT PRIMARY KEY NOT NULL,
+        message_id TEXT NOT NULL,
+        peer_identifier TEXT NOT NULL,
+        acknowledged_at INTEGER NOT NULL,
+        FOREIGN KEY (message_id) REFERENCES outbound_envelopes(message_id) ON DELETE CASCADE
+      )
+    """.trimIndent(),
+    "CREATE INDEX idx_inbound_due ON inbound_envelopes(delivery_state, next_attempt_at, priority, received_at)",
+    "CREATE INDEX idx_seen_messages_digest ON seen_messages(digest)",
+    "CREATE INDEX idx_relay_receipts_message ON relay_receipts(message_id)",
   )
 }

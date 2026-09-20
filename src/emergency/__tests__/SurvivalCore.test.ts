@@ -8,6 +8,9 @@ jest.mock('react-native', () => ({
       createEmergencyReport: jest.fn(),
       listEmergencyReports: jest.fn(),
       triggerDelivery: jest.fn(),
+      getRelayStatus: jest.fn(),
+      startBleRelay: jest.fn(),
+      stopBleRelay: jest.fn(),
     },
   },
 }));
@@ -16,6 +19,9 @@ const nativeCore = NativeModules.SagipSurvivalCore as {
   createEmergencyReport: jest.Mock;
   listEmergencyReports: jest.Mock;
   triggerDelivery: jest.Mock;
+  getRelayStatus: jest.Mock;
+  startBleRelay: jest.Mock;
+  stopBleRelay: jest.Mock;
 };
 
 const nativeSummary = {
@@ -83,6 +89,18 @@ describe('SurvivalCore', () => {
     ).rejects.toThrow('Invalid emergency report response from native core');
   });
 
+  it('accepts relayed to peer delivery state from native storage', async () => {
+    const relayedSummary = {
+      ...nativeSummary,
+      deliveryState: 'RELAYED_TO_PEER' as const,
+    };
+    nativeCore.listEmergencyReports.mockResolvedValue([relayedSummary]);
+
+    await expect(SurvivalCore.listEmergencyReports()).resolves.toEqual([
+      relayedSummary,
+    ]);
+  });
+
   it('triggers delivery and returns processed envelope count', async () => {
     nativeCore.triggerDelivery.mockResolvedValue(3);
 
@@ -94,5 +112,27 @@ describe('SurvivalCore', () => {
     nativeCore.triggerDelivery.mockResolvedValue(null);
 
     await expect(SurvivalCore.triggerDelivery()).resolves.toBe(0);
+  });
+
+  it('queries BLE relay status and parses response', async () => {
+    nativeCore.getRelayStatus.mockResolvedValue({
+      isScanning: true,
+      isAdvertising: true,
+      peerCount: 2,
+    });
+
+    await expect(SurvivalCore.getRelayStatus()).resolves.toEqual({
+      isScanning: true,
+      isAdvertising: true,
+      peerCount: 2,
+    });
+  });
+
+  it('starts and stops BLE relay successfully', async () => {
+    nativeCore.startBleRelay.mockResolvedValue(true);
+    nativeCore.stopBleRelay.mockResolvedValue(true);
+
+    await expect(SurvivalCore.startBleRelay()).resolves.toBe(true);
+    await expect(SurvivalCore.stopBleRelay()).resolves.toBe(true);
   });
 });

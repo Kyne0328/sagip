@@ -8,6 +8,7 @@ class DeliveryWorker(
     private val repository: OutboundDeliveryStore,
     private val sender: EnvelopeSender,
     private val transport: String = "INTERNET",
+    private val relayStore: RelayDeliveryStore? = repository as? RelayDeliveryStore,
 ) {
     suspend fun runOnce(now: Long = System.currentTimeMillis()): Int {
         var completed = 0
@@ -51,6 +52,28 @@ class DeliveryWorker(
                 }
             }
         }
+
+        relayStore?.let { store ->
+            for (inbound in store.listDueInbound(now)) {
+                val outbound = OutboundEnvelope(
+                    messageId = inbound.messageId,
+                    bytes = inbound.envelopeBytes,
+                )
+                when (sender.send(outbound)) {
+                    is DeliveryTransportResult.Accepted -> {
+                        store.markInboundServerAccepted(inbound.messageId, now = now)
+                        completed++
+                    }
+                    is DeliveryTransportResult.RetryableFailure -> {
+                        store.scheduleInboundRetry(inbound.messageId, now = now)
+                    }
+                    is DeliveryTransportResult.PermanentFailure -> {
+                        store.markInboundServerAccepted(inbound.messageId, now = now)
+                    }
+                }
+            }
+        }
+
         return completed
     }
 }

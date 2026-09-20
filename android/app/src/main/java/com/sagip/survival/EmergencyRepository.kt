@@ -5,7 +5,7 @@ import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import java.util.UUID
 
-class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliveryStore {
+class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliveryStore, RelayDeliveryStore {
 
   fun createReport(
     input: CreateEmergencyReportInput,
@@ -486,9 +486,189 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
     Urgency.NEED_ASSISTANCE -> 10
   }
 
+  fun isMessageSeen(messageId: String, payloadDigest: ByteArray? = null): Boolean {
+    val db = database.readableDatabase
+    val seenByMsgId = db.rawQuery(
+      "SELECT 1 FROM seen_messages WHERE message_id = ? UNION SELECT 1 FROM outbound_envelopes WHERE message_id = ? UNION SELECT 1 FROM inbound_envelopes WHERE message_id = ?",
+      arrayOf(messageId, messageId, messageId),
+    ).use { cursor -> cursor.moveToFirst() }
+
+    if (seenByMsgId) return true
+
+    if (payloadDigest != null) {
+      val seenByDigest = db.rawQuery(
+        "SELECT 1 FROM seen_messages WHERE digest = ?",
+        arrayOf(payloadDigest),
+      ).use { cursor -> cursor.moveToFirst() }
+      if (seenByDigest) return true
+    }
+
+    return false
+  }
+
+  fun persistInboundEnvelope(
+    envelopeBytes: ByteArray,
+    receivedAt: Long = System.currentTimeMillis(),
+  ): InboundPersistResult {
+    val decoded = try {
+      TransportEnvelopeV1.decode(envelopeBytes)
+    } catch (e: Exception) {
+      return InboundPersistResult.ValidationFailed("Failed to decode envelope: ${e.message}")
+    }
+
+    val messageIdStr = decoded.messageId.toString()
+    if (isMessageSeen(messageIdStr, decoded.payloadDigest)) {
+      return InboundPersistResult.DuplicateIgnored(messageIdStr)
+    }
+
+    val inboundId = UUID.randomUUID().toString()
+    val db = database.writableDatabase
+    db.beginTransaction()
+    try {
+      insertOrThrow(
+        db,
+        "inbound_envelopes",
+        ContentValues().apply {
+          put("inbound_id", inboundId)
+          put("message_id", messageIdStr)
+          put("envelope_bytes", envelopeBytes)
+          put("received_at", receivedAt)
+          put("origin_key_id", decoded.originKeyId)
+          put("priority", decoded.priority)
+          put("delivery_state", DELIVERY_PENDING)
+          put("next_attempt_at", receivedAt)
+          put("attempt_count", 0)
+        },
+      )
+      insertOrThrow(
+        db,
+        "seen_messages",
+        ContentValues().apply {
+          put("message_id", messageIdStr)
+          put("digest", decoded.payloadDigest)
+          put("first_seen_at", receivedAt)
+        },
+      )
+      db.setTransactionSuccessful()
+      return InboundPersistResult.Stored(inboundId, messageIdStr)
+    } finally {
+      db.endTransaction()
+    }
+  }
+
+  fun recordRelayReceipt(
+    receiptId: String,
+    messageId: String,
+    peerIdentifier: String,
+    acknowledgedAt: Long = System.currentTimeMillis(),
+  ): Boolean {
+    val db = database.writableDatabase
+    db.beginTransaction()
+    try {
+      val reportInfo = try {
+        requireEnvelope(db, messageId)
+      } catch (e: Exception) {
+        return false
+      }
+      insertOrThrow(
+        db,
+        "relay_receipts",
+        ContentValues().apply {
+          put("receipt_id", receiptId)
+          put("message_id", messageId)
+          put("peer_identifier", peerIdentifier)
+          put("acknowledged_at", acknowledgedAt)
+        },
+      )
+      db.execSQL(
+        "UPDATE outbound_envelopes SET delivery_state = ? WHERE message_id = ?",
+        arrayOf<Any?>(DELIVERY_RELAYED_TO_PEER, messageId),
+      )
+      db.execSQL(
+        "UPDATE reports SET lifecycle_state = ? WHERE report_id = ?",
+        arrayOf<Any?>(LIFECYCLE_RELAYED, reportInfo.first),
+      )
+      insertDeliveryEvent(db, reportInfo.first, messageId, EVENT_RELAYED_TO_PEER, acknowledgedAt)
+      db.setTransactionSuccessful()
+      return true
+    } finally {
+      db.endTransaction()
+    }
+  }
+
+  fun listDueInbound(now: Long, limit: Int = 20): List<InboundEnvelope> {
+    val db = database.readableDatabase
+    return db.rawQuery(
+      """
+        SELECT inbound_id, message_id, envelope_bytes, received_at, origin_key_id, priority, delivery_state, next_attempt_at, attempt_count
+        FROM inbound_envelopes
+        WHERE delivery_state = ? AND next_attempt_at <= ?
+        ORDER BY priority ASC, received_at ASC
+        LIMIT ?
+      """.trimIndent(),
+      arrayOf(DELIVERY_PENDING, now.toString(), limit.toString()),
+    ).use { cursor ->
+      val result = mutableListOf<InboundEnvelope>()
+      while (cursor.moveToNext()) {
+        result.add(
+          InboundEnvelope(
+            inboundId = cursor.getString(0),
+            messageId = cursor.getString(1),
+            envelopeBytes = cursor.getBlob(2),
+            receivedAt = cursor.getLong(3),
+            originKeyId = cursor.getBlob(4),
+            priority = cursor.getInt(5),
+            deliveryState = cursor.getString(6),
+            nextAttemptAt = cursor.getLong(7),
+            attemptCount = cursor.getInt(8),
+          ),
+        )
+      }
+      result
+    }
+  }
+
+  fun markInboundServerAccepted(messageId: String, now: Long = System.currentTimeMillis()) {
+    val db = database.writableDatabase
+    db.execSQL(
+      "UPDATE inbound_envelopes SET delivery_state = ? WHERE message_id = ?",
+      arrayOf<Any?>(DELIVERY_SERVER_ACCEPTED, messageId),
+    )
+  }
+
+  fun scheduleInboundRetry(
+    messageId: String,
+    now: Long = System.currentTimeMillis(),
+    jitterUnit: Double = Math.random(),
+  ): Long {
+    val db = database.writableDatabase
+    db.beginTransaction()
+    try {
+      val attemptCount = db.rawQuery(
+        "SELECT attempt_count FROM inbound_envelopes WHERE message_id = ?",
+        arrayOf(messageId),
+      ).use { cursor ->
+        if (!cursor.moveToFirst()) return@use 0
+        cursor.getInt(0)
+      }
+      val nextCount = attemptCount + 1
+      val nextAttemptAt = RetryPolicy.nextAttemptAt(now, nextCount, jitterUnit)
+      db.execSQL(
+        "UPDATE inbound_envelopes SET next_attempt_at = ?, attempt_count = ?, delivery_state = ? WHERE message_id = ?",
+        arrayOf<Any?>(nextAttemptAt, nextCount, DELIVERY_PENDING, messageId),
+      )
+      db.setTransactionSuccessful()
+      return nextAttemptAt
+    } finally {
+      db.endTransaction()
+    }
+  }
+
   companion object {
     const val LIFECYCLE_LOCALLY_COMMITTED = "LOCALLY_COMMITTED"
+    const val LIFECYCLE_RELAYED = "RELAYED"
     const val DELIVERY_PENDING = "DELIVERY_PENDING"
+    const val DELIVERY_RELAYED_TO_PEER = "RELAYED_TO_PEER"
     const val DELIVERY_SERVER_ACCEPTED = "SERVER_ACCEPTED"
     const val DELIVERY_PERMANENT_FAILURE = "PERMANENT_FAILURE"
     const val PREPARATION_NEEDS = "NEEDS_PREPARATION"
@@ -499,6 +679,7 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
     const val EVENT_RETRY_SCHEDULED = "RETRY_SCHEDULED"
     const val EVENT_SERVER_ACCEPTED = "SERVER_ACCEPTED"
     const val EVENT_DELIVERY_FAILED = "DELIVERY_FAILED"
+    const val EVENT_RELAYED_TO_PEER = "RELAYED_TO_PEER"
     const val ATTEMPT_LEASE_MS = 60_000L
   }
 }
