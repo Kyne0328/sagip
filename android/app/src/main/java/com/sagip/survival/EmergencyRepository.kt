@@ -7,6 +7,57 @@ import java.util.UUID
 
 class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliveryStore, RelayDeliveryStore, ResponderAckStore {
 
+  fun newestActiveRelayTimestamp(): Long {
+    val sql = """
+      SELECT MAX(activity_at)
+      FROM (
+        SELECT r.created_at AS activity_at
+        FROM reports r
+        JOIN outbound_envelopes o ON o.report_id = r.report_id
+        WHERE o.delivery_state IN (?, ?, ?)
+        UNION ALL
+        SELECT received_at AS activity_at
+        FROM inbound_envelopes
+        WHERE delivery_state IN (?, ?)
+      )
+    """.trimIndent()
+    return database.readableDatabase.rawQuery(
+      sql,
+      arrayOf(
+        DELIVERY_PENDING,
+        DELIVERY_RELAYED_TO_PEER,
+        DELIVERY_SERVER_ACCEPTED,
+        DELIVERY_PENDING,
+        DELIVERY_SERVER_ACCEPTED,
+      ),
+    ).use { cursor ->
+      if (!cursor.moveToFirst() || cursor.isNull(0)) 0L else cursor.getLong(0)
+    }
+  }
+
+  fun hasActiveRelayWork(): Boolean {
+    val localActive = database.readableDatabase.rawQuery(
+      """
+        SELECT 1
+        FROM outbound_envelopes
+        WHERE delivery_state IN (?, ?, ?)
+        LIMIT 1
+      """.trimIndent(),
+      arrayOf(DELIVERY_PENDING, DELIVERY_RELAYED_TO_PEER, DELIVERY_SERVER_ACCEPTED),
+    ).use { cursor -> cursor.moveToFirst() }
+    if (localActive) return true
+
+    return database.readableDatabase.rawQuery(
+      """
+        SELECT 1
+        FROM inbound_envelopes
+        WHERE delivery_state IN (?, ?)
+        LIMIT 1
+      """.trimIndent(),
+      arrayOf(DELIVERY_PENDING, DELIVERY_SERVER_ACCEPTED),
+    ).use { cursor -> cursor.moveToFirst() }
+  }
+
   fun createReport(
     input: CreateEmergencyReportInput,
     location: LocationSnapshot?,
@@ -544,6 +595,7 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
     }
 
     val messageIdStr = decoded.messageId.toString()
+    val reportIdStr = decoded.reportId.toString()
     if (isMessageSeen(messageIdStr, decoded.payloadDigest)) {
       return InboundPersistResult.DuplicateIgnored(messageIdStr)
     }
@@ -558,6 +610,7 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
         ContentValues().apply {
           put("inbound_id", inboundId)
           put("message_id", messageIdStr)
+          put("report_id", reportIdStr)
           put("envelope_bytes", envelopeBytes)
           put("received_at", receivedAt)
           put("origin_key_id", decoded.originKeyId)
@@ -597,15 +650,16 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
       } catch (e: Exception) {
         return false
       }
-      insertOrThrow(
-        db,
+      val inserted = db.insertWithOnConflict(
         "relay_receipts",
+        null,
         ContentValues().apply {
           put("receipt_id", receiptId)
           put("message_id", messageId)
           put("peer_identifier", peerIdentifier)
           put("acknowledged_at", acknowledgedAt)
         },
+        SQLiteDatabase.CONFLICT_IGNORE,
       )
       db.execSQL(
         "UPDATE outbound_envelopes SET delivery_state = ? WHERE message_id = ?",
@@ -615,7 +669,9 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
         "UPDATE reports SET lifecycle_state = ? WHERE report_id = ?",
         arrayOf<Any?>(LIFECYCLE_RELAYED, reportInfo.first),
       )
-      insertDeliveryEvent(db, reportInfo.first, messageId, EVENT_RELAYED_TO_PEER, acknowledgedAt)
+      if (inserted != -1L) {
+        insertDeliveryEvent(db, reportInfo.first, messageId, EVENT_RELAYED_TO_PEER, acknowledgedAt)
+      }
       db.setTransactionSuccessful()
       return true
     } finally {
@@ -627,7 +683,7 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
     val db = database.readableDatabase
     return db.rawQuery(
       """
-        SELECT inbound_id, message_id, envelope_bytes, received_at, origin_key_id, priority, delivery_state, next_attempt_at, attempt_count
+        SELECT inbound_id, message_id, report_id, envelope_bytes, received_at, origin_key_id, priority, delivery_state, next_attempt_at, attempt_count
         FROM inbound_envelopes
         WHERE delivery_state = ? AND next_attempt_at <= ?
         ORDER BY priority ASC, received_at ASC
@@ -637,17 +693,26 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
     ).use { cursor ->
       val result = mutableListOf<InboundEnvelope>()
       while (cursor.moveToNext()) {
+        val envelopeBytes = cursor.getBlob(3)
+        val reportId = if (cursor.isNull(2)) {
+          runCatching { TransportEnvelopeV1.decode(envelopeBytes).reportId.toString() }
+            .getOrDefault("")
+        } else {
+          cursor.getString(2)
+        }
+        if (reportId.isBlank()) continue
         result.add(
           InboundEnvelope(
             inboundId = cursor.getString(0),
             messageId = cursor.getString(1),
-            envelopeBytes = cursor.getBlob(2),
-            receivedAt = cursor.getLong(3),
-            originKeyId = cursor.getBlob(4),
-            priority = cursor.getInt(5),
-            deliveryState = cursor.getString(6),
-            nextAttemptAt = cursor.getLong(7),
-            attemptCount = cursor.getInt(8),
+            reportId = reportId,
+            envelopeBytes = envelopeBytes,
+            receivedAt = cursor.getLong(4),
+            originKeyId = cursor.getBlob(5),
+            priority = cursor.getInt(6),
+            deliveryState = cursor.getString(7),
+            nextAttemptAt = cursor.getLong(8),
+            attemptCount = cursor.getInt(9),
           ),
         )
       }
@@ -660,6 +725,14 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
     db.execSQL(
       "UPDATE inbound_envelopes SET delivery_state = ? WHERE message_id = ?",
       arrayOf<Any?>(DELIVERY_SERVER_ACCEPTED, messageId),
+    )
+  }
+
+  override fun markInboundDeliveryFailed(messageId: String, now: Long) {
+    val db = database.writableDatabase
+    db.execSQL(
+      "UPDATE inbound_envelopes SET delivery_state = ? WHERE message_id = ?",
+      arrayOf<Any?>(DELIVERY_PERMANENT_FAILURE, messageId),
     )
   }
 
@@ -691,6 +764,105 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
     }
   }
 
+  override fun listInboundReportsAwaitingAck(limit: Int): List<String> {
+    require(limit in 1..100) { "limit must be between 1 and 100" }
+    backfillInboundReportIds(maxOf(limit, 20))
+    val sql = """
+      SELECT i.report_id
+      FROM inbound_envelopes i
+      WHERE i.delivery_state = ?
+        AND i.report_id IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1
+          FROM relay_responder_acks a
+          WHERE a.report_id = i.report_id
+        )
+      GROUP BY i.report_id
+      ORDER BY MIN(i.received_at) ASC
+      LIMIT ?
+    """.trimIndent()
+    return database.readableDatabase.rawQuery(
+      sql,
+      arrayOf(DELIVERY_SERVER_ACCEPTED, limit.toString()),
+    ).use { cursor ->
+      val result = mutableListOf<String>()
+      while (cursor.moveToNext()) result += cursor.getString(0)
+      result
+    }
+  }
+
+  override fun recordInboundResponderAck(
+    ack: ResponderAck,
+    now: Long,
+  ): Boolean {
+    backfillInboundReportIds(20)
+    val db = database.writableDatabase
+    db.beginTransaction()
+    try {
+      val held = db.rawQuery(
+        "SELECT 1 FROM inbound_envelopes WHERE report_id = ? LIMIT 1",
+        arrayOf(ack.reportId),
+      ).use { cursor -> cursor.moveToFirst() }
+      if (!held) return false
+
+      db.insertWithOnConflict(
+        "relay_responder_acks",
+        null,
+        ContentValues().apply {
+          put("ack_id", ack.ackId)
+          put("report_id", ack.reportId)
+          put("responder_id", ack.responderId)
+          put("callsign", ack.callsign)
+          put("status", ack.status)
+          put("note", ack.note)
+          put("acknowledged_at", ack.acknowledgedAt)
+        },
+        SQLiteDatabase.CONFLICT_IGNORE,
+      )
+      db.setTransactionSuccessful()
+      return true
+    } finally {
+      db.endTransaction()
+    }
+  }
+
+  private fun backfillInboundReportIds(limit: Int) {
+    val pending = database.readableDatabase.rawQuery(
+      """
+        SELECT message_id, envelope_bytes
+        FROM inbound_envelopes
+        WHERE report_id IS NULL
+        ORDER BY received_at ASC
+        LIMIT ?
+      """.trimIndent(),
+      arrayOf(limit.toString()),
+    ).use { cursor ->
+      val result = mutableListOf<Pair<String, ByteArray>>()
+      while (cursor.moveToNext()) result += cursor.getString(0) to cursor.getBlob(1)
+      result
+    }
+    if (pending.isEmpty()) return
+
+    val db = database.writableDatabase
+    db.beginTransaction()
+    try {
+      for ((messageId, envelopeBytes) in pending) {
+        val reportId = runCatching {
+          TransportEnvelopeV1.decode(envelopeBytes).reportId.toString()
+        }.getOrNull() ?: continue
+        db.update(
+          "inbound_envelopes",
+          ContentValues().apply { put("report_id", reportId) },
+          "message_id = ? AND report_id IS NULL",
+          arrayOf(messageId),
+        )
+      }
+      db.setTransactionSuccessful()
+    } finally {
+      db.endTransaction()
+    }
+  }
+
   override fun listReportsAwaitingAck(limit: Int): List<String> {
     val sql = """
       SELECT r.report_id
@@ -716,13 +888,44 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
     now: Long,
   ): Boolean {
     val db = database.writableDatabase
+    val isLocalReport = db.rawQuery(
+      "SELECT 1 FROM reports WHERE report_id = ?",
+      arrayOf(ack.reportId),
+    ).use { cursor -> cursor.moveToFirst() }
+    if (!isLocalReport) {
+      return recordInboundResponderAck(ack, now)
+    }
+
     db.beginTransaction()
     try {
-      val count = db.rawQuery(
-        "SELECT 1 FROM reports WHERE report_id = ?",
+      val alreadyRecorded = db.rawQuery(
+        """
+          SELECT 1
+          FROM responder_acks
+          WHERE ack_id = ?
+             OR (report_id = ? AND status = ? AND acknowledged_at = ?)
+          LIMIT 1
+        """.trimIndent(),
+        arrayOf(ack.ackId, ack.reportId, ack.status, ack.acknowledgedAt.toString()),
+      ).use { cursor -> cursor.moveToFirst() }
+      if (alreadyRecorded) {
+        db.setTransactionSuccessful()
+        return true
+      }
+
+      val eventMessageId = db.rawQuery(
+        """
+          SELECT message_id
+          FROM outbound_envelopes
+          WHERE report_id = ?
+          ORDER BY revision DESC, created_at DESC
+          LIMIT 1
+        """.trimIndent(),
         arrayOf(ack.reportId),
-      ).use { cursor -> cursor.count }
-      if (count == 0) return false
+      ).use { cursor ->
+        check(cursor.moveToFirst()) { "Responder ACK report has no outbound envelope" }
+        cursor.getString(0)
+      }
 
       insertOrThrow(
         db,
@@ -745,7 +948,13 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
         "UPDATE outbound_envelopes SET delivery_state = ? WHERE report_id = ?",
         arrayOf<Any?>(DELIVERY_RESPONDER_ACKNOWLEDGED, ack.reportId),
       )
-      insertDeliveryEvent(db, ack.reportId, ack.reportId, EVENT_RESPONDER_ACKNOWLEDGED, now)
+      insertDeliveryEvent(
+        db,
+        ack.reportId,
+        eventMessageId,
+        EVENT_RESPONDER_ACKNOWLEDGED,
+        now,
+      )
       db.setTransactionSuccessful()
       return true
     } finally {
@@ -779,6 +988,9 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
     val sql = """
       SELECT ack_id, report_id, responder_id, callsign, status, note, acknowledged_at
       FROM responder_acks
+      UNION ALL
+      SELECT ack_id, report_id, responder_id, callsign, status, note, acknowledged_at
+      FROM relay_responder_acks
       ORDER BY acknowledged_at DESC
       LIMIT 1
     """.trimIndent()

@@ -59,6 +59,15 @@ react {
  */
 def enableProguardInReleaseBuilds = false
 
+def configuredSagipBackendBaseUrl =
+    (project.findProperty("SAGIP_BACKEND_BASE_URL") ?: System.getenv("SAGIP_BACKEND_BASE_URL"))
+        ?.toString()
+        ?.trim()
+
+def buildConfigString = { String value ->
+    '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
+}
+
 /**
  * The preferred build flavor of JavaScriptCore (JSC)
  *
@@ -78,6 +87,11 @@ android {
     compileSdk rootProject.ext.compileSdkVersion
 
     namespace "org.sagip.app"
+
+    buildFeatures {
+        buildConfig true
+    }
+
     defaultConfig {
         applicationId "org.sagip.app"
         minSdkVersion rootProject.ext.minSdkVersion
@@ -97,15 +111,41 @@ android {
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
+            def debugBackendBaseUrl = configuredSagipBackendBaseUrl ?: "http://10.0.2.2:8080"
+            buildConfigField "String", "SAGIP_BACKEND_BASE_URL", buildConfigString(debugBackendBaseUrl)
+            manifestPlaceholders = [usesCleartextTraffic: "true"]
         }
         release {
-            // Caution! In production, you need to generate your own keystore file.
-            // see https://reactnative.dev/docs/signed-apk-android.
+            // Production signing is configured separately before release distribution.
             signingConfig signingConfigs.debug
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+
+            // A release build never falls back to the Android emulator host address.
+            // Set SAGIP_BACKEND_BASE_URL as a Gradle property or environment variable.
+            def releaseBackendBaseUrl = configuredSagipBackendBaseUrl ?: ""
+            buildConfigField "String", "SAGIP_BACKEND_BASE_URL", buildConfigString(releaseBackendBaseUrl)
+            manifestPlaceholders = [usesCleartextTraffic: "false"]
         }
     }
+}
+
+tasks.register("validateSagipReleaseBackend") {
+    doLast {
+        if (!configuredSagipBackendBaseUrl) {
+            throw new GradleException(
+                "SAGIP_BACKEND_BASE_URL is required for release builds. " +
+                "Provide an HTTPS base URL with -PSAGIP_BACKEND_BASE_URL=https://..."
+            )
+        }
+        if (!configuredSagipBackendBaseUrl.startsWith("https://")) {
+            throw new GradleException("Release SAGIP_BACKEND_BASE_URL must use HTTPS")
+        }
+    }
+}
+
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    dependsOn("validateSagipReleaseBackend")
 }
 
 dependencies {

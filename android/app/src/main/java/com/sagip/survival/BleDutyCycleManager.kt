@@ -1,6 +1,7 @@
 package com.sagip.survival
 
 import android.bluetooth.le.ScanSettings
+import android.bluetooth.le.AdvertiseSettings
 
 /**
  * Manages adaptive BLE scan and advertise duty cycles to preserve battery life
@@ -23,6 +24,17 @@ object BleDutyCycleManager {
       elapsed < URGENT_WINDOW_MS -> ScanSettings.SCAN_MODE_LOW_LATENCY
       elapsed < CONSERVE_WINDOW_MS -> ScanSettings.SCAN_MODE_BALANCED
       else -> ScanSettings.SCAN_MODE_LOW_POWER
+    }
+  }
+
+  fun getRecommendedAdvertiseMode(
+    newestReportTimestamp: Long,
+    now: Long = System.currentTimeMillis(),
+  ): Int {
+    return when (getRecommendedScanMode(newestReportTimestamp, now)) {
+      ScanSettings.SCAN_MODE_LOW_LATENCY -> AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY
+      ScanSettings.SCAN_MODE_BALANCED -> AdvertiseSettings.ADVERTISE_MODE_BALANCED
+      else -> AdvertiseSettings.ADVERTISE_MODE_LOW_POWER
     }
   }
 

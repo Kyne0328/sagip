@@ -1,0 +1,3 @@
+[submodule "sagip-docs"]
+	path = sagip-docs
+	url = https://github.com/Kyne0328/sagip-docs.git

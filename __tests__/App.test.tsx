@@ -9,6 +9,9 @@ jest.mock('../src/emergency/SurvivalCore', () => ({
     createEmergencyReport: jest.fn(),
     listEmergencyReports: jest.fn(),
     triggerDelivery: jest.fn().mockResolvedValue(0),
+    getRelayStatus: jest.fn(),
+    startBleRelay: jest.fn().mockResolvedValue(true),
+    stopBleRelay: jest.fn().mockResolvedValue(true),
   },
 }));
 
@@ -37,6 +40,17 @@ async function renderApp() {
 beforeEach(() => {
   jest.clearAllMocks();
   core.listEmergencyReports.mockResolvedValue([]);
+  core.getRelayStatus.mockResolvedValue({
+    availability: 'READY',
+    isSupported: true,
+    permissionGranted: true,
+    bluetoothEnabled: true,
+    isScanning: true,
+    isAdvertising: true,
+    isDutyCyclePaused: false,
+    peerCount: 0,
+  });
+  core.startBleRelay.mockResolvedValue(true);
 });
 
 test('shows an offline-safe SOS entry point with accessibility attributes', async () => {
@@ -45,7 +59,9 @@ test('shows an offline-safe SOS entry point with accessibility attributes', asyn
   expect(sosBtn).toBeTruthy();
   expect(sosBtn.props.accessibilityRole).toBe('button');
   expect(sosBtn.props.accessibilityHint).toContain('save SOS locally');
-  expect(renderer.root.findByProps({accessibilityLiveRegion: 'polite'})).toBeTruthy();
+  expect(
+    renderer.root.findAllByProps({accessibilityLiveRegion: 'polite'}).length,
+  ).toBeGreaterThan(0);
 });
 
 test('creates a local SOS and tells the user it is pending delivery', async () => {
@@ -109,6 +125,64 @@ test('renders relayed to nearby SAGIP device when report is relayed to peer', as
   expect(JSON.stringify(renderer.toJSON())).toContain('Saved on this device');
   expect(JSON.stringify(renderer.toJSON())).toContain('Relayed to nearby SAGIP device');
   expect(JSON.stringify(renderer.toJSON())).not.toContain('Pending delivery');
+});
+
+test('shows relay permission as separate from local SOS persistence', async () => {
+  core.getRelayStatus.mockResolvedValue({
+    availability: 'PERMISSION_REQUIRED',
+    isSupported: true,
+    permissionGranted: false,
+    bluetoothEnabled: false,
+    isScanning: false,
+    isAdvertising: false,
+    isDutyCyclePaused: false,
+    peerCount: 0,
+  });
+  const renderer = await renderApp();
+
+  const rendered = JSON.stringify(renderer.toJSON());
+  expect(rendered).toContain('Nearby relay needs permission');
+  expect(rendered).toContain('SOS saving still works without it');
+  expect(
+    renderer.root.findByProps({accessibilityLabel: 'Allow nearby relay'}),
+  ).toBeTruthy();
+});
+
+test('shows active relay and nearby peer count', async () => {
+  core.getRelayStatus.mockResolvedValue({
+    availability: 'READY',
+    isSupported: true,
+    permissionGranted: true,
+    bluetoothEnabled: true,
+    isScanning: true,
+    isAdvertising: true,
+    isDutyCyclePaused: false,
+    peerCount: 2,
+  });
+  const renderer = await renderApp();
+
+  const rendered = JSON.stringify(renderer.toJSON());
+  expect(rendered).toContain('Nearby relay active');
+  expect(rendered).toContain('2 nearby SAGIP devices detected.');
+});
+
+test('shows battery-saving relay pause as active rather than failed', async () => {
+  core.getRelayStatus.mockResolvedValue({
+    availability: 'READY',
+    isSupported: true,
+    permissionGranted: true,
+    bluetoothEnabled: true,
+    isScanning: false,
+    isAdvertising: false,
+    isDutyCyclePaused: true,
+    peerCount: 0,
+  });
+  const renderer = await renderApp();
+
+  const rendered = JSON.stringify(renderer.toJSON());
+  expect(rendered).toContain('Nearby relay active');
+  expect(rendered).toContain('conserving battery');
+  expect(rendered).not.toContain('Nearby relay not active');
 });
 
 test('renders responder acknowledged delivery state with callsign and note', async () => {

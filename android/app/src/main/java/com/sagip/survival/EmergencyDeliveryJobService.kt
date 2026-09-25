@@ -2,8 +2,11 @@ package com.sagip.survival
 
 import android.app.job.JobParameters
 import android.app.job.JobService
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
@@ -13,14 +16,15 @@ import kotlinx.coroutines.launch
  * Uses zero third-party dependencies, running purely on Android OS framework capabilities.
  */
 class EmergencyDeliveryJobService : JobService() {
-  private val scope = CoroutineScope(Dispatchers.IO)
+  private val supervisor = SupervisorJob()
+  private val scope = CoroutineScope(supervisor + Dispatchers.IO)
+  private var runningJob: Job? = null
 
   override fun onStartJob(params: JobParameters?): Boolean {
-    scope.launch {
+    runningJob = scope.launch {
       try {
-        val database = SagipDatabase(applicationContext)
-        val repository = EmergencyRepository(database)
-        val sender = HttpEnvelopeSender()
+        val repository = SurvivalCoreRuntime.get(applicationContext).repository
+        val sender = HttpEnvelopeSender(BackendEndpointConfig.envelopeUrl())
         val worker = DeliveryWorker(
           repository = repository,
           sender = sender,
@@ -29,15 +33,25 @@ class EmergencyDeliveryJobService : JobService() {
         )
         worker.runOnce()
         jobFinished(params, false)
+      } catch (e: CancellationException) {
+        throw e
       } catch (_: Exception) {
         jobFinished(params, true) // reschedule if failed
+      } finally {
+        runningJob = null
       }
     }
     return true // Work is running asynchronously
   }
 
   override fun onStopJob(params: JobParameters?): Boolean {
-    scope.cancel()
+    runningJob?.cancel()
+    runningJob = null
     return true // Reschedule if cancelled unexpectedly
+  }
+
+  override fun onDestroy() {
+    scope.cancel()
+    super.onDestroy()
   }
 }

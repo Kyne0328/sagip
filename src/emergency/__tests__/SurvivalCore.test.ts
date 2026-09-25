@@ -137,14 +137,24 @@ describe('SurvivalCore', () => {
 
   it('queries BLE relay status and parses response', async () => {
     nativeCore.getRelayStatus.mockResolvedValue({
+      availability: 'READY',
+      isSupported: true,
+      permissionGranted: true,
+      bluetoothEnabled: true,
       isScanning: true,
       isAdvertising: true,
+      isDutyCyclePaused: false,
       peerCount: 2,
     });
 
     await expect(SurvivalCore.getRelayStatus()).resolves.toEqual({
+      availability: 'READY',
+      isSupported: true,
+      permissionGranted: true,
+      bluetoothEnabled: true,
       isScanning: true,
       isAdvertising: true,
+      isDutyCyclePaused: false,
       peerCount: 2,
     });
   });

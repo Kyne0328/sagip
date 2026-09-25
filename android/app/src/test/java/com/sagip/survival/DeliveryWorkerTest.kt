@@ -153,7 +153,10 @@ class DeliveryWorkerTest {
     var inboundList: MutableList<InboundEnvelope> = mutableListOf(),
   ) : RelayDeliveryStore {
     val acceptedInbound = mutableListOf<String>()
+    val failedInbound = mutableListOf<String>()
     val retriedInbound = mutableListOf<String>()
+    val reportsAwaitingAck = mutableListOf<String>()
+    val recordedAcks = mutableListOf<ResponderAck>()
 
     override fun listDueInbound(now: Long, limit: Int): List<InboundEnvelope> = inboundList.toList()
 
@@ -162,10 +165,24 @@ class DeliveryWorkerTest {
       inboundList.removeAll { it.messageId == messageId }
     }
 
+    override fun markInboundDeliveryFailed(messageId: String, now: Long) {
+      failedInbound += messageId
+      inboundList.removeAll { it.messageId == messageId }
+    }
+
     override fun scheduleInboundRetry(messageId: String, now: Long, jitterUnit: Double): Long {
       retriedInbound += messageId
       inboundList.removeAll { it.messageId == messageId }
       return now + 5000L
+    }
+
+    override fun listInboundReportsAwaitingAck(limit: Int): List<String> =
+      reportsAwaitingAck.take(limit)
+
+    override fun recordInboundResponderAck(ack: ResponderAck, now: Long): Boolean {
+      recordedAcks += ack
+      reportsAwaitingAck.remove(ack.reportId)
+      return true
     }
   }
 
@@ -175,6 +192,7 @@ class DeliveryWorkerTest {
     val inbound = InboundEnvelope(
       inboundId = "in-1",
       messageId = "msg-inbound-1",
+      reportId = "rep-inbound",
       envelopeBytes = byteArrayOf(1, 2, 3),
       receivedAt = 1000L,
       originKeyId = byteArrayOf(4, 5, 6),
@@ -182,7 +200,15 @@ class DeliveryWorkerTest {
     val relayStore = FakeRelayDeliveryStore(mutableListOf(inbound))
     val sender = FakeEnvelopeSender(
       DeliveryTransportResult.Accepted(
-        ServerReceipt("rcpt-relay", "msg-inbound-1", "rep-inbound", 1, "2026-09-20T12:00:00Z"),
+        ServerReceipt(
+          receiptVersion = 1,
+          state = "SERVER_ACCEPTED",
+          receiptId = "rcpt-relay",
+          messageId = "msg-inbound-1",
+          reportId = "rep-inbound",
+          revision = 1,
+          acceptedAt = "2026-09-20T12:00:00Z",
+        ),
       ),
     )
     val worker = DeliveryWorker(store, sender, relayStore = relayStore)
@@ -194,6 +220,58 @@ class DeliveryWorkerTest {
     assertEquals("msg-inbound-1", relayStore.acceptedInbound.first())
     assertEquals(1, sender.sentEnvelopes.size)
     assertEquals("msg-inbound-1", sender.sentEnvelopes.first().messageId)
+  }
+
+  @Test
+  fun `permanently rejected inbound relay is not reported as server accepted`() = runBlocking {
+    val store = FakeOutboundDeliveryStore(mutableListOf())
+    val inbound = InboundEnvelope(
+      inboundId = "in-failed",
+      messageId = "msg-inbound-failed",
+      reportId = "rep-inbound-failed",
+      envelopeBytes = byteArrayOf(9, 8, 7),
+      receivedAt = 1000L,
+      originKeyId = byteArrayOf(6, 5, 4),
+    )
+    val relayStore = FakeRelayDeliveryStore(mutableListOf(inbound))
+    val sender = FakeEnvelopeSender(
+      DeliveryTransportResult.PermanentFailure("HTTP_400"),
+    )
+
+    val count = DeliveryWorker(store, sender, relayStore = relayStore).runOnce(now = 2000L)
+
+    assertEquals(0, count)
+    assertTrue(relayStore.acceptedInbound.isEmpty())
+    assertEquals(listOf("msg-inbound-failed"), relayStore.failedInbound)
+  }
+
+  @Test
+  fun `runOnce polls and records responder acknowledgement for relayed report`() = runBlocking {
+    val store = FakeOutboundDeliveryStore(mutableListOf())
+    val relayStore = FakeRelayDeliveryStore().apply {
+      reportsAwaitingAck += "rep-relayed-1"
+    }
+    val expectedAck = ResponderAck(
+      ackId = "ack-relay-1",
+      reportId = "rep-relayed-1",
+      responderId = "SERVER",
+      callsign = "RESCUE-2",
+      status = "EN_ROUTE",
+      note = "Team dispatched",
+      acknowledgedAt = 3000L,
+    )
+    val sender = object : EnvelopeSender {
+      override suspend fun send(envelope: OutboundEnvelope) =
+        DeliveryTransportResult.RetryableFailure("none")
+
+      override suspend fun checkReportStatus(reportId: String): ResponderAck? =
+        if (reportId == expectedAck.reportId) expectedAck else null
+    }
+
+    DeliveryWorker(store, sender, relayStore = relayStore).runOnce(now = 3000L)
+
+    assertEquals(listOf(expectedAck), relayStore.recordedAcks)
+    assertTrue(relayStore.reportsAwaitingAck.isEmpty())
   }
 
   private class FakeResponderAckStore : ResponderAckStore {

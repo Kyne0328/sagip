@@ -17,9 +17,9 @@ class ChaosRecoveryTest {
     assertTrue(chunks.size >= 4)
 
     // Receive first 2 chunks
-    val res0 = reassembler.ingestChunk(chunks[0])
+    val res0 = reassembler.addChunk(chunks[0])
     assertTrue(res0 is ReassemblyResult.InProgress)
-    val res1 = reassembler.ingestChunk(chunks[1])
+    val res1 = reassembler.addChunk(chunks[1])
     assertTrue(res1 is ReassemblyResult.InProgress)
 
     // Connection drop / timeout occurs -> reset
@@ -30,7 +30,7 @@ class ChaosRecoveryTest {
     val newChunks = BleChunkCodec.encodeChunks(newEnvelope, maxPayloadPerChunk = 150)
     var finalResult: ReassemblyResult? = null
     for (chunk in newChunks) {
-      finalResult = reassembler.ingestChunk(chunk)
+      finalResult = reassembler.addChunk(chunk)
     }
 
     assertTrue(finalResult is ReassemblyResult.Complete)
@@ -47,14 +47,14 @@ class ChaosRecoveryTest {
     val corruptChunk = chunks[1].copyOf()
     corruptChunk[corruptChunk.size - 1] = (corruptChunk[corruptChunk.size - 1].toInt() xor 0xFF).toByte()
 
-    reassembler.ingestChunk(chunks[0])
-    val failRes = reassembler.ingestChunk(corruptChunk)
+    reassembler.addChunk(chunks[0])
+    val failRes = reassembler.addChunk(corruptChunk)
     assertTrue(failRes is ReassemblyResult.Failed)
 
     // Reset and retry with pristine chunks
     reassembler.reset()
-    reassembler.ingestChunk(chunks[0])
-    val successRes = reassembler.ingestChunk(chunks[1])
+    reassembler.addChunk(chunks[0])
+    val successRes = reassembler.addChunk(chunks[1])
     assertTrue(successRes is ReassemblyResult.Complete)
     assertArrayEquals(envelopeBytes, (successRes as ReassemblyResult.Complete).envelopeBytes)
   }

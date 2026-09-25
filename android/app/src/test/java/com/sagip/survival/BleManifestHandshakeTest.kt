@@ -29,6 +29,7 @@ class BleManifestHandshakeTest {
     val now = System.currentTimeMillis()
 
     val encoded = BleProtocolConstants.encodeAck(messageId, receiptId, now)
+    assertEquals(44, BleProtocolConstants.ACK_PAYLOAD_SIZE)
     assertEquals(BleProtocolConstants.ACK_PAYLOAD_SIZE, encoded.size)
 
     val decoded = BleProtocolConstants.decodeAck(encoded)

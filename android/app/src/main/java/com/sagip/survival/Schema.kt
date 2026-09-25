@@ -1,7 +1,7 @@
 package com.sagip.survival
 
 object Schema {
-  const val VERSION = 6
+  const val VERSION = 7
 
   val CREATE_STATEMENTS = listOf(
     """
@@ -91,6 +91,7 @@ object Schema {
       CREATE TABLE inbound_envelopes (
         inbound_id TEXT PRIMARY KEY NOT NULL,
         message_id TEXT NOT NULL UNIQUE,
+        report_id TEXT,
         envelope_bytes BLOB NOT NULL,
         received_at INTEGER NOT NULL,
         origin_key_id BLOB NOT NULL,
@@ -128,14 +129,28 @@ object Schema {
         FOREIGN KEY (report_id) REFERENCES reports(report_id) ON DELETE CASCADE
       )
     """.trimIndent(),
+    """
+      CREATE TABLE relay_responder_acks (
+        ack_id TEXT PRIMARY KEY NOT NULL,
+        report_id TEXT NOT NULL,
+        responder_id TEXT NOT NULL,
+        callsign TEXT,
+        status TEXT NOT NULL,
+        note TEXT,
+        acknowledged_at INTEGER NOT NULL,
+        UNIQUE(report_id, status, acknowledged_at)
+      )
+    """.trimIndent(),
     "CREATE INDEX idx_outbound_due ON outbound_envelopes(delivery_state, next_attempt_at, priority, created_at)",
     "CREATE INDEX idx_outbound_ready_due ON outbound_envelopes(preparation_state, delivery_state, next_attempt_at, priority, created_at)",
     "CREATE INDEX idx_delivery_attempts_message ON delivery_attempts(message_id, started_at)",
     "CREATE INDEX idx_server_receipts_report ON server_receipts(report_id)",
     "CREATE INDEX idx_inbound_due ON inbound_envelopes(delivery_state, next_attempt_at, priority, received_at)",
+    "CREATE INDEX idx_inbound_report ON inbound_envelopes(report_id)",
     "CREATE INDEX idx_seen_messages_digest ON seen_messages(digest)",
     "CREATE INDEX idx_relay_receipts_message ON relay_receipts(message_id)",
     "CREATE INDEX idx_responder_acks_report ON responder_acks(report_id)",
+    "CREATE INDEX idx_relay_responder_acks_report ON relay_responder_acks(report_id, acknowledged_at DESC)",
   )
 
   val MIGRATE_1_TO_2 = listOf(
@@ -220,5 +235,23 @@ object Schema {
       )
     """.trimIndent(),
     "CREATE INDEX idx_responder_acks_report ON responder_acks(report_id)",
+  )
+
+  val MIGRATE_6_TO_7 = listOf(
+    "ALTER TABLE inbound_envelopes ADD COLUMN report_id TEXT",
+    "CREATE INDEX idx_inbound_report ON inbound_envelopes(report_id)",
+    """
+      CREATE TABLE relay_responder_acks (
+        ack_id TEXT PRIMARY KEY NOT NULL,
+        report_id TEXT NOT NULL,
+        responder_id TEXT NOT NULL,
+        callsign TEXT,
+        status TEXT NOT NULL,
+        note TEXT,
+        acknowledged_at INTEGER NOT NULL,
+        UNIQUE(report_id, status, acknowledged_at)
+      )
+    """.trimIndent(),
+    "CREATE INDEX idx_relay_responder_acks_report ON relay_responder_acks(report_id, acknowledged_at DESC)",
   )
 }

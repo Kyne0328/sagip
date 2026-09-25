@@ -1,6 +1,7 @@
 import {NativeModules} from 'react-native';
 
 import {
+  BLE_RELAY_AVAILABILITIES,
   DELIVERY_STATES,
   EMERGENCY_TYPES,
   URGENCIES,
@@ -129,13 +130,47 @@ function parseSummary(value: unknown): EmergencyReportSummary {
 
 function parseRelayStatus(value: unknown): BleRelayStatus {
   if (!isRecord(value)) {
-    return {isScanning: false, isAdvertising: false, peerCount: 0};
+    return {
+      availability: 'UNKNOWN',
+      isSupported: false,
+      permissionGranted: false,
+      bluetoothEnabled: false,
+      isScanning: false,
+      isAdvertising: false,
+      isDutyCyclePaused: false,
+      peerCount: 0,
+    };
   }
+
+  const availability = BLE_RELAY_AVAILABILITIES.includes(
+    value.availability as never,
+  )
+    ? (value.availability as BleRelayStatus['availability'])
+    : 'UNKNOWN';
+
   return {
+    availability,
+    isSupported:
+      typeof value.isSupported === 'boolean' ? value.isSupported : false,
+    permissionGranted:
+      typeof value.permissionGranted === 'boolean'
+        ? value.permissionGranted
+        : false,
+    bluetoothEnabled:
+      typeof value.bluetoothEnabled === 'boolean'
+        ? value.bluetoothEnabled
+        : false,
     isScanning: typeof value.isScanning === 'boolean' ? value.isScanning : false,
     isAdvertising:
       typeof value.isAdvertising === 'boolean' ? value.isAdvertising : false,
-    peerCount: typeof value.peerCount === 'number' ? value.peerCount : 0,
+    isDutyCyclePaused:
+      typeof value.isDutyCyclePaused === 'boolean'
+        ? value.isDutyCyclePaused
+        : false,
+    peerCount:
+      typeof value.peerCount === 'number' && value.peerCount >= 0
+        ? Math.floor(value.peerCount)
+        : 0,
   };
 }
 

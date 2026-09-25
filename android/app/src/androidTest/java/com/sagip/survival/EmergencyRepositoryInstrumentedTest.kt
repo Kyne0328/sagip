@@ -7,6 +7,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -66,6 +67,30 @@ class EmergencyRepositoryInstrumentedTest {
     assertEquals(1, restored.size)
     assertEquals(created.reportId, restored.single().reportId)
     assertEquals("DELIVERY_PENDING", restored.single().deliveryState)
+  }
+
+  @Test
+  fun activeRelayWorkComesFromPersistedEmergencyState() {
+    assertFalse(repository.hasActiveRelayWork())
+    assertEquals(0L, repository.newestActiveRelayTimestamp())
+
+    repository.createReport(
+      CreateEmergencyReportInput(EmergencyType.MEDICAL, Urgency.IMMEDIATE_DANGER),
+      location = null,
+      now = 1_500L,
+    )
+    assertTrue(repository.hasActiveRelayWork())
+    assertEquals(1_500L, repository.newestActiveRelayTimestamp())
+
+    val messageId = repository.listEnvelopePreparationSources().single().messageId
+    repository.markDeliveryFailed(
+      messageId = messageId,
+      reason = "TEST_PERMANENT_FAILURE",
+      now = 1_600L,
+    )
+
+    assertFalse(repository.hasActiveRelayWork())
+    assertEquals(0L, repository.newestActiveRelayTimestamp())
   }
 
   @Test
@@ -181,6 +206,69 @@ class EmergencyRepositoryInstrumentedTest {
   }
 
   @Test
+  fun duplicateRelayReceiptIsIdempotentAndDoesNotDuplicateDeliveryEvidence() {
+    repository.createReport(
+      CreateEmergencyReportInput(EmergencyType.TRAPPED, Urgency.IMMEDIATE_DANGER),
+      location = null,
+      now = 2_000L,
+    )
+    val messageId = repository.listEnvelopePreparationSources().single().messageId
+
+    assertTrue(
+      repository.recordRelayReceipt(
+        receiptId = "relay-receipt-1",
+        messageId = messageId,
+        peerIdentifier = "peer-a",
+        acknowledgedAt = 2_500L,
+      ),
+    )
+    assertTrue(
+      repository.recordRelayReceipt(
+        receiptId = "relay-receipt-1",
+        messageId = messageId,
+        peerIdentifier = "peer-a",
+        acknowledgedAt = 2_500L,
+      ),
+    )
+
+    assertTableCount("relay_receipts", 1)
+    assertTableCount("delivery_events", 2)
+    assertEquals("RELAYED_TO_PEER", repository.listReports().single().deliveryState)
+  }
+
+  @Test
+  fun duplicateSemanticResponderAckIsIdempotentAcrossDifferentTransportAckIds() {
+    val report = repository.createReport(
+      CreateEmergencyReportInput(EmergencyType.MEDICAL, Urgency.NEED_ASSISTANCE),
+      location = null,
+      now = 3_000L,
+    )
+    val first = ResponderAck(
+      ackId = "server-ack-1",
+      reportId = report.reportId,
+      responderId = "server",
+      callsign = "RESCUE-1",
+      status = "EN_ROUTE",
+      note = "Team dispatched",
+      acknowledgedAt = 4_000L,
+    )
+    val replayedOverBle = first.copy(
+      ackId = "ble-generated-ack-id",
+      responderId = "BLE_RELAY",
+      note = "Received via BLE relay",
+    )
+
+    assertTrue(repository.recordResponderAck(first, now = 4_000L))
+    assertTrue(repository.recordResponderAck(replayedOverBle, now = 4_100L))
+
+    assertTableCount("responder_acks", 1)
+    assertTableCount("delivery_events", 2)
+    val restored = repository.listReports().single()
+    assertEquals("RESPONDER_ACKNOWLEDGED", restored.deliveryState)
+    assertEquals("server-ack-1", restored.responderAck?.ackId)
+  }
+
+  @Test
   fun migratesV2OutboundEnvelopeToNeedsPreparationWithoutChangingIdentity() {
     database.close()
     context.deleteDatabase(SagipDatabase.DATABASE_NAME)
@@ -229,6 +317,71 @@ class EmergencyRepositoryInstrumentedTest {
       assertTrue(cursor.moveToFirst())
       assertEquals("legacy-message", cursor.getString(0))
       assertEquals("NEEDS_PREPARATION", cursor.getString(1))
+    }
+  }
+
+  @Test
+  fun migratesV6HeldRelayEnvelopeToV7WithoutLosingCustodyBytes() {
+    database.close()
+    context.deleteDatabase(SagipDatabase.DATABASE_NAME)
+    val path = context.getDatabasePath(SagipDatabase.DATABASE_NAME)
+    path.parentFile?.mkdirs()
+    val heldEnvelope = byteArrayOf(0x53, 0x47, 0x50, 0x31, 0x01, 0x02)
+
+    SQLiteDatabase.openOrCreateDatabase(path, null).use { raw ->
+      raw.execSQL(
+        """
+          CREATE TABLE inbound_envelopes (
+            inbound_id TEXT PRIMARY KEY NOT NULL,
+            message_id TEXT NOT NULL UNIQUE,
+            envelope_bytes BLOB NOT NULL,
+            received_at INTEGER NOT NULL,
+            origin_key_id BLOB NOT NULL,
+            priority INTEGER NOT NULL DEFAULT 100,
+            delivery_state TEXT NOT NULL DEFAULT 'DELIVERY_PENDING',
+            next_attempt_at INTEGER NOT NULL DEFAULT 0,
+            attempt_count INTEGER NOT NULL DEFAULT 0
+          )
+        """.trimIndent(),
+      )
+      raw.insertOrThrow(
+        "inbound_envelopes",
+        null,
+        ContentValues().apply {
+          put("inbound_id", "held-inbound")
+          put("message_id", "held-message")
+          put("envelope_bytes", heldEnvelope)
+          put("received_at", 10_000L)
+          put("origin_key_id", ByteArray(32) { 7 })
+          put("priority", 1)
+          put("delivery_state", "SERVER_ACCEPTED")
+          put("next_attempt_at", 10_000L)
+          put("attempt_count", 2)
+        },
+      )
+      raw.version = 6
+    }
+
+    database = SagipDatabase(context)
+    val migrated = database.writableDatabase
+
+    migrated.rawQuery(
+      "SELECT message_id, report_id, envelope_bytes, delivery_state, attempt_count FROM inbound_envelopes",
+      null,
+    ).use { cursor ->
+      assertTrue(cursor.moveToFirst())
+      assertEquals("held-message", cursor.getString(0))
+      assertTrue(cursor.isNull(1))
+      assertArrayEquals(heldEnvelope, cursor.getBlob(2))
+      assertEquals("SERVER_ACCEPTED", cursor.getString(3))
+      assertEquals(2, cursor.getInt(4))
+    }
+
+    migrated.rawQuery(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'relay_responder_acks'",
+      null,
+    ).use { cursor ->
+      assertTrue(cursor.moveToFirst())
     }
   }
 

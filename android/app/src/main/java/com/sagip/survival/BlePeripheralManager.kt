@@ -21,16 +21,18 @@ import java.util.concurrent.ConcurrentHashMap
 class BlePeripheralManager(
   private val context: Context,
   private val repository: EmergencyRepository,
-) {
+) : BlePeripheralController {
   private val bluetoothManager: BluetoothManager? =
     context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
   private val bluetoothAdapter: BluetoothAdapter? = bluetoothManager?.adapter
   private var advertiser: BluetoothLeAdvertiser? = null
   private var gattServer: BluetoothGattServer? = null
+  private var currentAdvertiseMode: Int? = null
 
   private var isAdvertising = false
   private val activeReassemblers = ConcurrentHashMap<String, BleEnvelopeReassembler>()
   private val activeOffers = ConcurrentHashMap<String, BleManifestOffer>()
+  private val offerDecisions = ConcurrentHashMap<String, OfferDecision>()
 
   private val advertiseCallback = object : AdvertiseCallback() {
     override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
@@ -39,6 +41,8 @@ class BlePeripheralManager(
 
     override fun onStartFailure(errorCode: Int) {
       isAdvertising = false
+      advertiser = null
+      currentAdvertiseMode = null
     }
   }
 
@@ -47,6 +51,7 @@ class BlePeripheralManager(
       if (newState == BluetoothGatt.STATE_DISCONNECTED) {
         activeReassemblers.remove(device.address)
         activeOffers.remove(device.address)
+        offerDecisions.remove(device.address)
       }
     }
 
@@ -56,6 +61,18 @@ class BlePeripheralManager(
       offset: Int,
       characteristic: BluetoothGattCharacteristic,
     ) {
+      if (characteristic.uuid == BleProtocolConstants.CHARACTERISTIC_OFFER_UUID) {
+        val decision = offerDecisions.remove(device.address)
+          ?: OfferDecision.REJECT_UNSUPPORTED
+        gattServer?.sendResponse(
+          device,
+          requestId,
+          BluetoothGatt.GATT_SUCCESS,
+          offset,
+          byteArrayOf(decision.code),
+        )
+        return
+      }
       if (characteristic.uuid == BleProtocolConstants.CHARACTERISTIC_RETURN_ACK_UUID) {
         val latestAck = repository.findLatestResponderAck()
         if (latestAck != null) {
@@ -138,24 +155,38 @@ class BlePeripheralManager(
     }
   }
 
-  fun start() {
-    if (bluetoothAdapter == null || !bluetoothAdapter.isEnabled) return
+  @Synchronized
+  override fun start(advertiseMode: Int) {
+    if (!BleRelayReadinessChecker.evaluate(context).canRun) return
     startGattServer()
-    startAdvertising()
+    if (isAdvertising && currentAdvertiseMode == advertiseMode) return
+    if (isAdvertising) pauseAdvertising()
+    startAdvertising(advertiseMode)
   }
 
-  fun stop() {
+  @Synchronized
+  override fun pauseAdvertising() {
+    stopAdvertising()
+  }
+
+  @Synchronized
+  override fun stop() {
     stopAdvertising()
     stopGattServer()
     activeReassemblers.clear()
     activeOffers.clear()
+    offerDecisions.clear()
   }
 
-  fun isRunning(): Boolean = isAdvertising && gattServer != null
+  override fun isRunning(): Boolean = isAdvertising && gattServer != null
 
   private fun startGattServer() {
     if (gattServer != null || bluetoothManager == null) return
-    gattServer = bluetoothManager.openGattServer(context, gattServerCallback) ?: return
+    gattServer = try {
+      bluetoothManager.openGattServer(context, gattServerCallback)
+    } catch (_: SecurityException) {
+      null
+    } ?: return
 
     val service = BluetoothGattService(
       BleProtocolConstants.SERVICE_UUID,
@@ -199,12 +230,16 @@ class BlePeripheralManager(
     gattServer?.addService(service)
   }
 
-  private fun startAdvertising() {
+  private fun startAdvertising(advertiseMode: Int) {
     if (advertiser != null || bluetoothAdapter == null) return
-    advertiser = bluetoothAdapter.bluetoothLeAdvertiser ?: return
+    advertiser = try {
+      bluetoothAdapter.bluetoothLeAdvertiser
+    } catch (_: SecurityException) {
+      null
+    } ?: return
 
     val settings = AdvertiseSettings.Builder()
-      .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_BALANCED)
+      .setAdvertiseMode(advertiseMode)
       .setConnectable(true)
       .setTimeout(0)
       .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
@@ -216,9 +251,16 @@ class BlePeripheralManager(
       .build()
 
     try {
+      currentAdvertiseMode = advertiseMode
       advertiser?.startAdvertising(settings, data, advertiseCallback)
     } catch (_: SecurityException) {
-      // Missing permission handled gracefully
+      advertiser = null
+      isAdvertising = false
+      currentAdvertiseMode = null
+    } catch (_: IllegalStateException) {
+      advertiser = null
+      isAdvertising = false
+      currentAdvertiseMode = null
     }
   }
 
@@ -229,6 +271,7 @@ class BlePeripheralManager(
     }
     advertiser = null
     isAdvertising = false
+    currentAdvertiseMode = null
   }
 
   private fun stopGattServer() {
@@ -263,10 +306,10 @@ class BlePeripheralManager(
       activeReassemblers[device.address] = BleEnvelopeReassembler()
       OfferDecision.ACCEPT
     }
+    offerDecisions[device.address] = decision
 
     if (responseNeeded) {
-      val resp = byteArrayOf(decision.code)
-      gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, resp)
+      gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
     }
   }
 

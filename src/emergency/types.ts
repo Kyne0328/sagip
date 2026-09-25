@@ -23,9 +23,24 @@ export const DELIVERY_STATES = [
 ] as const;
 export type DeliveryState = (typeof DELIVERY_STATES)[number];
 
+export const BLE_RELAY_AVAILABILITIES = [
+  'READY',
+  'PERMISSION_REQUIRED',
+  'BLUETOOTH_OFF',
+  'NOT_SUPPORTED',
+  'UNKNOWN',
+] as const;
+
+export type BleRelayAvailability = (typeof BLE_RELAY_AVAILABILITIES)[number];
+
 export interface BleRelayStatus {
+  availability: BleRelayAvailability;
+  isSupported: boolean;
+  permissionGranted: boolean;
+  bluetoothEnabled: boolean;
   isScanning: boolean;
   isAdvertising: boolean;
+  isDutyCyclePaused: boolean;
   peerCount: number;
 }
 

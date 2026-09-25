@@ -3,6 +3,7 @@ package com.sagip.survival
 data class InboundEnvelope(
   val inboundId: String,
   val messageId: String,
+  val reportId: String,
   val envelopeBytes: ByteArray,
   val receivedAt: Long,
   val originKeyId: ByteArray,
@@ -16,6 +17,7 @@ data class InboundEnvelope(
     if (other !is InboundEnvelope) return false
     return inboundId == other.inboundId &&
       messageId == other.messageId &&
+      reportId == other.reportId &&
       envelopeBytes.contentEquals(other.envelopeBytes) &&
       receivedAt == other.receivedAt &&
       originKeyId.contentEquals(other.originKeyId) &&
@@ -28,6 +30,7 @@ data class InboundEnvelope(
   override fun hashCode(): Int {
     var result = inboundId.hashCode()
     result = 31 * result + messageId.hashCode()
+    result = 31 * result + reportId.hashCode()
     result = 31 * result + envelopeBytes.contentHashCode()
     result = 31 * result + receivedAt.hashCode()
     result = 31 * result + originKeyId.contentHashCode()

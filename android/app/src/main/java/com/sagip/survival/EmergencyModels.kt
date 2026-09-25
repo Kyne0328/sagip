@@ -105,7 +105,10 @@ interface OutboundDeliveryStore {
 interface RelayDeliveryStore {
   fun listDueInbound(now: Long, limit: Int = 20): List<InboundEnvelope>
   fun markInboundServerAccepted(messageId: String, now: Long = System.currentTimeMillis())
+  fun markInboundDeliveryFailed(messageId: String, now: Long = System.currentTimeMillis())
   fun scheduleInboundRetry(messageId: String, now: Long = System.currentTimeMillis(), jitterUnit: Double = Math.random()): Long
+  fun listInboundReportsAwaitingAck(limit: Int = 10): List<String>
+  fun recordInboundResponderAck(ack: ResponderAck, now: Long = System.currentTimeMillis()): Boolean
 }
 
 interface ResponderAckStore {

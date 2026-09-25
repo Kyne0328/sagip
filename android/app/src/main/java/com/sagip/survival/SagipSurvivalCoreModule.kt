@@ -13,15 +13,16 @@ import kotlinx.coroutines.runBlocking
 class SagipSurvivalCoreModule(
   reactContext: ReactApplicationContext,
 ) : ReactContextBaseJavaModule(reactContext) {
-  private val database = SagipDatabase(reactContext.applicationContext)
-  private val repository = EmergencyRepository(database)
+  private val runtime = SurvivalCoreRuntime.get(reactContext.applicationContext)
+  private val database = runtime.database
+  private val repository = runtime.repository
   private val locationProvider = LocationSnapshotProvider(reactContext.applicationContext)
   private val preparationService by lazy {
     EnvelopePreparationService(repository, AndroidKeystoreSigningIdentity())
   }
   private val executor = Executors.newSingleThreadExecutor()
   private val sender by lazy {
-    HttpEnvelopeSender()
+    HttpEnvelopeSender(BackendEndpointConfig.envelopeUrl())
   }
   private val deliveryWorker by lazy {
     DeliveryWorker(repository, sender)
@@ -31,24 +32,16 @@ class SagipSurvivalCoreModule(
       triggerBackgroundDelivery()
     }
   }
-  private val blePeripheral by lazy {
-    BlePeripheralManager(reactContext.applicationContext, repository)
-  }
-  private val bleCentral by lazy {
-    BleCentralManager(reactContext.applicationContext, repository)
-  }
-
   init {
     connectivityMonitor.startListening()
-    blePeripheral.start()
-    bleCentral.startScanning()
+    runCatching {
+      EmergencyJobScheduler.scheduleNetworkSync(reactContext.applicationContext)
+    }
   }
 
   override fun invalidate() {
     super.invalidate()
     connectivityMonitor.stopListening()
-    blePeripheral.stop()
-    bleCentral.stopScanning()
     executor.shutdown()
   }
 
@@ -79,25 +72,44 @@ class SagipSurvivalCoreModule(
 
   @ReactMethod
   fun getRelayStatus(promise: Promise) {
+    val status = runtime.bleRelay.status()
+    val readiness = status.readiness
+    if (!readiness.canRun) {
+      runtime.bleRelay.stop()
+      EmergencyRelayService.stop(reactApplicationContext.applicationContext)
+    }
     val map = Arguments.createMap().apply {
-      putBoolean("isScanning", bleCentral.isScanning())
-      putBoolean("isAdvertising", blePeripheral.isRunning())
-      putInt("peerCount", bleCentral.getDiscoveredPeerCount())
+      putString("availability", readiness.availability.name)
+      putBoolean("isSupported", readiness.isSupported)
+      putBoolean("permissionGranted", readiness.permissionGranted)
+      putBoolean("bluetoothEnabled", readiness.bluetoothEnabled)
+      putBoolean("isScanning", status.isScanning)
+      putBoolean("isAdvertising", status.isAdvertising)
+      putBoolean("isDutyCyclePaused", status.isDutyCyclePaused)
+      putInt("peerCount", status.peerCount)
     }
     promise.resolve(map)
   }
 
   @ReactMethod
   fun startBleRelay(promise: Promise) {
-    blePeripheral.start()
-    bleCentral.startScanning()
-    promise.resolve(true)
+    val readiness = BleRelayReadinessChecker.evaluate(reactApplicationContext.applicationContext)
+    if (!readiness.canRun) {
+      runtime.bleRelay.stop()
+      promise.resolve(false)
+      return
+    }
+
+    val serviceStarted = EmergencyRelayService.start(reactApplicationContext.applicationContext)
+    val relayStarted = serviceStarted && runtime.bleRelay.start()
+    if (!relayStarted) runtime.bleRelay.stop()
+    promise.resolve(relayStarted)
   }
 
   @ReactMethod
   fun stopBleRelay(promise: Promise) {
-    blePeripheral.stop()
-    bleCentral.stopScanning()
+    runtime.bleRelay.stop()
+    EmergencyRelayService.stop(reactApplicationContext.applicationContext)
     promise.resolve(true)
   }
 
@@ -119,6 +131,7 @@ class SagipSurvivalCoreModule(
     val result = BestEffortPreparation.afterCommit(committed) {
       preparationService.preparePending()
     }
+    runtime.bleRelay.expediteForNewActivity()
     triggerBackgroundDelivery()
     promise.resolve(toWritableMap(result))
   }

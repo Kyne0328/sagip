@@ -69,8 +69,15 @@ class DeliveryWorker(
                         store.scheduleInboundRetry(inbound.messageId, now = now)
                     }
                     is DeliveryTransportResult.PermanentFailure -> {
-                        store.markInboundServerAccepted(inbound.messageId, now = now)
+                        store.markInboundDeliveryFailed(inbound.messageId, now = now)
                     }
+                }
+            }
+
+            for (reportId in store.listInboundReportsAwaitingAck(5)) {
+                val ack = sender.checkReportStatus(reportId)
+                if (ack != null) {
+                    store.recordInboundResponderAck(ack, now = now)
                 }
             }
         }

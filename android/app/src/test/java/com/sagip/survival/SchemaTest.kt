@@ -7,7 +7,7 @@ import org.junit.Test
 class SchemaTest {
   @Test
   fun `schema version is explicit and preparation state is present`() {
-    assertEquals(6, Schema.VERSION)
+    assertEquals(7, Schema.VERSION)
     val ddl = Schema.CREATE_STATEMENTS.joinToString("\n")
     listOf(
       "reports",
@@ -21,6 +21,7 @@ class SchemaTest {
       "seen_messages",
       "relay_receipts",
       "responder_acks",
+      "relay_responder_acks",
     ).forEach {
       assertTrue("missing table $it", ddl.contains("CREATE TABLE $it"))
     }
@@ -33,6 +34,7 @@ class SchemaTest {
     assertTrue(ddl.contains("CREATE TABLE seen_messages"))
     assertTrue(ddl.contains("CREATE TABLE relay_receipts"))
     assertTrue(ddl.contains("CREATE TABLE responder_acks"))
+    assertTrue(ddl.contains("CREATE TABLE relay_responder_acks"))
   }
 
   @Test
@@ -74,6 +76,15 @@ class SchemaTest {
     val migration = Schema.MIGRATE_5_TO_6.joinToString("\n")
     assertTrue(migration.contains("CREATE TABLE responder_acks"))
     assertTrue(migration.contains("idx_responder_acks_report"))
+    assertTrue(!migration.contains("DROP TABLE"))
+  }
+
+  @Test
+  fun `v6 to v7 migration is non destructive and adds gateway return ack state`() {
+    val migration = Schema.MIGRATE_6_TO_7.joinToString("\n")
+    assertTrue(migration.contains("ALTER TABLE inbound_envelopes ADD COLUMN report_id"))
+    assertTrue(migration.contains("CREATE TABLE relay_responder_acks"))
+    assertTrue(migration.contains("idx_relay_responder_acks_report"))
     assertTrue(!migration.contains("DROP TABLE"))
   }
 }

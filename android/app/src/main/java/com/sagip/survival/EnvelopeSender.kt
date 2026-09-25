@@ -30,7 +30,7 @@ data class OutboundEnvelope(
 }
 
 class HttpEnvelopeSender(
-    private val endpointUrl: String = DEFAULT_ENDPOINT_URL,
+    private val endpointUrl: String,
     private val connectTimeoutMs: Int = 10_000,
     private val readTimeoutMs: Int = 10_000,
 ) : EnvelopeSender {
@@ -89,8 +89,6 @@ class HttpEnvelopeSender(
     }
 
     companion object {
-        const val DEFAULT_ENDPOINT_URL = "http://10.0.2.2:8080/v1/envelopes"
-
         fun parseServerReceipt(jsonString: String): ServerReceipt {
             val receiptVersion = extractInt(jsonString, "receiptVersion", "receipt_version")
             val state = extractString(jsonString, "state")
