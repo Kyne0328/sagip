@@ -82,3 +82,4 @@ yarn-error.log
 # Local agent rules and instructions
 AGENTS.md
 .agents/
+.neon

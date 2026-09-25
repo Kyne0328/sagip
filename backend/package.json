@@ -9,6 +9,8 @@
   "scripts": {
     "start": "tsx src/main.ts",
     "dev": "tsx src/devServer.ts",
+    "migrate": "tsx src/migrate.ts",
+    "provision-responder": "tsx src/provisionResponder.ts",
     "test": "tsx --test test/**/*.test.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src test --ext .ts"
