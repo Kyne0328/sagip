@@ -32,12 +32,14 @@ jobs:
           cache: gradle
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
 
       - name: Install Android SDK packages
         shell: bash
         run: |
-          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.1.0" "ndk;27.0.12077973"
+          sdkmanager "platforms;android-36" "build-tools;36.1.0" "ndk;27.0.12077973"
 
       - name: Install app dependencies
         run: npm ci
