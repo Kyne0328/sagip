@@ -1,10 +1,11 @@
-import {createHash, randomUUID} from 'node:crypto';
+import {createHash, randomBytes, randomUUID} from 'node:crypto';
 
 import type {Pool} from 'pg';
 
 import type {
   IncidentDetail,
   IncidentLocation,
+  IncidentQueueSummary,
   IncidentSummary,
   ReportStatusResponse,
   ResponderAck,
@@ -35,6 +36,19 @@ const LOCATION_FRESHNESS: Record<number, string> = {
   1: 'FRESH',
   2: 'STALE',
 };
+
+export const RESPONDER_SESSION_TTL_SECONDS = 12 * 60 * 60;
+
+export interface ResponderBrowserSession {
+  responder: ResponderIdentity;
+  sessionToken: string;
+  expiresAt: string;
+}
+
+export interface ResponderBrowserSessionIdentity {
+  responder: ResponderIdentity;
+  expiresAt: string;
+}
 
 export class ResponderNotFoundError extends Error {
   constructor(message: string) {
@@ -78,6 +92,70 @@ export class ResponderService {
       role: row.role,
       registeredAt: row.registered_at.toISOString(),
     };
+  }
+
+  async createBrowserSession(token: string): Promise<ResponderBrowserSession | null> {
+    const responder = await this.authenticate(token);
+    if (!responder) return null;
+
+    const sessionToken = randomBytes(32).toString('base64url');
+    const sessionHash = createHash('sha256').update(sessionToken, 'utf8').digest('hex');
+    const createdAt = new Date();
+    const expiresAt = new Date(createdAt.getTime() + RESPONDER_SESSION_TTL_SECONDS * 1000);
+
+    await this.pool.query('DELETE FROM responder_sessions WHERE expires_at <= NOW()');
+    await this.pool.query(
+      `INSERT INTO responder_sessions(session_hash, responder_id, created_at, expires_at)
+       VALUES ($1, $2, $3, $4)`,
+      [sessionHash, responder.responderId, createdAt, expiresAt],
+    );
+
+    return {
+      responder,
+      sessionToken,
+      expiresAt: expiresAt.toISOString(),
+    };
+  }
+
+  async authenticateBrowserSession(
+    sessionToken: string,
+  ): Promise<ResponderBrowserSessionIdentity | null> {
+    const trimmed = sessionToken.trim();
+    if (!trimmed || trimmed.length > 256) return null;
+
+    const sessionHash = createHash('sha256').update(trimmed, 'utf8').digest('hex');
+    const result = await this.pool.query<{
+      responder_id: string;
+      callsign: string;
+      role: string;
+      registered_at: Date;
+      expires_at: Date;
+    }>(
+      `SELECT ri.responder_id, ri.callsign, ri.role, ri.registered_at, rs.expires_at
+       FROM responder_sessions rs
+       JOIN responder_identities ri ON ri.responder_id = rs.responder_id
+       WHERE rs.session_hash = $1 AND rs.expires_at > NOW()`,
+      [sessionHash],
+    );
+
+    const row = result.rows[0];
+    if (!row) return null;
+    return {
+      responder: {
+        responderId: row.responder_id,
+        callsign: row.callsign,
+        role: row.role,
+        registeredAt: row.registered_at.toISOString(),
+      },
+      expiresAt: row.expires_at.toISOString(),
+    };
+  }
+
+  async revokeBrowserSession(sessionToken: string): Promise<void> {
+    const trimmed = sessionToken.trim();
+    if (!trimmed || trimmed.length > 256) return;
+    const sessionHash = createHash('sha256').update(trimmed, 'utf8').digest('hex');
+    await this.pool.query('DELETE FROM responder_sessions WHERE session_hash = $1', [sessionHash]);
   }
 
   async listIncidents(
@@ -208,6 +286,59 @@ export class ResponderService {
           }
         : null,
     }));
+  }
+
+  async getIncidentQueueSummary(): Promise<IncidentQueueSummary> {
+    const result = await this.pool.query<{
+      total: number | string;
+      pending: number | string;
+      acknowledged: number | string;
+      en_route: number | string;
+      on_scene: number | string;
+      resolved: number | string;
+      immediate_danger: number | string;
+    }>(
+      `WITH latest_rev_number AS (
+         SELECT report_id, MAX(revision) AS revision
+         FROM incident_revisions
+         GROUP BY report_id
+       ),
+       latest_rev AS (
+         SELECT ir.*
+         FROM incident_revisions ir
+         JOIN latest_rev_number lrn
+           ON ir.report_id = lrn.report_id AND ir.revision = lrn.revision
+       ),
+       latest_ack AS (
+         SELECT DISTINCT ON (ra.report_id)
+           ra.report_id,
+           ra.status
+         FROM responder_acknowledgements ra
+         ORDER BY ra.report_id, ra.acknowledged_at DESC
+       )
+       SELECT
+         COUNT(*) AS total,
+         SUM(CASE WHEN la.report_id IS NULL THEN 1 ELSE 0 END) AS pending,
+         SUM(CASE WHEN la.status = 'ACKNOWLEDGED' THEN 1 ELSE 0 END) AS acknowledged,
+         SUM(CASE WHEN la.status = 'EN_ROUTE' THEN 1 ELSE 0 END) AS en_route,
+         SUM(CASE WHEN la.status = 'ON_SCENE' THEN 1 ELSE 0 END) AS on_scene,
+         SUM(CASE WHEN la.status = 'RESOLVED' THEN 1 ELSE 0 END) AS resolved,
+         SUM(CASE WHEN lr.urgency = 1 THEN 1 ELSE 0 END) AS immediate_danger
+       FROM incidents i
+       JOIN latest_rev lr ON lr.report_id = i.report_id
+       LEFT JOIN latest_ack la ON la.report_id = i.report_id`,
+    );
+
+    const row = result.rows[0];
+    return {
+      total: Number(row?.total ?? 0),
+      pending: Number(row?.pending ?? 0),
+      acknowledged: Number(row?.acknowledged ?? 0),
+      enRoute: Number(row?.en_route ?? 0),
+      onScene: Number(row?.on_scene ?? 0),
+      resolved: Number(row?.resolved ?? 0),
+      immediateDanger: Number(row?.immediate_danger ?? 0),
+    };
   }
 
   async getIncidentDetail(reportId: string): Promise<IncidentDetail | null> {

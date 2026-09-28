@@ -25,6 +25,9 @@ test('responder dashboard assets are served with strict browser security headers
   assert.match(body, /Responder Console/u);
   assert.match(body, /locator pin with medical plus/u);
   assert.match(body, /Report revision history/u);
+  assert.match(body, /Start a responder shift/u);
+  assert.match(body, /secure 12-hour browser session/u);
+  assert.match(body, /Open incidents/u);
   assert.doesNotMatch(body, /sagip-dev-token/u);
 
   const css = await handleSagipRequest(
@@ -40,7 +43,11 @@ test('responder dashboard assets are served with strict browser security headers
   );
   assert.equal(js.status, 200);
   assert.match(js.headers.get('content-type') ?? '', /^text\/javascript/u);
-  assert.match(await js.text(), /It may have been saved/u);
+  const javascript = await js.text();
+  assert.match(javascript, /\/v1\/responder\/session/u);
+  assert.match(javascript, /It may have been saved/u);
+  assert.doesNotMatch(javascript, /sessionStorage/u);
+  assert.doesNotMatch(javascript, /authorization.*Bearer/iu);
 });
 
 test('backend root leads responders to the console and health endpoint stays lightweight', async () => {

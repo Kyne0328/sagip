@@ -37,6 +37,16 @@ export interface IncidentSummary {
   latestAck: ResponderAck | null;
 }
 
+export interface IncidentQueueSummary {
+  total: number;
+  pending: number;
+  acknowledged: number;
+  enRoute: number;
+  onScene: number;
+  resolved: number;
+  immediateDanger: number;
+}
+
 export interface IncidentDetail extends IncidentSummary {
   revisions: Array<{
     revision: number;

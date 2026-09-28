@@ -72,7 +72,69 @@ test('responder HTTP endpoints: auth, listing, acknowledging, and public status'
     });
     assert.equal(badAuthRes.status, 401);
 
-    // 3. GET /v1/incidents with valid token -> 200, lists incident
+    const badSessionLoginRes = await fetch(`${baseUrl}/v1/responder/session`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({token: 'bad-token'}),
+    });
+    assert.equal(badSessionLoginRes.status, 401);
+
+    // 3. Exchange the provisioned token for a browser session.
+    const sessionLoginRes = await fetch(`${baseUrl}/v1/responder/session`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({token}),
+    });
+    assert.equal(sessionLoginRes.status, 200);
+    assert.equal(sessionLoginRes.headers.get('cache-control'), 'no-store');
+    const setCookie = sessionLoginRes.headers.get('set-cookie') ?? '';
+    assert.match(setCookie, /__Host-sagip-responder=/u);
+    assert.match(setCookie, /HttpOnly/u);
+    assert.match(setCookie, /Secure/u);
+    assert.match(setCookie, /SameSite=Strict/u);
+    assert.doesNotMatch(setCookie, new RegExp(token, 'u'));
+    const sessionCookie = setCookie.split(';')[0] ?? '';
+    assert.ok(sessionCookie.length > '__Host-sagip-responder='.length);
+
+    const sessionBody = (await sessionLoginRes.json()) as {
+      responder: {callsign: string; role: string};
+      expiresAt: string;
+    };
+    assert.equal(sessionBody.responder.callsign, 'RESCUE-BRAVO-1');
+    assert.equal(sessionBody.responder.role, 'FIELD_LEAD');
+    assert.ok(Date.parse(sessionBody.expiresAt) > Date.now());
+
+    const restoreSessionRes = await fetch(`${baseUrl}/v1/responder/session`, {
+      headers: {cookie: sessionCookie},
+    });
+    assert.equal(restoreSessionRes.status, 200);
+    const restoredSession = (await restoreSessionRes.json()) as {
+      responder: {callsign: string};
+    };
+    assert.equal(restoredSession.responder.callsign, 'RESCUE-BRAVO-1');
+
+    // 4. Cookie-authenticated console access works without exposing the bearer token again.
+    const cookieListRes = await fetch(`${baseUrl}/v1/incidents`, {
+      headers: {cookie: sessionCookie},
+    });
+    assert.equal(cookieListRes.status, 200);
+    assert.equal(((await cookieListRes.json()) as unknown[]).length, 1);
+
+    const summaryRes = await fetch(`${baseUrl}/v1/incidents/summary`, {
+      headers: {cookie: sessionCookie},
+    });
+    assert.equal(summaryRes.status, 200);
+    assert.deepEqual(await summaryRes.json(), {
+      total: 1,
+      pending: 1,
+      acknowledged: 0,
+      enRoute: 0,
+      onScene: 0,
+      resolved: 0,
+      immediateDanger: 0,
+    });
+
+    // 5. Bearer authentication remains supported for API clients.
     const listRes = await fetch(`${baseUrl}/v1/incidents`, {
       headers: {authorization: `Bearer ${token}`},
     });
@@ -195,7 +257,25 @@ test('responder HTTP endpoints: auth, listing, acknowledging, and public status'
     });
     assert.equal(replayAckRes.status, 200);
 
-    // 6. Public GET /v1/reports/:reportId/status -> 200 (no auth needed)
+    // 6. Disconnect revokes the browser session without affecting bearer credentials.
+    const logoutRes = await fetch(`${baseUrl}/v1/responder/session`, {
+      method: 'DELETE',
+      headers: {cookie: sessionCookie},
+    });
+    assert.equal(logoutRes.status, 204);
+    assert.match(logoutRes.headers.get('set-cookie') ?? '', /Max-Age=0/u);
+
+    const revokedSessionRes = await fetch(`${baseUrl}/v1/incidents`, {
+      headers: {cookie: sessionCookie},
+    });
+    assert.equal(revokedSessionRes.status, 401);
+
+    const bearerAfterLogoutRes = await fetch(`${baseUrl}/v1/incidents`, {
+      headers: {authorization: `Bearer ${token}`},
+    });
+    assert.equal(bearerAfterLogoutRes.status, 200);
+
+    // 7. Public GET /v1/reports/:reportId/status -> 200 (no auth needed)
     const statusRes = await fetch(`${baseUrl}/v1/reports/${reportId}/status`);
     assert.equal(statusRes.status, 200);
     const statusData = (await statusRes.json()) as {reportId: string; serverAccepted: boolean; latestAck: {callsign: string; status: string}};

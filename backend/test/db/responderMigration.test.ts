@@ -7,12 +7,11 @@ import {createMemoryPostgresPool} from '../support/postgres.js';
 
 const MIGRATIONS_DIR = fileURLToPath(new URL('../../migrations/', import.meta.url));
 
-test('applies responder v1 migration and enforces responder constraints', async () => {
+test('applies responder schema and enforces responder/session constraints', async () => {
   const pool = createMemoryPostgresPool();
   try {
     await applyMigrations(pool, MIGRATIONS_DIR);
 
-    // Verify responder tables exist
     const tables = await pool.query<{table_name: string}>(
       `SELECT table_name FROM information_schema.tables
        WHERE table_schema = 'public' AND table_name LIKE 'responder%'
@@ -20,10 +19,9 @@ test('applies responder v1 migration and enforces responder constraints', async 
     );
     assert.deepEqual(
       tables.rows.map(row => row.table_name),
-      ['responder_acknowledgements', 'responder_identities'],
+      ['responder_acknowledgements', 'responder_identities', 'responder_sessions'],
     );
 
-    // Insert a responder identity
     const responderId = '11111111-1111-1111-1111-111111111111';
     const hash1 = 'a'.repeat(64);
     const hash2 = 'b'.repeat(64);
@@ -33,7 +31,6 @@ test('applies responder v1 migration and enforces responder constraints', async 
       [responderId, 'RESCUE-1', 'DISPATCHER', hash1],
     );
 
-    // Duplicate callsign must fail
     await assert.rejects(
       pool.query(
         `INSERT INTO responder_identities(responder_id, callsign, role, api_key_hash, registered_at)
@@ -42,7 +39,21 @@ test('applies responder v1 migration and enforces responder constraints', async 
       ),
     );
 
-    // Insert incident first to satisfy FK
+    const sessionHash = 'c'.repeat(64);
+    await pool.query(
+      `INSERT INTO responder_sessions(session_hash, responder_id, created_at, expires_at)
+       VALUES ($1, $2, NOW(), NOW() + INTERVAL '1 hour')`,
+      [sessionHash, responderId],
+    );
+
+    await assert.rejects(
+      pool.query(
+        `INSERT INTO responder_sessions(session_hash, responder_id, created_at, expires_at)
+         VALUES ($1, $2, NOW(), NOW() - INTERVAL '1 hour')`,
+        ['d'.repeat(64), responderId],
+      ),
+    );
+
     const reportId = '33333333-3333-3333-3333-333333333333';
     const originKeyId = Buffer.alloc(32, 1);
     await pool.query(
@@ -56,7 +67,6 @@ test('applies responder v1 migration and enforces responder constraints', async 
       [reportId, originKeyId, 1700000000000],
     );
 
-    // Insert responder acknowledgement
     const ackId = '44444444-4444-4444-4444-444444444444';
     await pool.query(
       `INSERT INTO responder_acknowledgements(ack_id, report_id, responder_id, status, note, acknowledged_at)
@@ -64,7 +74,6 @@ test('applies responder v1 migration and enforces responder constraints', async 
       [ackId, reportId, responderId, 'ACKNOWLEDGED', 'En route to coordinate'],
     );
 
-    // Duplicate status for same responder on same incident must fail (uniqueness)
     await assert.rejects(
       pool.query(
         `INSERT INTO responder_acknowledgements(ack_id, report_id, responder_id, status, note, acknowledged_at)
@@ -73,7 +82,6 @@ test('applies responder v1 migration and enforces responder constraints', async 
       ),
     );
 
-    // Invalid status must fail CHECK constraint
     await assert.rejects(
       pool.query(
         `INSERT INTO responder_acknowledgements(ack_id, report_id, responder_id, status, note, acknowledged_at)

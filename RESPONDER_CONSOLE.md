@@ -38,7 +38,15 @@ An SOS becomes visible in this console only after the backend has accepted it. `
 
 ## Responder access
 
-Responder API calls require a provisioned bearer token. The browser keeps the entered token in `sessionStorage`, so closing the tab/session clears it. The token is never embedded in the dashboard bundle.
+Responder API clients can continue to use a provisioned bearer token. The browser console now uses that token only to start a short-lived responder session:
+
+1. the responder pastes the provisioned token once;
+2. the backend verifies the existing SHA-256 token hash;
+3. the backend creates a random 12-hour browser session and stores only that session token's SHA-256 hash in PostgreSQL;
+4. the browser receives the raw session token only in an `HttpOnly; Secure; SameSite=Strict` cookie;
+5. dashboard JavaScript clears the pasted bearer token and does not place it in `localStorage`, `sessionStorage`, or later API headers.
+
+Closing and reopening the console in the same browser can therefore restore the responder session until it expires, is revoked, or the responder presses **Disconnect**. Disconnect deletes the server-side session before clearing the cookie. Existing bearer-token API clients remain compatible.
 
 Provision a responder against the intended database:
 
@@ -49,7 +57,7 @@ RESPONDER_ROLE=DISPATCHER
 npm --prefix backend run provision-responder
 ```
 
-The command prints the bearer token once. Store it in the approved private secret store. PostgreSQL stores only its SHA-256 hash.
+The command prints the bearer token once. Store it in the approved private secret store. PostgreSQL stores only its SHA-256 hash. Responders should copy the token from that store when starting a new browser session rather than memorizing it.
 
 ## Acknowledgement return path
 
@@ -77,7 +85,8 @@ Post-deploy verification should cover:
 
     GET /healthz                         -> 200
     GET /responder                       -> 200
-    GET /v1/incidents                    -> 401 without a bearer token
+    GET /v1/responder/session             -> 401 without a browser session
+    GET /v1/incidents                    -> 401 without bearer or browser-session auth
     GET /v1/incidents?limit=1&offset=0   -> read-only authenticated smoke check
 
 Responder incident pagination is bounded to limit 1..100 and offset 0..10000. Status filters are restricted to PENDING, ACKNOWLEDGED, EN_ROUTE, ON_SCENE, and RESOLVED. A provisioning smoke test should use a clearly named temporary responder identity and remove it after verification if it is not an operational account; never commit or paste the generated bearer token into documentation.

@@ -26,16 +26,25 @@ async function main(): Promise<void> {
   const pool = createPool(databaseUrl);
 
   try {
-    await pool.query(
+    const provisioned = await pool.query<{responder_id: string}>(
       `INSERT INTO responder_identities(
          responder_id, callsign, role, api_key_hash, registered_at
        ) VALUES ($1, $2, $3, $4, NOW())
        ON CONFLICT (callsign) DO UPDATE SET
          role = EXCLUDED.role,
          api_key_hash = EXCLUDED.api_key_hash,
-         registered_at = EXCLUDED.registered_at`,
+         registered_at = EXCLUDED.registered_at
+       RETURNING responder_id`,
       [randomUUID(), callsign, role, tokenHash],
     );
+
+    const responderId = provisioned.rows[0]?.responder_id;
+    if (!responderId) {
+      throw new Error('Responder provisioning did not return an identity');
+    }
+
+    // Rotating a responder token must also invalidate browser sessions issued under the old token.
+    await pool.query('DELETE FROM responder_sessions WHERE responder_id = $1', [responderId]);
   } finally {
     await pool.end();
   }
