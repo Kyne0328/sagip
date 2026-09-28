@@ -53,7 +53,20 @@ Never commit a production keystore, its Base64 encoding, passwords, database URL
 
 The repository does not generate a production signing identity automatically.
 
-The production signing identity must be created and backed up through an owner-approved secure process. Once an Android application is distributed with that identity, losing or casually replacing it can make future upgrades impossible or operationally unsafe.
+The first permanent SAGIP production signing identity was created on 2026-09-28 for the initial signed release build. Its non-secret identity metadata is:
+
+```text
+alias: sagip-production
+keystore format: PKCS12
+key: 4096-bit RSA
+signature algorithm: SHA256withRSA
+certificate SHA-256: 82:C0:93:C2:83:75:33:60:03:3E:0B:E7:E5:DF:97:4B:F8:61:3A:67:D4:73:0F:D0:E9:A3:C0:3A:D1:9B:10:F6
+certificate validity: 2026-09-28 through 2054-02-13
+```
+
+This fingerprint is the canonical signing identity for future SAGIP Android upgrades unless a deliberate, documented key-rotation process is performed. The private keystore and its passwords are **not** stored in Git, repository documentation, release notes, or application artifacts. The authorized build workstation keeps a git-ignored local copy under `.release-private/`; that local copy is not a sufficient disaster-recovery backup. Keep at least one additional protected copy of the PKCS12 keystore and its recovery credentials outside the repository, with the credential stored separately from the keystore.
+
+The production signing identity must be backed up through an owner-approved secure process. Once an Android application is distributed with that identity, losing or casually replacing it can make future upgrades impossible or operationally unsafe.
 
 The workflow materializes `SAGIP_RELEASE_KEYSTORE_BASE64` only inside the ephemeral GitHub runner and passes the resulting path through `SAGIP_RELEASE_KEYSTORE_PATH`. Signing credentials are scoped only to the workflow steps that need them. After building, `apksigner` verifies the APK and the workflow compares its signer certificate fingerprint with `SAGIP_RELEASE_CERT_SHA256`.
 
