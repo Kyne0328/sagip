@@ -68,7 +68,7 @@ This fingerprint is the canonical signing identity for future SAGIP Android upgr
 
 The production signing identity must be backed up through an owner-approved secure process. Once an Android application is distributed with that identity, losing or casually replacing it can make future upgrades impossible or operationally unsafe.
 
-The workflow materializes `SAGIP_RELEASE_KEYSTORE_BASE64` only inside the ephemeral GitHub runner and passes the resulting path through `SAGIP_RELEASE_KEYSTORE_PATH`. Signing credentials are scoped only to the workflow steps that need them. After building, `apksigner` verifies the APK and the workflow compares its signer certificate fingerprint with `SAGIP_RELEASE_CERT_SHA256`.
+The workflow materializes `SAGIP_RELEASE_KEYSTORE_BASE64` only inside the ephemeral GitHub runner and passes the resulting path through `SAGIP_RELEASE_KEYSTORE_PATH`. Signing credentials are scoped only to the workflow steps that need them. After building, `apksigner` verifies the APK and the workflow compares its signer certificate fingerprint with `SAGIP_RELEASE_CERT_SHA256`. The AAB is integrity-checked with `jarsigner`, then `keytool -printcert -jarfile` is used to verify that its signer certificate fingerprint matches the same canonical fingerprint. This avoids treating Android's expected self-signed application certificate as a public-CA trust-chain failure.
 
 Gradle release validation requires:
 
@@ -96,8 +96,9 @@ Inputs:
 - `version_code`: positive, monotonically increasing Android version code.
 - `release_tag`: production-style Git tag such as `v1.0.0`.
 - `deploy_backend`: whether to apply production DB migrations and deploy the Neon Function.
-- `publish_github_release`: whether to publish the signed APK/AAB to GitHub Releases.
-- `confirm_production_readiness`: explicit acknowledgement that external production gates have actual evidence.
+- `publish_github_release`: whether to publish the signed APK/AAB as a production GitHub Release.
+- `publish_github_prerelease`: whether to publish the same signed artifacts as a clearly labeled GitHub pre-release for controlled testing without claiming production readiness.
+- `confirm_production_readiness`: explicit acknowledgement that external production gates have actual evidence; required only for production publication, not for the signed pre-release path.
 
 The build job always runs the application/backend validation gates before producing signed artifacts.
 
@@ -110,7 +111,7 @@ SHA256SUMS.txt
 release-notes.md
 ```
 
-These are first uploaded as a private workflow artifact. Publishing to GitHub Releases is a separate opt-in action. The workflow refuses a publish request unless `confirm_production_readiness` is also true.
+These are first uploaded as a private workflow artifact. Publication is a separate opt-in action. A signed GitHub **pre-release** can be published for controlled testing without asserting production readiness. A production GitHub Release remains blocked unless `confirm_production_readiness=true`, and the workflow rejects attempts to request both publication modes at once.
 
 The workflow does **not** upload to Google Play or another app store.
 

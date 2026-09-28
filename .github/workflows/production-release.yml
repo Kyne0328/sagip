@@ -21,7 +21,12 @@ on:
         default: false
         type: boolean
       publish_github_release:
-        description: 'Publish signed APK/AAB assets as a GitHub release'
+        description: 'Publish signed APK/AAB assets as a production GitHub release'
+        required: true
+        default: false
+        type: boolean
+      publish_github_prerelease:
+        description: 'Publish signed APK/AAB assets as a GitHub pre-release without claiming production readiness'
         required: true
         default: false
         type: boolean
@@ -50,6 +55,7 @@ jobs:
       SAGIP_VERSION_CODE: ${{ inputs.version_code }}
       RELEASE_TAG: ${{ inputs.release_tag }}
       PUBLISH_GITHUB_RELEASE: ${{ inputs.publish_github_release }}
+      PUBLISH_GITHUB_PRERELEASE: ${{ inputs.publish_github_prerelease }}
       CONFIRM_PRODUCTION_READINESS: ${{ inputs.confirm_production_readiness }}
 
     steps:
@@ -87,8 +93,12 @@ jobs:
             echo "production environment variable SAGIP_RELEASE_CERT_SHA256 must contain the expected 32-byte signing certificate SHA-256 fingerprint" >&2
             exit 1
           fi
+          if [[ "$PUBLISH_GITHUB_RELEASE" == "true" && "$PUBLISH_GITHUB_PRERELEASE" == "true" ]]; then
+            echo "Choose either a production release or a pre-release, not both" >&2
+            exit 1
+          fi
           if [[ "$PUBLISH_GITHUB_RELEASE" == "true" && "$CONFIRM_PRODUCTION_READINESS" != "true" ]]; then
-            echo "Publishing requires confirm_production_readiness=true" >&2
+            echo "Production publication requires confirm_production_readiness=true" >&2
             exit 1
           fi
 
@@ -197,7 +207,14 @@ jobs:
             echo "Release APK signing certificate fingerprint does not match SAGIP_RELEASE_CERT_SHA256" >&2
             exit 1
           fi
-          jarsigner -verify -strict android/app/build/outputs/bundle/release/app-release.aab
+          jarsigner -verify android/app/build/outputs/bundle/release/app-release.aab
+          aab_cert_report="$RUNNER_TEMP/sagip-aab-cert.txt"
+          keytool -printcert -jarfile android/app/build/outputs/bundle/release/app-release.aab | tee "$aab_cert_report"
+          aab_fingerprint="$(awk -F ': ' '/SHA256:/ {print tolower($2); exit}' "$aab_cert_report" | tr -d ':')"
+          if [[ -z "$aab_fingerprint" || "$aab_fingerprint" != "$expected_fingerprint" ]]; then
+            echo "Release AAB signing certificate fingerprint does not match SAGIP_RELEASE_CERT_SHA256" >&2
+            exit 1
+          fi
 
       - name: Prepare signed release artifacts and checksums
         shell: bash
@@ -309,6 +326,47 @@ jobs:
       - name: Verify deployed backend surface
         shell: bash
         run: node scripts/verify-backend.mjs "$SAGIP_BACKEND_BASE_URL" --full
+
+  publish-github-prerelease:
+    name: Publish signed GitHub pre-release
+    if: ${{ always() && inputs.publish_github_prerelease && needs.validate-and-build.result == 'success' && (needs.deploy-backend.result == 'success' || needs.deploy-backend.result == 'skipped') }}
+    needs:
+      - validate-and-build
+      - deploy-backend
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download signed production artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: sagip-production-${{ inputs.version_name }}
+          path: dist
+
+      - name: Publish signed GitHub pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        shell: bash
+        run: |
+          {
+            echo "## SAGIP ${{ inputs.version_name }} signed release candidate"
+            echo
+            echo "This is a **signed GitHub pre-release for controlled testing**, not a production-readiness claim."
+            echo
+            cat dist/release-notes.md
+          } > dist/prerelease-notes.md
+          gh release create "$RELEASE_TAG" \
+            "dist/sagip-${{ inputs.version_name }}-release.apk" \
+            "dist/sagip-${{ inputs.version_name }}-release.aab" \
+            "dist/SHA256SUMS.txt" \
+            --target "$GITHUB_SHA" \
+            --title "SAGIP ${{ inputs.version_name }} Signed Candidate" \
+            --prerelease \
+            --notes-file dist/prerelease-notes.md
 
   publish-github-release:
     name: Publish production GitHub release
