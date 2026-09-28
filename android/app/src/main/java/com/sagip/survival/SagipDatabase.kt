@@ -1,11 +1,39 @@
 package com.sagip.survival
 
 import android.content.Context
-import android.database.sqlite.SQLiteDatabase
-import android.database.sqlite.SQLiteOpenHelper
+import net.zetetic.database.sqlcipher.SQLiteDatabase
+import net.zetetic.database.sqlcipher.SQLiteOpenHelper
+
+private fun prepareEncryptedDatabase(context: Context): ByteArray {
+  val appContext = context.applicationContext
+  val databaseFile = appContext.getDatabasePath(SagipDatabase.DATABASE_NAME)
+  val keyManager = DatabaseKeyManager(appContext)
+  val key = if (databaseFile.exists() && !SqlCipherDatabaseMigrator.existingDatabaseIsPlaintext(appContext)) {
+    keyManager.getExistingDatabaseKey()
+  } else {
+    keyManager.getOrCreateDatabaseKey()
+  }
+  try {
+    SqlCipherDatabaseMigrator.migrateIfNeeded(appContext, key)
+    return key
+  } catch (error: Exception) {
+    key.fill(0)
+    throw error
+  }
+}
 
 class SagipDatabase(context: Context) :
-  SQLiteOpenHelper(context, DATABASE_NAME, null, Schema.VERSION) {
+  SQLiteOpenHelper(
+    context.applicationContext,
+    DATABASE_NAME,
+    prepareEncryptedDatabase(context),
+    null,
+    Schema.VERSION,
+    0,
+    null,
+    null,
+    false,
+  ) {
 
   override fun onConfigure(db: SQLiteDatabase) {
     super.onConfigure(db)

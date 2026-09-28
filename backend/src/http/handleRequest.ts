@@ -7,12 +7,13 @@ import {
   ResponderValidationError,
 } from '../responder/service.js';
 import type {ResponderIdentity, ResponderStatus} from '../responder/types.js';
-import {SlidingWindowRateLimiter} from './rateLimiter.js';
+import {responderDashboardResponse} from '../responder/dashboard.js';
+import {SlidingWindowRateLimiter, type RateLimiter} from './rateLimiter.js';
 
 export interface SagipServerDependencies {
   ingestEnvelope(bytes: Buffer): Promise<ServerReceipt>;
   responderService?: ResponderService;
-  rateLimiter?: SlidingWindowRateLimiter;
+  rateLimiter?: RateLimiter;
 }
 
 export interface SagipRequestContext {
@@ -24,6 +25,12 @@ const defaultRateLimiter = new SlidingWindowRateLimiter();
 
 class RequestBodyTooLargeError extends Error {}
 
+const UUID_SEGMENT = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
+const REPORT_STATUS_RE = new RegExp(`^/v1/reports/(${UUID_SEGMENT})/status$`, 'u');
+const INCIDENT_ACK_RE = new RegExp(`^/v1/incidents/(${UUID_SEGMENT})/ack$`, 'u');
+const INCIDENT_DETAIL_RE = new RegExp(`^/v1/incidents/(${UUID_SEGMENT})$`, 'u');
+const RESPONDER_STATUSES = new Set(['PENDING', 'ACKNOWLEDGED', 'EN_ROUTE', 'ON_SCENE', 'RESOLVED']);
+
 export async function handleSagipRequest(
   request: Request,
   deps: SagipServerDependencies,
@@ -34,12 +41,30 @@ export async function handleSagipRequest(
     const pathname = parsedUrl.pathname;
     const method = request.method || 'GET';
 
-    const isPublicRateLimitedEndpoint =
-      pathname === '/v1/envelopes' || /^\/v1\/reports\/[0-9a-fA-F-]+\/status$/u.test(pathname);
-    if (isPublicRateLimitedEndpoint) {
+    const dashboard = responderDashboardResponse(pathname, method);
+    if (dashboard) return dashboard;
+    if (pathname === '/' && method === 'GET') {
+      return new Response(null, {status: 302, headers: {location: '/responder'}});
+    }
+    if (pathname === '/healthz' && method === 'GET') {
+      return jsonResponse(200, {status: 'ok'});
+    }
+
+    const isRateLimitedEndpoint =
+      pathname === '/v1/envelopes' ||
+      REPORT_STATUS_RE.test(pathname) ||
+      pathname.startsWith('/v1/incidents');
+    if (isRateLimitedEndpoint) {
       const clientIp = context.clientIp ?? '127.0.0.1';
       const limiter = deps.rateLimiter ?? defaultRateLimiter;
-      if (!limiter.isAllowed(clientIp)) {
+      let allowed: boolean;
+      try {
+        allowed = await limiter.isAllowed(clientIp);
+      } catch {
+        discardRequestBody(context);
+        return jsonResponse(503, {error: 'SERVICE_UNAVAILABLE'});
+      }
+      if (!allowed) {
         discardRequestBody(context);
         return jsonResponse(429, {error: 'TOO_MANY_REQUESTS'}, {'retry-after': '60'});
       }
@@ -60,7 +85,7 @@ export async function handleSagipRequest(
       return jsonResponse(200, receipt);
     }
 
-    const reportStatusMatch = /^\/v1\/reports\/([0-9a-fA-F-]+)\/status$/u.exec(pathname);
+    const reportStatusMatch = REPORT_STATUS_RE.exec(pathname);
     if (reportStatusMatch) {
       if (method !== 'GET') {
         discardRequestBody(context);
@@ -96,28 +121,49 @@ export async function handleSagipRequest(
           return jsonResponse(405, {error: 'METHOD_NOT_ALLOWED'}, {allow: 'GET'});
         }
         const statusFilter = parsedUrl.searchParams.get('status') ?? undefined;
+        if (statusFilter && !RESPONDER_STATUSES.has(statusFilter)) {
+          return jsonResponse(400, {error: 'INVALID_STATUS_FILTER'});
+        }
         const limitParam = parsedUrl.searchParams.get('limit');
-        const limit = limitParam ? Number.parseInt(limitParam, 10) : 50;
-        const incidents = await deps.responderService.listIncidents(statusFilter, limit);
+        const limit = limitParam === null ? 50 : Number(limitParam);
+        if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+          return jsonResponse(400, {error: 'INVALID_LIMIT'});
+        }
+        const offsetParam = parsedUrl.searchParams.get('offset');
+        const offset = offsetParam === null ? 0 : Number(offsetParam);
+        if (!Number.isInteger(offset) || offset < 0 || offset > 10_000) {
+          return jsonResponse(400, {error: 'INVALID_OFFSET'});
+        }
+        const incidents = await deps.responderService.listIncidents(statusFilter, limit, offset);
         return jsonResponse(200, incidents);
       }
 
-      const ackMatch = /^\/v1\/incidents\/([0-9a-fA-F-]+)\/ack$/u.exec(pathname);
+      const ackMatch = INCIDENT_ACK_RE.exec(pathname);
       if (ackMatch) {
         if (method !== 'POST') {
           discardRequestBody(context);
           return jsonResponse(405, {error: 'METHOD_NOT_ALLOWED'}, {allow: 'POST'});
         }
+        if ((request.headers.get('content-type') ?? '').split(';')[0]?.trim().toLowerCase() !== 'application/json') {
+          discardRequestBody(context);
+          return jsonResponse(415, {error: 'UNSUPPORTED_MEDIA_TYPE'});
+        }
         const reportId = ackMatch[1] as string;
         const bodyBytes = await readBoundedBody(request, 8192);
-        let parsedBody: {status?: string; note?: string | null} = {};
+        let parsedBody: unknown;
         try {
-          parsedBody = JSON.parse(bodyBytes.toString('utf8')) as {
-            status?: string;
-            note?: string | null;
-          };
+          parsedBody = JSON.parse(bodyBytes.toString('utf8')) as unknown;
         } catch {
           return jsonResponse(400, {error: 'INVALID_JSON'});
+        }
+        if (
+          !isRecord(parsedBody) ||
+          typeof parsedBody.status !== 'string' ||
+          (parsedBody.note !== undefined &&
+            parsedBody.note !== null &&
+            typeof parsedBody.note !== 'string')
+        ) {
+          return jsonResponse(400, {error: 'INVALID_ACK_BODY'});
         }
 
         const status = parsedBody.status as ResponderStatus;
@@ -130,7 +176,7 @@ export async function handleSagipRequest(
         return jsonResponse(200, ack);
       }
 
-      const detailMatch = /^\/v1\/incidents\/([0-9a-fA-F-]+)$/u.exec(pathname);
+      const detailMatch = INCIDENT_DETAIL_RE.exec(pathname);
       if (detailMatch) {
         if (method !== 'GET') {
           discardRequestBody(context);
@@ -165,6 +211,10 @@ export async function handleSagipRequest(
     }
     return jsonResponse(500, {error: 'INTERNAL_ERROR'});
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 async function extractAndAuthResponder(
@@ -225,6 +275,8 @@ function jsonResponse(
     headers: {
       'content-type': 'application/json; charset=utf-8',
       'content-length': String(bytes.length),
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
       ...extraHeaders,
     },
   });

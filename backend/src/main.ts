@@ -3,6 +3,7 @@ import {fileURLToPath} from 'node:url';
 import {applyMigrations} from './db/migrate.js';
 import {createPool} from './db/pool.js';
 import {createSagipServer} from './http/createServer.js';
+import {PostgresSlidingWindowRateLimiter} from './http/rateLimiter.js';
 import {IngestionService} from './ingestion/service.js';
 import {ResponderService} from './responder/service.js';
 
@@ -23,6 +24,7 @@ async function main(): Promise<void> {
     const server = createSagipServer({
       ingestEnvelope: bytes => ingestion.ingestEnvelope(bytes),
       responderService,
+      rateLimiter: new PostgresSlidingWindowRateLimiter(pool),
     });
 
     await new Promise<void>((resolve, reject) => {

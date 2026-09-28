@@ -9,11 +9,13 @@ import {
 } from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
 
+import {SagipMark} from './src/branding/SagipMark';
 import {
   EMERGENCY_TYPES,
   URGENCIES,
   type BleRelayStatus,
   type EmergencyType,
+  type ResponderAckInfo,
   type Urgency,
 } from './src/emergency/types';
 import {useBleRelayStatus} from './src/emergency/useBleRelayStatus';
@@ -33,6 +35,29 @@ const urgencyLabels: Record<Urgency, string> = {
   NEED_ASSISTANCE: 'Need assistance',
 };
 
+function responderAcknowledgementText(ack: ResponderAckInfo | null | undefined) {
+  const responseState = (() => {
+    switch (ack?.status) {
+      case 'EN_ROUTE':
+        return 'Responders report they are on the way';
+      case 'ON_SCENE':
+        return 'Responders report they are on scene';
+      case 'RESOLVED':
+        return 'Responder marked this incident resolved';
+      default:
+        return 'Responder has acknowledged your SOS';
+    }
+  })();
+
+  return [
+    responseState,
+    ack?.callsign ? `· ${ack.callsign}` : null,
+    ack?.note ? `(${ack.note})` : null,
+  ]
+    .filter(Boolean)
+    .join(' ');
+}
+
 export default function App() {
   const {reports, loading, saving, message, create} = useEmergencyReports();
   const {
@@ -46,6 +71,9 @@ export default function App() {
   const [emergencyType, setEmergencyType] = useState<EmergencyType | null>(null);
   const [urgency, setUrgency] = useState<Urgency | null>(null);
   const latest = reports[0];
+  const messageIsError =
+    message === 'SOS was not saved. Please try again.' ||
+    message === 'Saved SOS reports could not be loaded.';
 
   const save = async () => {
     if (!emergencyType || !urgency) return;
@@ -61,11 +89,20 @@ export default function App() {
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="dark-content" />
       <ScrollView contentContainerStyle={styles.container}>
-        <Text style={styles.brand}>SAGIP</Text>
+        <View style={styles.brandRow}>
+          <SagipMark />
+          <View style={styles.brandCopy}>
+            <Text style={styles.brand}>SAGIP</Text>
+            <Text style={styles.brandTagline}>Emergency communication that keeps trying</Text>
+          </View>
+        </View>
         <Text style={styles.eyebrow}>NEED HELP?</Text>
         <Text style={styles.title}>Create an emergency SOS</Text>
         <Text style={styles.subtitle}>
           Your SOS is saved on this phone first. Internet is not required.
+        </Text>
+        <Text style={styles.deliveryHelpText}>
+          If internet works, SAGIP sends directly to the server. Nearby-device relay is the offline fallback.
         </Text>
 
         {!showForm ? (
@@ -102,11 +139,12 @@ export default function App() {
             ))}
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={saving ? "Saving emergency report locally" : "Save SOS now on this device"}
+              accessibilityLabel={saving ? 'Saving emergency report locally' : 'Save SOS now on this device'}
               accessibilityHint="Commits emergency report immediately to authoritative local storage"
               disabled={!emergencyType || !urgency || saving}
+              accessibilityState={{disabled: !emergencyType || !urgency || saving}}
               onPress={() => {
-                save();
+                void save();
               }}
               style={({pressed}) => [
                 styles.saveButton,
@@ -115,14 +153,87 @@ export default function App() {
               ]}>
               <Text style={styles.saveButtonText}>{saving ? 'Saving…' : 'Save SOS now'}</Text>
             </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Cancel SOS details"
+              accessibilityHint="Returns to the main SOS button without saving a report"
+              disabled={saving}
+              accessibilityState={{disabled: saving}}
+              onPress={() => {
+                setShowForm(false);
+                setEmergencyType(null);
+                setUrgency(null);
+              }}
+              style={({pressed}) => [
+                styles.cancelButton,
+                saving && styles.disabledButton,
+                pressed && styles.pressed,
+              ]}>
+              <Text style={styles.cancelButtonText}>Cancel</Text>
+            </Pressable>
           </View>
         )}
 
         {message ? (
-          <View accessibilityRole="alert" style={styles.messageCard}>
+          <View
+            accessibilityRole={messageIsError ? 'alert' : undefined}
+            accessibilityLiveRegion={messageIsError ? 'assertive' : 'polite'}
+            style={styles.messageCard}>
             <Text style={styles.messageText}>{message}</Text>
           </View>
         ) : null}
+
+        <View accessibilityLiveRegion="polite" style={styles.statusCard}>
+          <Text style={styles.sectionTitle}>Latest SOS status</Text>
+          {loading ? (
+            <Text style={styles.statusText}>Checking this device…</Text>
+          ) : latest ? (
+            <>
+              <Text style={styles.savedText}>Saved on this device</Text>
+              {latest.deliveryState === 'RESPONDER_ACKNOWLEDGED' ? (
+                <>
+                  <Text style={styles.responderText}>Responder acknowledged</Text>
+                  <Text style={styles.statusDetailText}>
+                    {responderAcknowledgementText(latest.responderAck)}
+                  </Text>
+                </>
+              ) : latest.deliveryState === 'SERVER_ACCEPTED' ? (
+                <>
+                  <Text style={styles.acceptedText}>Server accepted</Text>
+                  <Text style={styles.statusDetailText}>
+                    The SAGIP server has accepted this SOS. Waiting for responder acknowledgement.
+                  </Text>
+                </>
+              ) : latest.deliveryState === 'PERMANENT_FAILURE' ? (
+                <>
+                  <Text style={styles.failedText}>Delivery failed permanently</Text>
+                  <Text style={styles.statusDetailText}>
+                    This SOS is still saved on this device, but automatic delivery cannot continue for this report.
+                  </Text>
+                </>
+              ) : latest.deliveryState === 'RELAYED_TO_PEER' ? (
+                <>
+                  <Text style={styles.relayedText}>Relayed to another SAGIP device</Text>
+                  <Text style={styles.statusDetailText}>
+                    Another SAGIP device has a saved copy to forward. This does not yet mean the server or a responder received it.
+                  </Text>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.pendingText}>Pending delivery</Text>
+                  <Text style={styles.statusDetailText}>
+                    SAGIP is searching for an internet or nearby-device delivery path. Your SOS remains saved here.
+                  </Text>
+                </>
+              )}
+              <Text style={styles.statusText}>
+                {emergencyLabels[latest.emergencyType]} · {urgencyLabels[latest.urgency]}
+              </Text>
+            </>
+          ) : (
+            <Text style={styles.statusText}>No SOS saved on this device yet.</Text>
+          )}
+        </View>
 
         <NearbyRelayCard
           status={relayStatus}
@@ -135,44 +246,6 @@ export default function App() {
             void refreshRelay();
           }}
         />
-
-        <View accessibilityLiveRegion="polite" style={styles.statusCard}>
-          <Text style={styles.sectionTitle}>Local SOS status</Text>
-          {loading ? (
-            <Text style={styles.statusText}>Checking this device…</Text>
-          ) : latest ? (
-            <>
-              <Text style={styles.savedText}>Saved on this device</Text>
-              {latest.deliveryState === 'RESPONDER_ACKNOWLEDGED' ? (
-                <>
-                  <Text style={styles.responderText}>Responder acknowledged</Text>
-                  <Text style={styles.responderSubtext}>
-                    {[
-                      'Help is on the way',
-                      latest.responderAck?.callsign ? `· ${latest.responderAck.callsign}` : null,
-                      latest.responderAck?.note ? `(${latest.responderAck.note})` : null,
-                    ]
-                      .filter(Boolean)
-                      .join(' ')}
-                  </Text>
-                </>
-              ) : latest.deliveryState === 'SERVER_ACCEPTED' ? (
-                <Text style={styles.acceptedText}>Server accepted</Text>
-              ) : latest.deliveryState === 'PERMANENT_FAILURE' ? (
-                <Text style={styles.failedText}>Delivery failed permanently</Text>
-              ) : latest.deliveryState === 'RELAYED_TO_PEER' ? (
-                <Text style={styles.relayedText}>Relayed to nearby SAGIP device</Text>
-              ) : (
-                <Text style={styles.pendingText}>Pending delivery</Text>
-              )}
-              <Text style={styles.statusText}>
-                {emergencyLabels[latest.emergencyType]} · {urgencyLabels[latest.urgency]}
-              </Text>
-            </>
-          ) : (
-            <Text style={styles.statusText}>No SOS saved on this device yet.</Text>
-          )}
-        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -261,6 +334,7 @@ function NearbyRelayCard({
           accessibilityLabel={actionLabel}
           accessibilityHint="Updates Bluetooth relay availability without affecting locally saved SOS reports"
           disabled={requesting}
+          accessibilityState={{disabled: requesting}}
           onPress={action}
           style={({pressed}) => [
             styles.relayActionButton,
@@ -298,10 +372,14 @@ function OptionButton({
 const styles = StyleSheet.create({
   safeArea: {flex: 1, backgroundColor: '#F7F5F0'},
   container: {padding: 24, gap: 16},
-  brand: {fontSize: 18, fontWeight: '800', letterSpacing: 2, color: '#21302B'},
+  brandRow: {flexDirection: 'row', alignItems: 'center', gap: 12},
+  brandCopy: {flex: 1, gap: 2},
+  brand: {fontSize: 20, fontWeight: '900', letterSpacing: 2, color: '#21302B'},
+  brandTagline: {fontSize: 12, lineHeight: 17, fontWeight: '700', color: '#56615D'},
   eyebrow: {fontSize: 13, fontWeight: '800', letterSpacing: 1.4, color: '#8D2F2A', marginTop: 8},
   title: {fontSize: 32, lineHeight: 38, fontWeight: '800', color: '#18211E'},
   subtitle: {fontSize: 17, lineHeight: 25, color: '#4B5752'},
+  deliveryHelpText: {fontSize: 14, lineHeight: 21, fontWeight: '600', color: '#56615D'},
   sosButton: {minHeight: 190, borderRadius: 28, backgroundColor: '#B33A32', alignItems: 'center', justifyContent: 'center', padding: 24, marginVertical: 8},
   sosButtonText: {fontSize: 56, fontWeight: '900', color: '#FFFFFF', letterSpacing: 3},
   sosButtonSubtext: {fontSize: 16, fontWeight: '700', color: '#FFFFFF', marginTop: 8},
@@ -316,6 +394,8 @@ const styles = StyleSheet.create({
   disabledButton: {opacity: 0.45},
   pressed: {opacity: 0.8},
   saveButtonText: {fontSize: 17, fontWeight: '800', color: '#FFFFFF'},
+  cancelButton: {minHeight: 50, borderRadius: 14, borderWidth: 1.5, borderColor: '#8C9893', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16},
+  cancelButtonText: {fontSize: 16, fontWeight: '800', color: '#35423D'},
   messageCard: {borderRadius: 16, padding: 16, backgroundColor: '#E8ECEA'},
   messageText: {fontSize: 16, lineHeight: 23, fontWeight: '700', color: '#21302B'},
   relayCard: {borderRadius: 20, padding: 18, backgroundColor: '#FFFFFF', gap: 8, marginTop: 4},
@@ -329,7 +409,7 @@ const styles = StyleSheet.create({
   relayedText: {fontSize: 16, fontWeight: '800', color: '#B26B00'},
   acceptedText: {fontSize: 16, fontWeight: '800', color: '#1B6B38'},
   responderText: {fontSize: 16, fontWeight: '800', color: '#0D6857'},
-  responderSubtext: {fontSize: 14, fontWeight: '700', color: '#0D6857'},
   failedText: {fontSize: 16, fontWeight: '800', color: '#B33A32'},
+  statusDetailText: {fontSize: 15, lineHeight: 22, fontWeight: '600', color: '#44524D'},
   statusText: {fontSize: 15, lineHeight: 22, color: '#56615D'},
 });

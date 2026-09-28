@@ -15,6 +15,14 @@ import kotlinx.coroutines.launch
  * whenever network connectivity is established, even if the app process is terminated.
  * Uses zero third-party dependencies, running purely on Android OS framework capabilities.
  */
+internal suspend fun prepareThenRunDelivery(
+  preparePending: () -> Unit,
+  runDelivery: suspend () -> Int,
+): Int {
+  preparePending()
+  return runDelivery()
+}
+
 class EmergencyDeliveryJobService : JobService() {
   private val supervisor = SupervisorJob()
   private val scope = CoroutineScope(supervisor + Dispatchers.IO)
@@ -31,7 +39,14 @@ class EmergencyDeliveryJobService : JobService() {
           relayStore = repository,
           ackStore = repository,
         )
-        worker.runOnce()
+        val preparationService = EnvelopePreparationService(
+          repository = repository,
+          identity = AndroidKeystoreSigningIdentity(),
+        )
+        prepareThenRunDelivery(
+          preparePending = { preparationService.preparePending() },
+          runDelivery = { worker.runOnce() },
+        )
         jobFinished(params, false)
       } catch (e: CancellationException) {
         throw e

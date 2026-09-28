@@ -64,6 +64,11 @@ class BlePeripheralManager(
       if (characteristic.uuid == BleProtocolConstants.CHARACTERISTIC_OFFER_UUID) {
         val decision = offerDecisions.remove(device.address)
           ?: OfferDecision.REJECT_UNSUPPORTED
+        val durableDuplicate = if (decision == OfferDecision.ALREADY_HAVE) {
+          activeOffers.remove(device.address)
+        } else {
+          null
+        }
         gattServer?.sendResponse(
           device,
           requestId,
@@ -71,6 +76,9 @@ class BlePeripheralManager(
           offset,
           byteArrayOf(decision.code),
         )
+        if (durableDuplicate != null) {
+          sendDurableAck(device, UUID.fromString(durableDuplicate.messageId))
+        }
         return
       }
       if (characteristic.uuid == BleProtocolConstants.CHARACTERISTIC_RETURN_ACK_UUID) {
@@ -298,8 +306,15 @@ class BlePeripheralManager(
       return
     }
 
-    val alreadySeen = repository.isMessageSeen(offer.messageId, offer.payloadDigest)
+    val durableInboundCopy = repository.hasSeenInboundMessage(offer.messageId, offer.payloadDigest)
+    val alreadySeen = durableInboundCopy || repository.isMessageSeen(offer.messageId, offer.payloadDigest)
     val decision = if (alreadySeen) {
+      activeReassemblers.remove(device.address)
+      if (durableInboundCopy) {
+        activeOffers[device.address] = offer
+      } else {
+        activeOffers.remove(device.address)
+      }
       OfferDecision.ALREADY_HAVE
     } else {
       activeOffers[device.address] = offer

@@ -1,0 +1,344 @@
+name: Production Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_name:
+        description: 'Android version name, for example 1.0.0'
+        required: true
+        type: string
+      version_code:
+        description: 'Monotonically increasing positive Android version code'
+        required: true
+        type: string
+      release_tag:
+        description: 'GitHub release tag, for example v1.0.0'
+        required: true
+        type: string
+      deploy_backend:
+        description: 'Apply production DB migrations and deploy the Neon Function'
+        required: true
+        default: false
+        type: boolean
+      publish_github_release:
+        description: 'Publish signed APK/AAB assets as a GitHub release'
+        required: true
+        default: false
+        type: boolean
+      confirm_production_readiness:
+        description: 'Confirm external production gates (security, physical field validation, operations) are satisfied'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sagip-production-release
+  cancel-in-progress: false
+
+jobs:
+  validate-and-build:
+    name: Validate and build signed Android production artifacts
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      SAGIP_BACKEND_BASE_URL: ${{ vars.SAGIP_BACKEND_BASE_URL }}
+      SAGIP_RELEASE_CERT_SHA256: ${{ vars.SAGIP_RELEASE_CERT_SHA256 }}
+      SAGIP_VERSION_NAME: ${{ inputs.version_name }}
+      SAGIP_VERSION_CODE: ${{ inputs.version_code }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      PUBLISH_GITHUB_RELEASE: ${{ inputs.publish_github_release }}
+      CONFIRM_PRODUCTION_READINESS: ${{ inputs.confirm_production_readiness }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Validate release inputs and required configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$SAGIP_VERSION_CODE" =~ ^[1-9][0-9]*$ ]]; then
+            echo "version_code must be a positive integer" >&2
+            exit 1
+          fi
+          if [[ ! "$SAGIP_VERSION_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ || ${#SAGIP_VERSION_NAME} -gt 64 ]]; then
+            echo "version_name must be a safe semantic version such as 1.0.0" >&2
+            exit 1
+          fi
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "release_tag must be a production-style vX.Y.Z tag" >&2
+            exit 1
+          fi
+          if [[ "$RELEASE_TAG" != "v$SAGIP_VERSION_NAME" ]]; then
+            echo "release_tag must match version_name (v$SAGIP_VERSION_NAME)" >&2
+            exit 1
+          fi
+          if [[ -z "$SAGIP_BACKEND_BASE_URL" || ! "$SAGIP_BACKEND_BASE_URL" =~ ^https:// ]]; then
+            echo "production environment variable SAGIP_BACKEND_BASE_URL must be an HTTPS URL" >&2
+            exit 1
+          fi
+          normalized_cert="${SAGIP_RELEASE_CERT_SHA256//:/}"
+          if [[ ! "$normalized_cert" =~ ^[0-9A-Fa-f]{64}$ ]]; then
+            echo "production environment variable SAGIP_RELEASE_CERT_SHA256 must contain the expected 32-byte signing certificate SHA-256 fingerprint" >&2
+            exit 1
+          fi
+          if [[ "$PUBLISH_GITHUB_RELEASE" == "true" && "$CONFIRM_PRODUCTION_READINESS" != "true" ]]; then
+            echo "Publishing requires confirm_production_readiness=true" >&2
+            exit 1
+          fi
+
+      - name: Validate production signing secret presence
+        env:
+          SAGIP_RELEASE_KEYSTORE_BASE64: ${{ secrets.SAGIP_RELEASE_KEYSTORE_BASE64 }}
+          SAGIP_RELEASE_KEYSTORE_PASSWORD: ${{ secrets.SAGIP_RELEASE_KEYSTORE_PASSWORD }}
+          SAGIP_RELEASE_KEY_ALIAS: ${{ secrets.SAGIP_RELEASE_KEY_ALIAS }}
+          SAGIP_RELEASE_KEY_PASSWORD: ${{ secrets.SAGIP_RELEASE_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in SAGIP_RELEASE_KEYSTORE_BASE64 SAGIP_RELEASE_KEYSTORE_PASSWORD SAGIP_RELEASE_KEY_ALIAS SAGIP_RELEASE_KEY_PASSWORD; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "Missing required production environment secret: $name" >&2
+              exit 1
+            fi
+          done
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          sdkmanager "platforms;android-36" "build-tools;36.1.0" "ndk;27.0.12077973"
+
+      - name: Verify configured production backend health
+        shell: bash
+        run: node scripts/verify-backend.mjs "$SAGIP_BACKEND_BASE_URL" --health-only
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          npm ci
+          npm --prefix backend ci
+
+      - name: Validate application and backend
+        shell: bash
+        run: |
+          npm test -- --runInBand
+          npx tsc --noEmit
+          npm run lint
+          npm --prefix backend test
+          npm --prefix backend run typecheck
+          npm --prefix backend run lint
+
+      - name: Materialize production signing keystore
+        env:
+          SAGIP_RELEASE_KEYSTORE_BASE64: ${{ secrets.SAGIP_RELEASE_KEYSTORE_BASE64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          keystore_path="$RUNNER_TEMP/sagip-production.keystore"
+          printf '%s' "$SAGIP_RELEASE_KEYSTORE_BASE64" | base64 --decode > "$keystore_path"
+          chmod 600 "$keystore_path"
+          if [[ ! -s "$keystore_path" ]]; then
+            echo "Decoded production keystore is empty" >&2
+            exit 1
+          fi
+          echo "SAGIP_RELEASE_KEYSTORE_PATH=$keystore_path" >> "$GITHUB_ENV"
+
+      - name: Validate production release configuration and build
+        env:
+          SAGIP_RELEASE_KEYSTORE_PASSWORD: ${{ secrets.SAGIP_RELEASE_KEYSTORE_PASSWORD }}
+          SAGIP_RELEASE_KEY_ALIAS: ${{ secrets.SAGIP_RELEASE_KEY_ALIAS }}
+          SAGIP_RELEASE_KEY_PASSWORD: ${{ secrets.SAGIP_RELEASE_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          chmod +x android/gradlew
+          ./android/gradlew -p android \
+            testDebugUnitTest \
+            assembleDebug \
+            validateSagipReleaseConfiguration \
+            assembleRelease \
+            bundleRelease \
+            -PSAGIP_BACKEND_BASE_URL="$SAGIP_BACKEND_BASE_URL" \
+            -PSAGIP_VERSION_CODE="$SAGIP_VERSION_CODE" \
+            -PSAGIP_VERSION_NAME="$SAGIP_VERSION_NAME"
+
+      - name: Verify release APK signature and signing identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          signature_report="$RUNNER_TEMP/sagip-apksigner.txt"
+          "$ANDROID_HOME/build-tools/36.1.0/apksigner" verify --verbose --print-certs android/app/build/outputs/apk/release/app-release.apk | tee "$signature_report"
+          actual_fingerprint="$(awk -F ': ' '/Signer #1 certificate SHA-256 digest:/ {print tolower($2); exit}' "$signature_report")"
+          expected_fingerprint="${SAGIP_RELEASE_CERT_SHA256//:/}"
+          expected_fingerprint="${expected_fingerprint,,}"
+          if [[ -z "$actual_fingerprint" || "$actual_fingerprint" != "$expected_fingerprint" ]]; then
+            echo "Release APK signing certificate fingerprint does not match SAGIP_RELEASE_CERT_SHA256" >&2
+            exit 1
+          fi
+          jarsigner -verify -strict android/app/build/outputs/bundle/release/app-release.aab
+
+      - name: Prepare signed release artifacts and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp android/app/build/outputs/apk/release/app-release.apk "dist/sagip-${SAGIP_VERSION_NAME}-release.apk"
+          cp android/app/build/outputs/bundle/release/app-release.aab "dist/sagip-${SAGIP_VERSION_NAME}-release.aab"
+          (
+            cd dist
+            sha256sum "sagip-${SAGIP_VERSION_NAME}-release.apk" "sagip-${SAGIP_VERSION_NAME}-release.aab" > SHA256SUMS.txt
+          )
+          cat > dist/release-notes.md <<EOF
+          ## SAGIP ${SAGIP_VERSION_NAME}
+
+          Signed Android production artifacts built from commit ${GITHUB_SHA}.
+
+          Automated validation in this workflow:
+          - root Jest, TypeScript, and ESLint
+          - backend tests, TypeScript, and ESLint
+          - Android unit tests and debug build
+          - production release configuration validation
+          - signed release APK and AAB build
+          - release APK signature verification
+          - SHA-256 checksums
+
+          This workflow does not itself prove physical multi-phone BLE behavior, real-device SQLCipher migration, responder key custody, field operations, or service uptime. Those gates must be satisfied separately before publishing for real emergency use.
+          EOF
+
+      - name: Upload signed build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sagip-production-${{ inputs.version_name }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+
+  deploy-backend:
+    name: Deploy production Neon backend
+    if: ${{ inputs.deploy_backend }}
+    needs: validate-and-build
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      SAGIP_BACKEND_BASE_URL: ${{ vars.SAGIP_BACKEND_BASE_URL }}
+      NEON_PROJECT_ID: plain-butterfly-00485937
+      NEON_BRANCH: production
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Validate deployment secrets
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in NEON_API_KEY DATABASE_URL SAGIP_BACKEND_BASE_URL; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "Missing required production deployment setting: $name" >&2
+              exit 1
+            fi
+          done
+          if [[ ! "$SAGIP_BACKEND_BASE_URL" =~ ^https:// ]]; then
+            echo "SAGIP_BACKEND_BASE_URL must use HTTPS" >&2
+            exit 1
+          fi
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install deployment dependencies
+        shell: bash
+        run: |
+          npm ci
+          npm --prefix backend ci
+          npm install --global neon@6.1.0
+
+      - name: Link and plan the intended Neon production target
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          neon link --project-id "$NEON_PROJECT_ID" --branch "$NEON_BRANCH" -y
+          neon status
+          neon config plan
+
+      - name: Apply production database migrations
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        shell: bash
+        run: npm --prefix backend run migrate
+
+      - name: Deploy Neon Function configuration
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        shell: bash
+        run: neon deploy
+
+      - name: Verify deployed backend surface
+        shell: bash
+        run: node scripts/verify-backend.mjs "$SAGIP_BACKEND_BASE_URL" --full
+
+  publish-github-release:
+    name: Publish production GitHub release
+    if: ${{ always() && inputs.publish_github_release && inputs.confirm_production_readiness && needs.validate-and-build.result == 'success' && (needs.deploy-backend.result == 'success' || needs.deploy-backend.result == 'skipped') }}
+    needs:
+      - validate-and-build
+      - deploy-backend
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download signed production artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: sagip-production-${{ inputs.version_name }}
+          path: dist
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        shell: bash
+        run: |
+          gh release create "$RELEASE_TAG" \
+            "dist/sagip-${{ inputs.version_name }}-release.apk" \
+            "dist/sagip-${{ inputs.version_name }}-release.aab" \
+            "dist/SHA256SUMS.txt" \
+            --target "$GITHUB_SHA" \
+            --title "SAGIP ${{ inputs.version_name }}" \
+            --notes-file dist/release-notes.md

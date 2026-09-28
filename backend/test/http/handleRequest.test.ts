@@ -75,3 +75,27 @@ test('fetch handler rate limits by supplied client IP', async () => {
   assert.equal(limited.status, 429);
   assert.equal(limited.headers.get('retry-after'), '60');
 });
+
+test('fetch handler returns retryable 503 when the shared rate limiter is unavailable', async () => {
+  const response = await handleSagipRequest(
+    new Request('https://sagip.example/v1/envelopes', {
+      method: 'POST',
+      headers: {'content-type': 'application/octet-stream'},
+      body: Buffer.from([1]),
+    }),
+    {
+      ingestEnvelope: async () => {
+        throw new Error('Should not reach ingest');
+      },
+      rateLimiter: {
+        isAllowed: async () => {
+          throw new Error('database password=must-not-leak');
+        },
+      },
+    },
+    {clientIp: '203.0.113.13'},
+  );
+
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), {error: 'SERVICE_UNAVAILABLE'});
+});

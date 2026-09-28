@@ -71,4 +71,16 @@ class TransportReadinessTest {
       now = 1_500L,
     )
   }
+
+  @Test
+  fun `accepts relayed envelope for continued server delivery`() {
+    TransportReadiness.requireAttemptable(
+      preparationState = EmergencyRepository.PREPARATION_READY,
+      envelopeBytes = byteArrayOf(1),
+      deliveryState = EmergencyRepository.DELIVERY_RELAYED_TO_PEER,
+      nextAttemptAt = 1_000L,
+      expiresAt = null,
+      now = 1_500L,
+    )
+  }
 }

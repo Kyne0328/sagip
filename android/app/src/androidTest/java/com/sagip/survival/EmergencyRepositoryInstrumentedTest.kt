@@ -14,6 +14,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.security.KeyPair
+import java.security.KeyPairGenerator
+import java.security.MessageDigest
+import java.security.Signature
+import java.security.spec.ECGenParameterSpec
+import java.util.UUID
 
 @RunWith(AndroidJUnit4::class)
 class EmergencyRepositoryInstrumentedTest {
@@ -224,16 +230,164 @@ class EmergencyRepositoryInstrumentedTest {
     )
     assertTrue(
       repository.recordRelayReceipt(
-        receiptId = "relay-receipt-1",
+        receiptId = "relay-receipt-2",
         messageId = messageId,
         peerIdentifier = "peer-a",
-        acknowledgedAt = 2_500L,
+        acknowledgedAt = 2_600L,
       ),
     )
 
     assertTableCount("relay_receipts", 1)
     assertTableCount("delivery_events", 2)
     assertEquals("RELAYED_TO_PEER", repository.listReports().single().deliveryState)
+  }
+
+  @Test
+  fun relayedEnvelopeRemainsEligibleForDirectInternetAndRetryPreservesCustodyState() {
+    val report = repository.createReport(
+      CreateEmergencyReportInput(EmergencyType.FIRE, Urgency.IMMEDIATE_DANGER),
+      location = null,
+      now = 5_000L,
+    )
+    val source = repository.listEnvelopePreparationSources().single()
+    repository.markEnvelopeReady(source.messageId, byteArrayOf(1, 2, 3), now = 5_010L)
+    assertTrue(
+      repository.recordRelayReceipt(
+        receiptId = "relay-direct-1",
+        messageId = source.messageId,
+        peerIdentifier = "peer-a",
+        acknowledgedAt = 5_100L,
+      ),
+    )
+
+    assertEquals("RELAYED_TO_PEER", repository.listReports().single().deliveryState)
+    val due = repository.listDueOutbound(now = 5_100L).single()
+    assertEquals(source.messageId, due.messageId)
+
+    val attemptId = repository.recordAttemptStarted(
+      messageId = due.messageId,
+      transport = "INTERNET",
+      now = 5_100L,
+    )
+    repository.recordAttemptCompleted(
+      attemptId = attemptId,
+      outcome = "RETRYABLE_FAILURE",
+      retryClassification = "NETWORK_UNREACHABLE",
+      now = 5_200L,
+    )
+    repository.scheduleRetry(
+      messageId = due.messageId,
+      now = 5_200L,
+      jitterUnit = 0.5,
+    )
+
+    assertEquals("RELAYED_TO_PEER", repository.listReports().single().deliveryState)
+
+    repository.markServerAccepted(
+      ServerReceipt(
+        receiptVersion = 1,
+        state = "SERVER_ACCEPTED",
+        receiptId = "server-after-relay",
+        messageId = due.messageId,
+        reportId = report.reportId,
+        revision = 1,
+        acceptedAt = "2026-09-28T02:00:00Z",
+      ),
+      now = 6_000L,
+    )
+
+    assertEquals("SERVER_ACCEPTED", repository.listReports().single().deliveryState)
+  }
+
+  @Test
+  fun lateRelayReceiptCannotDowngradeServerAcceptedState() {
+    val report = repository.createReport(
+      CreateEmergencyReportInput(EmergencyType.MEDICAL, Urgency.NEED_ASSISTANCE),
+      location = null,
+      now = 6_000L,
+    )
+    val source = repository.listEnvelopePreparationSources().single()
+    repository.markEnvelopeReady(source.messageId, byteArrayOf(4, 5, 6), now = 6_010L)
+    repository.markServerAccepted(
+      ServerReceipt(
+        receiptVersion = 1,
+        state = "SERVER_ACCEPTED",
+        receiptId = "server-first",
+        messageId = source.messageId,
+        reportId = report.reportId,
+        revision = 1,
+        acceptedAt = "2026-09-28T02:01:00Z",
+      ),
+      now = 6_100L,
+    )
+
+    assertTrue(
+      repository.recordRelayReceipt(
+        receiptId = "late-relay",
+        messageId = source.messageId,
+        peerIdentifier = "peer-late",
+        acknowledgedAt = 6_200L,
+      ),
+    )
+
+    assertEquals("SERVER_ACCEPTED", repository.listReports().single().deliveryState)
+    assertTableCount("relay_receipts", 1)
+  }
+
+  @Test
+  fun inboundEnvelopeRequiresValidSignatureAndExactDuplicateRemainsDurable() {
+    val envelopeBytes = createValidInboundEnvelope()
+    val decoded = TransportEnvelopeV1.decode(envelopeBytes)
+
+    val first = repository.persistInboundEnvelope(envelopeBytes, receivedAt = 7_000L)
+    assertTrue(first is InboundPersistResult.Stored)
+    assertTrue(repository.hasSeenInboundMessage(decoded.messageId, decoded.payloadDigest))
+
+    val duplicate = repository.persistInboundEnvelope(envelopeBytes.copyOf(), receivedAt = 7_100L)
+    assertTrue(duplicate is InboundPersistResult.DuplicateIgnored)
+    assertTableCount("inbound_envelopes", 1)
+    assertTableCount("seen_messages", 1)
+
+    val corruptedSignature = envelopeBytes.copyOf().also { bytes ->
+      bytes[bytes.lastIndex] = (bytes.last().toInt() xor 0x01).toByte()
+    }
+    val rejected = repository.persistInboundEnvelope(corruptedSignature, receivedAt = 7_200L)
+    assertTrue(rejected is InboundPersistResult.ValidationFailed)
+    assertTableCount("inbound_envelopes", 1)
+  }
+
+  @Test
+  fun inboundDeliveryLeaseSurvivesReopenAndRetryCannotDowngradeServerAcceptance() {
+    val envelopeBytes = createValidInboundEnvelope()
+    val stored = repository.persistInboundEnvelope(envelopeBytes, receivedAt = 8_000L)
+    assertTrue(stored is InboundPersistResult.Stored)
+
+    val firstClaim = repository.listDueInbound(now = 8_000L).single()
+    assertEquals(1, firstClaim.attemptCount)
+    assertTrue(repository.listDueInbound(now = 67_999L).isEmpty())
+
+    database.close()
+    database = SagipDatabase(context)
+    repository = EmergencyRepository(database)
+
+    val recoveredClaim = repository.listDueInbound(now = 68_000L).single()
+    assertEquals(firstClaim.messageId, recoveredClaim.messageId)
+    assertEquals(2, recoveredClaim.attemptCount)
+
+    repository.markInboundServerAccepted(recoveredClaim.messageId, now = 68_100L)
+    repository.scheduleInboundRetry(
+      messageId = recoveredClaim.messageId,
+      now = 68_200L,
+      jitterUnit = 0.5,
+    )
+
+    database.readableDatabase.rawQuery(
+      "SELECT delivery_state FROM inbound_envelopes WHERE message_id = ?",
+      arrayOf(recoveredClaim.messageId),
+    ).use { cursor ->
+      assertTrue(cursor.moveToFirst())
+      assertEquals("SERVER_ACCEPTED", cursor.getString(0))
+    }
   }
 
   @Test
@@ -382,6 +536,41 @@ class EmergencyRepositoryInstrumentedTest {
       null,
     ).use { cursor ->
       assertTrue(cursor.moveToFirst())
+    }
+  }
+
+  private fun createValidInboundEnvelope(): ByteArray {
+    return TransportEnvelopeV1.create(
+      EnvelopeUnsignedInput(
+        messageId = UUID.randomUUID().toString(),
+        reportId = UUID.randomUUID().toString(),
+        revision = 1,
+        createdAt = 7_000L,
+        expiresAt = null,
+        priority = 0,
+        payload = EmergencyPayloadV1.encode(
+          emergencyType = EmergencyType.MEDICAL,
+          urgency = Urgency.IMMEDIATE_DANGER,
+          location = null,
+        ),
+      ),
+      JcaTestSigningIdentity(),
+    )
+  }
+
+  private class JcaTestSigningIdentity : SigningIdentity {
+    private val keyPair: KeyPair = KeyPairGenerator.getInstance("EC").run {
+      initialize(ECGenParameterSpec("secp256r1"))
+      generateKeyPair()
+    }
+
+    override val publicKeyDer: ByteArray = keyPair.public.encoded
+    override val keyId: ByteArray = MessageDigest.getInstance("SHA-256").digest(publicKeyDer)
+
+    override fun sign(data: ByteArray): ByteArray = Signature.getInstance("SHA256withECDSA").run {
+      initSign(keyPair.private)
+      update(data)
+      sign()
     }
   }
 

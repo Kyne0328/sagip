@@ -64,6 +64,27 @@ def configuredSagipBackendBaseUrl =
         ?.toString()
         ?.trim()
 
+def releaseSetting = { String name ->
+    (project.findProperty(name) ?: System.getenv(name))?.toString()?.trim()
+}
+def sagipReleaseKeystorePath = releaseSetting("SAGIP_RELEASE_KEYSTORE_PATH")
+def sagipReleaseKeystorePassword = releaseSetting("SAGIP_RELEASE_KEYSTORE_PASSWORD")
+def sagipReleaseKeyAlias = releaseSetting("SAGIP_RELEASE_KEY_ALIAS")
+def sagipReleaseKeyPassword = releaseSetting("SAGIP_RELEASE_KEY_PASSWORD")
+def configuredSagipVersionCode = releaseSetting("SAGIP_VERSION_CODE")
+def configuredSagipVersionName = releaseSetting("SAGIP_VERSION_NAME")
+def sagipVersionCode =
+    configuredSagipVersionCode != null && configuredSagipVersionCode ==~ /[1-9][0-9]*/
+        ? configuredSagipVersionCode.toInteger()
+        : 1
+def sagipVersionName = configuredSagipVersionName ?: "1.0"
+def hasSagipReleaseSigning = [
+    sagipReleaseKeystorePath,
+    sagipReleaseKeystorePassword,
+    sagipReleaseKeyAlias,
+    sagipReleaseKeyPassword,
+].every { it != null && !it.isEmpty() }
+
 def buildConfigString = { String value ->
     '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
 }
@@ -96,8 +117,8 @@ android {
         applicationId "org.sagip.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode sagipVersionCode
+        versionName sagipVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
     signingConfigs {
@@ -106,6 +127,14 @@ android {
             storePassword 'android'
             keyAlias 'androiddebugkey'
             keyPassword 'android'
+        }
+        if (hasSagipReleaseSigning) {
+            release {
+                storeFile file(sagipReleaseKeystorePath)
+                storePassword sagipReleaseKeystorePassword
+                keyAlias sagipReleaseKeyAlias
+                keyPassword sagipReleaseKeyPassword
+            }
         }
     }
     buildTypes {
@@ -116,8 +145,9 @@ android {
             manifestPlaceholders = [usesCleartextTraffic: "true"]
         }
         release {
-            // Production signing is configured separately before release distribution.
-            signingConfig signingConfigs.debug
+            if (hasSagipReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
 
@@ -130,7 +160,7 @@ android {
     }
 }
 
-tasks.register("validateSagipReleaseBackend") {
+tasks.register("validateSagipReleaseConfiguration") {
     doLast {
         if (!configuredSagipBackendBaseUrl) {
             throw new GradleException(
@@ -141,16 +171,39 @@ tasks.register("validateSagipReleaseBackend") {
         if (!configuredSagipBackendBaseUrl.startsWith("https://")) {
             throw new GradleException("Release SAGIP_BACKEND_BASE_URL must use HTTPS")
         }
+        if (!configuredSagipVersionCode || !(configuredSagipVersionCode ==~ /[1-9][0-9]*/)) {
+            throw new GradleException(
+                "SAGIP_VERSION_CODE is required for release builds and must be a positive integer"
+            )
+        }
+        if (!configuredSagipVersionName) {
+            throw new GradleException("SAGIP_VERSION_NAME is required for release builds")
+        }
+        if (!hasSagipReleaseSigning) {
+            throw new GradleException(
+                "Production release signing is required. Configure " +
+                "SAGIP_RELEASE_KEYSTORE_PATH, SAGIP_RELEASE_KEYSTORE_PASSWORD, " +
+                "SAGIP_RELEASE_KEY_ALIAS, and SAGIP_RELEASE_KEY_PASSWORD."
+            )
+        }
+        if (!file(sagipReleaseKeystorePath).isFile()) {
+            throw new GradleException("SAGIP_RELEASE_KEYSTORE_PATH must point to an existing keystore file")
+        }
     }
 }
 
 tasks.matching { it.name == "preReleaseBuild" }.configureEach {
-    dependsOn("validateSagipReleaseBackend")
+    dependsOn("validateSagipReleaseConfiguration")
 }
 
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
+
+    // Production security primitives: reviewed HPKE implementation and maintained encrypted SQLite.
+    implementation("com.google.crypto.tink:tink-android:1.23.0")
+    implementation("net.zetetic:sqlcipher-android:4.17.0@aar")
+    implementation("androidx.sqlite:sqlite:2.6.2")
 
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")

@@ -22,8 +22,11 @@ internal object TransportReadiness {
     now: Long,
   ) {
     requireReady(preparationState, envelopeBytes)
-    require(deliveryState == EmergencyRepository.DELIVERY_PENDING) {
-      "Outbound envelope is not pending delivery"
+    require(
+      deliveryState == EmergencyRepository.DELIVERY_PENDING ||
+        deliveryState == EmergencyRepository.DELIVERY_RELAYED_TO_PEER
+    ) {
+      "Outbound envelope is not eligible for delivery"
     }
     require(nextAttemptAt <= now) {
       "Outbound envelope retry lease is not due"

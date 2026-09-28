@@ -6,17 +6,25 @@ on:
       - 'field-test-*'
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: sagip-field-test-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   android-field-test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     env:
       SAGIP_BACKEND_BASE_URL: https://br-shy-brook-b3mhu6ho-api.compute.c-4.ap-southeast-1.aws.neon.tech
 
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -40,6 +48,9 @@ jobs:
         shell: bash
         run: |
           sdkmanager "platforms;android-36" "build-tools;36.1.0" "ndk;27.0.12077973"
+
+      - name: Verify hosted field-test backend health
+        run: node scripts/verify-backend.mjs "$SAGIP_BACKEND_BASE_URL" --health-only
 
       - name: Install app dependencies
         run: npm ci
@@ -78,28 +89,52 @@ jobs:
           The APK is a debug-signed field-test build configured for the hosted SAGIP Neon HTTPS backend in Singapore.
           No database password, Neon API key, or responder bearer credential is embedded in the APK.
 
-          Verified before this release:
+          Automated in this workflow:
+          - hosted backend `/healthz` check
           - root Jest, TypeScript, and ESLint checks
           - backend tests, TypeScript, and ESLint
-          - Android unit/build checks
-          - Android connected instrumentation on a physical POCO F6 and Pixel 4 emulator
-          - live Neon PostgreSQL migrations and function-to-database connectivity
-          - eight concurrent copies of one valid signed envelope converging on one canonical live PostgreSQL incident/message/receipt
+          - Android unit tests and debug APK build
+          - SHA-256 checksum generation
 
-          Still required before production:
+          This workflow does not re-run physical-device, live-database concurrency, or end-to-end field acceptance. Those results must be tracked separately and must not be inferred from a successful field-test build.
+
+          Still required before production unless newer evidence explicitly closes the gate:
           - complete two-physical-phone BLE custody A -> B
           - physical SGA1 responder ACK return B -> A
           - production Android signing (this artifact is debug-signed)
-          - end-to-end payload encryption/key distribution
-          - encrypted on-device SQLite storage
-          - production-grade distributed rate limiting and uptime/SLA
+          - production validation of end-to-end payload encryption and responder key distribution
+          - real-device validation of encrypted on-device SQLite migration/reopen behavior
+          - live verification of the production security/rate-limit configuration and operational uptime targets
 
           Use this APK with the private physical testing runbook. Do not treat local save or peer relay as responder receipt.
           EOF
 
+      - name: Upload field-test release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: sagip-field-test-${{ github.ref_name }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-field-test:
+    name: Publish GitHub field-test pre-release
+    needs: android-field-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download field-test release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: sagip-field-test-${{ github.ref_name }}
+          path: dist
+
       - name: Publish GitHub pre-release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         shell: bash
         run: |
           gh release create "$GITHUB_REF_NAME" \

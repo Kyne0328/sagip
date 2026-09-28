@@ -283,7 +283,7 @@ class BleCentralManager(
         return
       }
       val decoded = try {
-        TransportEnvelopeV1.decode(currentWork.envelopeBytes)
+        TransportEnvelope.decodeAndVerify(currentWork.envelopeBytes)
       } catch (_: Exception) {
         gatt.disconnect()
         return
@@ -340,23 +340,30 @@ class BleCentralManager(
         val decisionByte = characteristic.value?.firstOrNull() ?: OfferDecision.REJECT_UNSUPPORTED.code
         val decision = OfferDecision.fromCode(decisionByte)
 
-        if (decision == OfferDecision.ACCEPT) {
-          val payloadLimit = maxOf(16, negotiatedMtu - BleChunkCodec.FRAME_OVERHEAD)
-          chunksToSend = try {
-            BleChunkCodec.encodeChunks(currentWork.envelopeBytes, payloadLimit)
-          } catch (_: Exception) {
-            gatt.disconnect()
-            return
+        when (decision) {
+          OfferDecision.ACCEPT -> {
+            val payloadLimit = maxOf(16, negotiatedMtu - BleChunkCodec.FRAME_OVERHEAD)
+            chunksToSend = try {
+              BleChunkCodec.encodeChunks(currentWork.envelopeBytes, payloadLimit)
+            } catch (_: Exception) {
+              gatt.disconnect()
+              return
+            }
+            chunkIndex = 0
+            sendNextChunk(gatt)
           }
-          chunkIndex = 0
-          sendNextChunk(gatt)
-        } else {
-          if (transfer != null && !attemptCompleted) {
-            completeAttempt(transfer, "RETRYABLE_FAILURE", "PEER_${decision.name}")
-            attemptCompleted = true
+          OfferDecision.ALREADY_HAVE -> {
+            // A peer with a durable inbound copy re-emits the normal custody ACK.
+            // Keep the connection alive for that notification; the existing
+            // connection timeout remains the retry fallback for older peers.
           }
-          // Peer already has it or rejected, check if we can share a return ACK before disconnecting
-          syncReturnAckAndFinish(gatt)
+          else -> {
+            if (transfer != null && !attemptCompleted) {
+              completeAttempt(transfer, "RETRYABLE_FAILURE", "PEER_${decision.name}")
+              attemptCompleted = true
+            }
+            syncReturnAckAndFinish(gatt)
+          }
         }
       } else if (characteristic.uuid == BleProtocolConstants.CHARACTERISTIC_RETURN_ACK_UUID) {
         if (status == BluetoothGatt.GATT_SUCCESS) {
@@ -416,7 +423,7 @@ class BleCentralManager(
         }
 
         val decoded = try {
-          TransportEnvelopeV1.decode(currentWork.envelopeBytes)
+          TransportEnvelope.decodeAndVerify(currentWork.envelopeBytes)
         } catch (_: Exception) {
           gatt.disconnect()
           return

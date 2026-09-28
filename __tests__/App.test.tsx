@@ -53,8 +53,16 @@ beforeEach(() => {
   core.startBleRelay.mockResolvedValue(true);
 });
 
-test('shows an offline-safe SOS entry point with accessibility attributes', async () => {
+test('shows SAGIP branding and an offline-safe SOS entry point with accessibility attributes', async () => {
   const renderer = await renderApp();
+  expect(
+    renderer.root.findByProps({
+      accessibilityLabel: 'SAGIP locator pin with medical plus logo',
+    }),
+  ).toBeTruthy();
+  expect(JSON.stringify(renderer.toJSON())).toContain(
+    'If internet works, SAGIP sends directly to the server.',
+  );
   const sosBtn = renderer.root.findByProps({accessibilityLabel: 'Create emergency SOS report'});
   expect(sosBtn).toBeTruthy();
   expect(sosBtn.props.accessibilityRole).toBe('button');
@@ -78,7 +86,10 @@ test('creates a local SOS and tells the user it is pending delivery', async () =
     urgency: 'IMMEDIATE_DANGER',
   });
   expect(JSON.stringify(renderer.toJSON())).toContain('SOS saved on this device. You do not need internet.');
-  expect(JSON.stringify(renderer.toJSON())).toContain('Pending delivery');
+  const rendered = JSON.stringify(renderer.toJSON());
+  expect(rendered).toContain('Pending delivery');
+  expect(rendered).toContain('searching for an internet or nearby-device delivery path');
+  expect(renderer.root.findAllByProps({accessibilityRole: 'alert'})).toHaveLength(0);
 });
 
 test('does not claim success when persistence fails', async () => {
@@ -92,6 +103,8 @@ test('does not claim success when persistence fails', async () => {
 
   expect(JSON.stringify(renderer.toJSON())).toContain('SOS was not saved. Please try again.');
   expect(JSON.stringify(renderer.toJSON())).not.toContain('SOS saved on this device. You do not need internet.');
+  const alert = renderer.root.findByProps({accessibilityRole: 'alert'});
+  expect(alert.props.accessibilityLiveRegion).toBe('assertive');
 });
 
 
@@ -110,9 +123,11 @@ test('renders server accepted delivery state when report is accepted', async () 
   }]);
   const renderer = await renderApp();
 
-  expect(JSON.stringify(renderer.toJSON())).toContain('Saved on this device');
-  expect(JSON.stringify(renderer.toJSON())).toContain('Server accepted');
-  expect(JSON.stringify(renderer.toJSON())).not.toContain('Pending delivery');
+  const rendered = JSON.stringify(renderer.toJSON());
+  expect(rendered).toContain('Saved on this device');
+  expect(rendered).toContain('Server accepted');
+  expect(rendered).toContain('Waiting for responder acknowledgement');
+  expect(rendered).not.toContain('Pending delivery');
 });
 
 test('renders relayed to nearby SAGIP device when report is relayed to peer', async () => {
@@ -122,9 +137,11 @@ test('renders relayed to nearby SAGIP device when report is relayed to peer', as
   }]);
   const renderer = await renderApp();
 
-  expect(JSON.stringify(renderer.toJSON())).toContain('Saved on this device');
-  expect(JSON.stringify(renderer.toJSON())).toContain('Relayed to nearby SAGIP device');
-  expect(JSON.stringify(renderer.toJSON())).not.toContain('Pending delivery');
+  const rendered = JSON.stringify(renderer.toJSON());
+  expect(rendered).toContain('Saved on this device');
+  expect(rendered).toContain('Relayed to another SAGIP device');
+  expect(rendered).toContain('does not yet mean the server or a responder received it');
+  expect(rendered).not.toContain('Pending delivery');
 });
 
 test('shows relay permission as separate from local SOS persistence', async () => {
@@ -201,7 +218,66 @@ test('renders responder acknowledged delivery state with callsign and note', asy
   }]);
   const renderer = await renderApp();
 
-  expect(JSON.stringify(renderer.toJSON())).toContain('Saved on this device');
-  expect(JSON.stringify(renderer.toJSON())).toContain('Responder acknowledged');
-  expect(JSON.stringify(renderer.toJSON())).toContain('Help is on the way · RESCUE-ALPHA-1 (Boat team deployed)');
+  const rendered = JSON.stringify(renderer.toJSON());
+  expect(rendered).toContain('Saved on this device');
+  expect(rendered).toContain('Responder acknowledged');
+  expect(rendered).toContain(
+    'Responder has acknowledged your SOS · RESCUE-ALPHA-1 (Boat team deployed)',
+  );
+  expect(rendered).not.toContain('Responders report they are on the way');
+});
+
+test('uses persisted responder status before saying responders are on the way', async () => {
+  core.listEmergencyReports.mockResolvedValue([{
+    ...report,
+    deliveryState: 'RESPONDER_ACKNOWLEDGED' as const,
+    lifecycleState: 'RESPONDER_ACKNOWLEDGED' as const,
+    responderAck: {
+      ackId: 'ack-en-route',
+      responderId: 'resp-456',
+      callsign: 'RESCUE-ALPHA-1',
+      status: 'EN_ROUTE',
+      note: 'Boat team dispatched',
+      acknowledgedAt: 1758369600000,
+    },
+  }]);
+  const renderer = await renderApp();
+
+  expect(JSON.stringify(renderer.toJSON())).toContain(
+    'Responders report they are on the way · RESCUE-ALPHA-1 (Boat team dispatched)',
+  );
+});
+
+test('keeps a permanent delivery failure distinct from local persistence', async () => {
+  core.listEmergencyReports.mockResolvedValue([{
+    ...report,
+    deliveryState: 'PERMANENT_FAILURE' as const,
+  }]);
+  const renderer = await renderApp();
+
+  const failureRendered = JSON.stringify(renderer.toJSON());
+  expect(failureRendered).toContain('Saved on this device');
+  expect(failureRendered).toContain('Delivery failed permanently');
+  expect(failureRendered).toContain('automatic delivery cannot continue for this report');
+});
+
+test('can cancel SOS details without creating a report', async () => {
+  const renderer = await renderApp();
+
+  await act(async () =>
+    renderer.root
+      .findByProps({accessibilityLabel: 'Create emergency SOS report'})
+      .props.onPress(),
+  );
+  await act(async () =>
+    renderer.root.findByProps({accessibilityLabel: 'Medical'}).props.onPress(),
+  );
+  await act(async () =>
+    renderer.root.findByProps({accessibilityLabel: 'Cancel SOS details'}).props.onPress(),
+  );
+
+  expect(core.createEmergencyReport).not.toHaveBeenCalled();
+  expect(
+    renderer.root.findByProps({accessibilityLabel: 'Create emergency SOS report'}),
+  ).toBeTruthy();
 });

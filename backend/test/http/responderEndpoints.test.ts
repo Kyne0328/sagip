@@ -56,6 +56,11 @@ test('responder HTTP endpoints: auth, listing, acknowledging, and public status'
        VALUES ($1, 1, 1, 1, $2, 14599512, 120984222, 500, 1758369590000, 1, 1)`,
       [reportId, Buffer.alloc(32, 9)],
     );
+    await pool.query(
+      `INSERT INTO incident_revisions(report_id, revision, emergency_type, urgency, payload_digest)
+       VALUES ($1, 2, 3, 2, $2)`,
+      [reportId, Buffer.alloc(32, 10)],
+    );
 
     // 1. GET /v1/incidents without auth -> 401
     const unauthRes = await fetch(`${baseUrl}/v1/incidents`);
@@ -72,22 +77,91 @@ test('responder HTTP endpoints: auth, listing, acknowledging, and public status'
       headers: {authorization: `Bearer ${token}`},
     });
     assert.equal(listRes.status, 200);
+    assert.equal(listRes.headers.get('cache-control'), 'no-store');
     const incidents = (await listRes.json()) as Array<{reportId: string; emergencyType: string; urgency: string; location: {latitude: number; longitude: number}}>;
     assert.equal(incidents.length, 1);
     assert.equal(incidents[0]?.reportId, reportId);
-    assert.equal(incidents[0]?.emergencyType, 'MEDICAL');
-    assert.equal(incidents[0]?.urgency, 'IMMEDIATE_DANGER');
+    assert.equal(incidents[0]?.emergencyType, 'FIRE');
+    assert.equal(incidents[0]?.urgency, 'NEED_ASSISTANCE');
     assert.equal(incidents[0]?.location.latitude, 14.599512);
+
+    const invalidFilterRes = await fetch(`${baseUrl}/v1/incidents?status=NOT_A_STATUS`, {
+      headers: {authorization: `Bearer ${token}`},
+    });
+    assert.equal(invalidFilterRes.status, 400);
+
+    const invalidLimitRes = await fetch(`${baseUrl}/v1/incidents?limit=1000`, {
+      headers: {authorization: `Bearer ${token}`},
+    });
+    assert.equal(invalidLimitRes.status, 400);
+
+    const invalidOffsetRes = await fetch(`${baseUrl}/v1/incidents?offset=-1`, {
+      headers: {authorization: `Bearer ${token}`},
+    });
+    assert.equal(invalidOffsetRes.status, 400);
 
     // 4. GET /v1/incidents/:reportId -> 200
     const detailRes = await fetch(`${baseUrl}/v1/incidents/${reportId}`, {
       headers: {authorization: `Bearer ${token}`},
     });
     assert.equal(detailRes.status, 200);
-    const detail = (await detailRes.json()) as {reportId: string; revisions: unknown[]; acknowledgements: unknown[]};
+    assert.equal(detailRes.headers.get('cache-control'), 'no-store');
+    const detail = (await detailRes.json()) as {
+      reportId: string;
+      latestRevision: number;
+      emergencyType: string;
+      location: {latitude: number};
+      revisions: unknown[];
+      acknowledgements: unknown[];
+    };
     assert.equal(detail.reportId, reportId);
-    assert.equal(detail.revisions.length, 1);
+    assert.equal(detail.latestRevision, 2);
+    assert.equal(detail.emergencyType, 'FIRE');
+    assert.equal(detail.location.latitude, 14.599512);
+    assert.equal(detail.revisions.length, 2);
     assert.equal(detail.acknowledgements.length, 0);
+
+    const wrongMediaTypeRes = await fetch(`${baseUrl}/v1/incidents/${reportId}/ack`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'text/plain',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({status: 'ACKNOWLEDGED'}),
+    });
+    assert.equal(wrongMediaTypeRes.status, 415);
+
+    const longNoteRes = await fetch(`${baseUrl}/v1/incidents/${reportId}/ack`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({status: 'ACKNOWLEDGED', note: 'x'.repeat(1001)}),
+    });
+    assert.equal(longNoteRes.status, 400);
+
+    const nullBodyRes = await fetch(`${baseUrl}/v1/incidents/${reportId}/ack`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: 'null',
+    });
+    assert.equal(nullBodyRes.status, 400);
+    assert.deepEqual(await nullBodyRes.json(), {error: 'INVALID_ACK_BODY'});
+
+    const invalidNoteTypeRes = await fetch(`${baseUrl}/v1/incidents/${reportId}/ack`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({status: 'ACKNOWLEDGED', note: {unsafe: true}}),
+    });
+    assert.equal(invalidNoteTypeRes.status, 400);
+    assert.deepEqual(await invalidNoteTypeRes.json(), {error: 'INVALID_ACK_BODY'});
 
     // 5. POST /v1/incidents/:reportId/ack -> 200
     const ackRes = await fetch(`${baseUrl}/v1/incidents/${reportId}/ack`, {

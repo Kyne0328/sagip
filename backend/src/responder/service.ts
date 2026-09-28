@@ -55,7 +55,7 @@ export class ResponderService {
 
   async authenticate(token: string): Promise<ResponderIdentity | null> {
     const trimmed = token.trim();
-    if (!trimmed) return null;
+    if (!trimmed || trimmed.length > 4096) return null;
 
     const hash = createHash('sha256').update(trimmed, 'utf8').digest('hex');
     const result = await this.pool.query<{
@@ -80,25 +80,47 @@ export class ResponderService {
     };
   }
 
-  async listIncidents(statusFilter?: string, limit: number = 50): Promise<IncidentSummary[]> {
-    const safeLimit = Math.min(Math.max(1, limit), 100);
+  async listIncidents(
+    statusFilter?: string,
+    limit: number = 50,
+    offset: number = 0,
+  ): Promise<IncidentSummary[]> {
+    const validFilters = new Set(['PENDING', 'ACKNOWLEDGED', 'EN_ROUTE', 'ON_SCENE', 'RESOLVED']);
+    if (statusFilter && !validFilters.has(statusFilter)) {
+      throw new ResponderValidationError(`Invalid status filter: ${statusFilter}`);
+    }
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      throw new ResponderValidationError(`Invalid limit: ${limit}`);
+    }
+    const safeLimit = limit;
+    if (!Number.isInteger(offset) || offset < 0 || offset > 10_000) {
+      throw new ResponderValidationError(`Invalid offset: ${offset}`);
+    }
 
-    // Query incidents with latest revision and latest ack
+    // Query incidents with latest revision, newest available location, and latest ack.
     const sql = `
-      WITH latest_rev AS (
-        SELECT DISTINCT ON (report_id)
-          report_id,
-          revision,
-          emergency_type,
-          urgency,
-          location_latitude_e6,
-          location_longitude_e6,
-          location_accuracy_cm,
-          location_captured_at_ms,
-          location_source,
-          location_freshness
+      WITH latest_rev_number AS (
+        SELECT report_id, MAX(revision) AS revision
         FROM incident_revisions
-        ORDER BY report_id, revision DESC
+        GROUP BY report_id
+      ),
+      latest_rev AS (
+        SELECT ir.*
+        FROM incident_revisions ir
+        JOIN latest_rev_number lrn
+          ON ir.report_id = lrn.report_id AND ir.revision = lrn.revision
+      ),
+      best_location_rev_number AS (
+        SELECT report_id, MAX(revision) AS revision
+        FROM incident_revisions
+        WHERE location_latitude_e6 IS NOT NULL AND location_longitude_e6 IS NOT NULL
+        GROUP BY report_id
+      ),
+      best_location AS (
+        SELECT ir.*
+        FROM incident_revisions ir
+        JOIN best_location_rev_number blrn
+          ON ir.report_id = blrn.report_id AND ir.revision = blrn.revision
       ),
       latest_ack AS (
         SELECT DISTINCT ON (ra.report_id)
@@ -120,12 +142,12 @@ export class ResponderService {
         lr.revision,
         lr.emergency_type,
         lr.urgency,
-        lr.location_latitude_e6,
-        lr.location_longitude_e6,
-        lr.location_accuracy_cm,
-        lr.location_captured_at_ms,
-        lr.location_source,
-        lr.location_freshness,
+        bl.location_latitude_e6,
+        bl.location_longitude_e6,
+        bl.location_accuracy_cm,
+        bl.location_captured_at_ms,
+        bl.location_source,
+        bl.location_freshness,
         la.ack_id,
         la.responder_id,
         la.callsign,
@@ -134,13 +156,17 @@ export class ResponderService {
         la.acknowledged_at AS ack_time
       FROM incidents i
       JOIN latest_rev lr ON i.report_id = lr.report_id
+      LEFT JOIN best_location bl ON i.report_id = bl.report_id
       LEFT JOIN latest_ack la ON i.report_id = la.report_id
-      ${statusFilter ? 'WHERE ($2 = \'PENDING\' AND la.ack_id IS NULL) OR la.status = $2' : ''}
+      ${statusFilter ? 'WHERE ($3 = \'PENDING\' AND la.ack_id IS NULL) OR la.status = $3' : ''}
       ORDER BY lr.urgency ASC, i.created_at_ms DESC
       LIMIT $1
+      OFFSET $2
     `;
 
-    const params = statusFilter ? [safeLimit, statusFilter] : [safeLimit];
+    const params = statusFilter
+      ? [safeLimit, offset, statusFilter]
+      : [safeLimit, offset];
     const result = await this.pool.query<{
       report_id: string;
       created_at_ms: string | number;
@@ -256,6 +282,8 @@ export class ResponderService {
       urgency: 'NEED_ASSISTANCE',
       location: null,
     };
+    const bestLocation =
+      [...revisions].reverse().find(revision => revision.location !== null)?.location ?? null;
 
     return {
       reportId: inc.report_id,
@@ -264,7 +292,7 @@ export class ResponderService {
       latestRevision: latestRev.revision,
       emergencyType: latestRev.emergencyType,
       urgency: latestRev.urgency,
-      location: latestRev.location,
+      location: bestLocation,
       latestAck: acks.at(-1) ?? null,
       revisions,
       acknowledgements: acks,
@@ -281,6 +309,10 @@ export class ResponderService {
     if (!validStatuses.includes(status)) {
       throw new ResponderValidationError(`Invalid status: ${status}`);
     }
+    const normalizedNote = note?.trim() || null;
+    if (normalizedNote && normalizedNote.length > 1000) {
+      throw new ResponderValidationError('Responder note exceeds 1000 characters');
+    }
 
     // Ensure incident exists
     const inc = await this.pool.query('SELECT 1 FROM incidents WHERE report_id = $1', [reportId]);
@@ -294,7 +326,7 @@ export class ResponderService {
       `INSERT INTO responder_acknowledgements(ack_id, report_id, responder_id, status, note, acknowledged_at)
        VALUES ($1, $2, $3, $4, $5, NOW())
        ON CONFLICT (report_id, responder_id, status) DO NOTHING`,
-      [ackId, reportId, responderId, status, note ?? null],
+      [ackId, reportId, responderId, status, normalizedNote],
     );
 
     // Read back canonical row
