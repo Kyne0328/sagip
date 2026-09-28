@@ -3,11 +3,13 @@ const DASHBOARD_HTML = `<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#0f2740">
+  <meta name="theme-color" content="#0c2942">
   <title>SAGIP Responder Console</title>
   <link rel="stylesheet" href="/responder/styles.css">
 </head>
 <body>
+  <a class="skip-link" href="#mainContent">Skip to emergency operations</a>
+
   <header class="topbar">
     <div class="brand">
       <svg class="brand-mark" viewBox="0 0 108 108" role="img" aria-label="SAGIP locator pin with medical plus logo">
@@ -15,48 +17,84 @@ const DASHBOARD_HTML = `<!doctype html>
         <path d="M54 19C38.5 19 27 30.7 27 45.8C27 64.4 54 90 54 90S81 64.4 81 45.8C81 30.7 69.5 19 54 19Z" fill="#c9302c"></path>
         <path d="M49 31H59V41H69V51H59V61H49V51H39V41H49Z" fill="#fff"></path>
       </svg>
-      <div>
+      <div class="brand-copy">
         <strong>SAGIP</strong>
         <span>Responder Console</span>
       </div>
     </div>
-    <div class="connection">
+    <div class="connection" aria-live="polite">
       <span id="connectionDot" class="dot" aria-hidden="true"></span>
       <span id="connectionText">Not connected</span>
     </div>
   </header>
 
-  <main>
-    <section id="authPanel" class="auth-card" aria-labelledby="authTitle">
-      <p class="eyebrow">AUTHORIZED RESPONDERS</p>
-      <h1 id="authTitle">Connect to emergency operations</h1>
-      <p class="muted">Use a responder bearer token provisioned by the SAGIP backend. The token is kept only in this browser tab session.</p>
-      <form id="authForm">
-        <label for="tokenInput">Responder token</label>
-        <input id="tokenInput" name="token" type="password" autocomplete="off" spellcheck="false" required>
-        <button type="submit">Open console</button>
-      </form>
-      <p id="authError" class="error" role="alert"></p>
+  <main id="mainContent">
+    <h1 class="sr-only">SAGIP Responder Console</h1>
+
+    <section id="authPanel" class="auth-shell" aria-labelledby="authTitle">
+      <div class="auth-context">
+        <p class="eyebrow eyebrow-on-dark">AUTHORIZED RESPONSE ACCESS</p>
+        <h2 id="authTitle">Connect to emergency operations</h2>
+        <p class="auth-lede">Review server-accepted SOS incidents, location evidence, report revisions, and responder status history from one focused workspace.</p>
+
+        <div class="auth-notes" role="list" aria-label="Console safeguards">
+          <div class="auth-note" role="listitem">
+            <span class="auth-note-mark" aria-hidden="true">01</span>
+            <div>
+              <strong>Server-accepted incidents only</strong>
+              <span>Local saves and peer relays do not appear here until the backend accepts the SOS.</span>
+            </div>
+          </div>
+          <div class="auth-note" role="listitem">
+            <span class="auth-note-mark" aria-hidden="true">02</span>
+            <div>
+              <strong>Session-only credential</strong>
+              <span>Your responder token stays in this browser tab session and is cleared when the session ends.</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="auth-card">
+        <p class="section-label">Responder authentication</p>
+        <p class="muted">Use a bearer token provisioned by the SAGIP backend administrator.</p>
+        <form id="authForm">
+          <div class="form-field">
+            <label for="tokenInput">Responder token</label>
+            <p id="tokenHelp" class="field-help">The token is not embedded in this console and is never shown after you connect.</p>
+            <input id="tokenInput" name="token" type="password" autocomplete="off" spellcheck="false" aria-describedby="tokenHelp authError" required>
+          </div>
+          <button type="submit">Connect to console</button>
+        </form>
+        <p id="authError" class="error" role="alert"></p>
+      </div>
     </section>
 
     <section id="consolePanel" class="console hidden" aria-label="Responder operations">
       <div class="toolbar">
-        <div>
-          <p class="eyebrow">LIVE INCIDENTS</p>
-          <h1>Emergency queue</h1>
-          <p id="lastUpdated" class="muted" aria-live="polite">Waiting for server data…</p>
+        <div class="toolbar-copy">
+          <p class="eyebrow">RESPONDER OPERATIONS</p>
+          <h2>Emergency queue</h2>
+          <div class="queue-meta">
+            <span id="incidentCount" aria-live="polite">0 incidents</span>
+            <span aria-hidden="true">•</span>
+            <span id="lastUpdated" aria-live="polite">Waiting for server data…</span>
+          </div>
         </div>
-        <div class="toolbar-actions">
-          <label class="filter-label" for="statusFilter">Status</label>
-          <select id="statusFilter">
-            <option value="">All</option>
-            <option value="PENDING">Pending</option>
-            <option value="ACKNOWLEDGED">Acknowledged</option>
-            <option value="EN_ROUTE">En route</option>
-            <option value="ON_SCENE">On scene</option>
-            <option value="RESOLVED">Resolved</option>
-          </select>
-          <button id="refreshButton" type="button" class="secondary">Refresh</button>
+
+        <div class="toolbar-actions" aria-label="Queue controls">
+          <div class="control-field">
+            <label for="statusFilter">Incident status</label>
+            <select id="statusFilter">
+              <option value="">All statuses</option>
+              <option value="PENDING">Pending</option>
+              <option value="ACKNOWLEDGED">Acknowledged</option>
+              <option value="EN_ROUTE">En route</option>
+              <option value="ON_SCENE">On scene</option>
+              <option value="RESOLVED">Resolved</option>
+            </select>
+          </div>
+          <button id="refreshButton" type="button" class="secondary">Refresh queue</button>
           <button id="logoutButton" type="button" class="ghost">Disconnect</button>
         </div>
       </div>
@@ -65,24 +103,32 @@ const DASHBOARD_HTML = `<!doctype html>
 
       <div class="workspace">
         <section class="incident-column" aria-labelledby="incidentListTitle">
-          <h2 id="incidentListTitle" class="sr-only">Incidents</h2>
+          <div class="panel-header">
+            <div>
+              <p class="section-label">Active view</p>
+              <h3 id="incidentListTitle">Incident queue</h3>
+            </div>
+            <span>Server-accepted reports</span>
+          </div>
           <div id="incidentList" class="incident-list" aria-live="polite"></div>
           <div id="emptyState" class="empty hidden">
-            <strong>No incidents in this view.</strong>
-            <span>New server-accepted SOS reports will appear here.</span>
+            <strong>No incidents in this view</strong>
+            <span>New server-accepted SOS reports matching this filter will appear here.</span>
           </div>
         </section>
 
         <section id="detailPanel" class="detail-panel" aria-labelledby="detailTitle">
           <div id="detailPlaceholder" class="detail-placeholder">
+            <span class="placeholder-mark" aria-hidden="true">+</span>
             <strong>Select an incident</strong>
             <span>Emergency type, urgency, location, revisions, and responder acknowledgements will appear here.</span>
           </div>
+
           <div id="detailContent" class="hidden">
             <div class="detail-heading">
               <div>
                 <p class="eyebrow">INCIDENT DETAIL</p>
-                <h2 id="detailTitle">Incident</h2>
+                <h3 id="detailTitle">Incident</h3>
               </div>
               <span id="detailStatus" class="status-pill">Pending</span>
             </div>
@@ -90,35 +136,53 @@ const DASHBOARD_HTML = `<!doctype html>
             <dl id="detailFacts" class="facts"></dl>
 
             <div id="locationCard" class="location-card hidden">
-              <div>
+              <div class="location-copy">
+                <span class="section-label">LOCATION EVIDENCE</span>
                 <strong>Best available location</strong>
                 <span id="locationText"></span>
                 <span id="locationMeta" class="muted"></span>
               </div>
-              <a id="mapLink" target="_blank" rel="noopener noreferrer">Open map</a>
+              <a id="mapLink" class="map-link" target="_blank" rel="noopener noreferrer">Open map</a>
             </div>
 
             <section class="history-section" aria-labelledby="revisionHistoryTitle">
-              <h3 id="revisionHistoryTitle">Report revision history</h3>
+              <div class="section-heading">
+                <h4 id="revisionHistoryTitle">Report revision history</h4>
+                <span>Accepted SOS revisions</span>
+              </div>
               <div id="revisionHistory" class="history"></div>
             </section>
 
             <section class="history-section" aria-labelledby="historyTitle">
-              <h3 id="historyTitle">Responder history</h3>
+              <div class="section-heading">
+                <h4 id="historyTitle">Responder history</h4>
+                <span>Persisted acknowledgement trail</span>
+              </div>
               <div id="ackHistory" class="history"></div>
             </section>
 
             <form id="ackForm" class="ack-form">
-              <h3>Update response status</h3>
-              <label for="ackStatus">Status</label>
-              <select id="ackStatus" required>
-                <option value="ACKNOWLEDGED">Acknowledged</option>
-                <option value="EN_ROUTE">En route</option>
-                <option value="ON_SCENE">On scene</option>
-                <option value="RESOLVED">Resolved</option>
-              </select>
-              <label for="ackNote">Operational note <span class="muted">(optional)</span></label>
-              <textarea id="ackNote" maxlength="1000" rows="3" placeholder="Example: Boat team dispatched; ETA 8 minutes"></textarea>
+              <div class="form-heading">
+                <p class="section-label">RESPONSE UPDATE</p>
+                <h4>Update response status</h4>
+                <p class="muted">The backend persists responder updates before confirming success.</p>
+              </div>
+
+              <div class="form-field">
+                <label for="ackStatus">Status</label>
+                <select id="ackStatus" required>
+                  <option value="ACKNOWLEDGED">Acknowledged</option>
+                  <option value="EN_ROUTE">En route</option>
+                  <option value="ON_SCENE">On scene</option>
+                  <option value="RESOLVED">Resolved</option>
+                </select>
+              </div>
+
+              <div class="form-field">
+                <label for="ackNote">Operational note <span class="muted">(optional)</span></label>
+                <textarea id="ackNote" maxlength="1000" rows="3" placeholder="Example: Boat team dispatched; ETA 8 minutes"></textarea>
+              </div>
+
               <button id="ackButton" type="submit">Save responder update</button>
               <p id="ackResult" class="form-result" role="status" aria-live="polite"></p>
             </form>
@@ -135,92 +199,648 @@ const DASHBOARD_HTML = `<!doctype html>
 const DASHBOARD_CSS = `:root {
   color-scheme: light;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  background: #f3f6f8;
-  color: #14212b;
+  --navy-950: #071b2b;
+  --navy-900: #0c2942;
+  --navy-800: #123b5d;
+  --navy-700: #0f4c81;
+  --navy-100: #e9f1f7;
+  --ink: #14212b;
+  --ink-soft: #50606c;
+  --ink-faint: #6b7882;
+  --canvas: #eef2f5;
+  --surface: #ffffff;
+  --surface-soft: #f6f8fa;
+  --line: #d5dfe6;
+  --line-strong: #adbdc8;
+  --red-700: #9d2521;
+  --red-100: #fff0ef;
+  --amber-700: #744900;
+  --amber-100: #fff3d5;
+  --green-700: #145b36;
+  --green-100: #e3f3eb;
+  --focus: #f2a900;
+  --shadow-sm: 0 8px 24px rgba(7, 27, 43, 0.08);
+  --shadow-lg: 0 24px 70px rgba(7, 27, 43, 0.14);
+  background: var(--canvas);
+  color: var(--ink);
 }
+
 * { box-sizing: border-box; }
-body { margin: 0; min-height: 100vh; background: #f3f6f8; }
-button, input, select, textarea { font: inherit; }
-button, select, input, textarea { min-height: 48px; }
-button { cursor: pointer; border: 0; border-radius: 12px; padding: 0 16px; font-weight: 800; background: #0f4c81; color: #fff; }
-button:hover { filter: brightness(.96); }
-button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible { outline: 3px solid #f2a900; outline-offset: 2px; }
-button.secondary { background: #173d5c; }
-button.ghost { color: #173d5c; background: #fff; border: 1px solid #aebbc5; }
-.topbar { min-height: 72px; padding: 10px clamp(16px, 3vw, 36px); display: flex; align-items: center; justify-content: space-between; gap: 20px; background: #0f2740; color: #fff; box-shadow: 0 2px 10px rgba(15,39,64,.18); }
-.brand { display: flex; align-items: center; gap: 12px; }
-.brand-mark { width: 48px; height: 48px; flex: 0 0 auto; }
-.brand strong { display: block; font-size: 1.2rem; letter-spacing: .12em; }
-.brand span { display: block; margin-top: 2px; color: #dce8f2; font-size: .88rem; }
-.connection { display: flex; align-items: center; gap: 8px; color: #dce8f2; font-weight: 700; font-size: .88rem; }
-.dot { width: 10px; height: 10px; border-radius: 50%; background: #96a7b5; }
-.dot.online { background: #55c889; }
-main { width: min(1500px, 100%); margin: 0 auto; padding: clamp(18px, 3vw, 36px); }
-.auth-card { width: min(560px, 100%); margin: 7vh auto 0; padding: clamp(24px, 4vw, 40px); background: #fff; border-radius: 24px; box-shadow: 0 18px 55px rgba(35,55,70,.12); }
-.eyebrow { margin: 0 0 6px; color: #a52b28; font-size: .76rem; font-weight: 900; letter-spacing: .12em; }
-h1, h2, h3, p { margin-top: 0; }
-h1 { margin-bottom: 8px; font-size: clamp(1.7rem, 4vw, 2.5rem); line-height: 1.08; }
-h2 { margin-bottom: 8px; }
-.muted { color: #5b6973; }
-.auth-card form, .ack-form { display: grid; gap: 9px; margin-top: 24px; }
-label { font-weight: 800; font-size: .9rem; }
-input, select, textarea { width: 100%; border: 1px solid #aebbc5; border-radius: 10px; background: #fff; color: #14212b; padding: 10px 12px; }
-textarea { min-height: 90px; resize: vertical; }
-.error, .banner-error { color: #8f1e1a; font-weight: 800; }
-.banner-error { margin-bottom: 16px; padding: 12px 14px; background: #fff0ef; border: 1px solid #e4aaa7; border-radius: 10px; }
-.hidden { display: none !important; }
-.toolbar { display: flex; justify-content: space-between; align-items: end; gap: 24px; margin-bottom: 18px; }
-.toolbar h1 { margin-bottom: 4px; }
-.toolbar-actions { display: flex; align-items: end; gap: 10px; flex-wrap: wrap; }
-.filter-label { align-self: center; }
-.workspace { display: grid; grid-template-columns: minmax(320px, .95fr) minmax(420px, 1.4fr); gap: 18px; align-items: start; }
-.incident-column, .detail-panel { min-height: 480px; background: #fff; border-radius: 18px; border: 1px solid #dde5ea; overflow: hidden; }
-.incident-list { display: grid; }
-.incident-card { width: 100%; min-height: 112px; padding: 16px 18px; text-align: left; color: #14212b; background: #fff; border-radius: 0; border-bottom: 1px solid #e2e9ed; display: grid; gap: 8px; }
-.incident-card:hover, .incident-card.selected { background: #eef5fa; filter: none; }
-.incident-top, .incident-meta, .detail-heading { display: flex; justify-content: space-between; gap: 14px; align-items: center; }
-.incident-type { font-size: 1.02rem; font-weight: 900; }
-.urgent { color: #a5221d; }
-.incident-meta { color: #5b6973; font-size: .84rem; align-items: flex-start; }
-.status-pill { display: inline-flex; min-height: 28px; align-items: center; padding: 4px 9px; border-radius: 999px; background: #e8eef3; color: #344d61; font-size: .75rem; font-weight: 900; white-space: nowrap; }
-.status-pill.pending { background: #fff3d5; color: #7a4d00; }
-.status-pill.active { background: #e3f3eb; color: #16623a; }
-.status-pill.resolved { background: #e7eef4; color: #334b5e; }
-.empty { padding: 38px 22px; text-align: center; color: #5b6973; }
-.empty strong, .empty span { display: block; }
-.detail-panel { padding: clamp(20px, 3vw, 28px); }
-.detail-placeholder { min-height: 420px; display: grid; place-content: center; text-align: center; gap: 8px; color: #65737d; }
-.detail-placeholder strong { font-size: 1.2rem; color: #2a3a46; }
-.facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 20px 0; }
-.fact { padding: 13px; border-radius: 12px; background: #f5f8fa; }
-.fact dt { color: #62717c; font-size: .75rem; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; }
-.fact dd { margin: 5px 0 0; font-weight: 850; }
-.location-card { display: flex; justify-content: space-between; gap: 14px; align-items: center; padding: 15px; border: 1px solid #cbd9e3; border-radius: 13px; background: #f2f8fc; }
-.location-card strong, .location-card span { display: block; }
-.location-card a { color: #0f4c81; font-weight: 900; }
-.history-section { margin-top: 24px; }
-.history { display: grid; gap: 10px; }
-.history-item { padding: 12px 14px; border-left: 4px solid #0f4c81; background: #f6f8fa; border-radius: 6px 10px 10px 6px; }
-.history-item strong, .history-item span { display: block; }
-.history-item span { margin-top: 3px; color: #5b6973; font-size: .87rem; }
-.ack-form { margin-top: 26px; padding-top: 22px; border-top: 1px solid #dce4e9; }
-.form-result { min-height: 22px; margin: 0; font-weight: 800; color: #16623a; }
-.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
-@media (max-width: 900px) {
-  .workspace { grid-template-columns: 1fr; }
-  .detail-panel { min-height: 320px; }
-  .detail-placeholder { min-height: 260px; }
+
+html { background: var(--canvas); }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--canvas);
+  color: var(--ink);
+  line-height: 1.5;
 }
-@media (max-width: 640px) {
-  main { padding: 14px; }
-  .topbar { align-items: flex-start; }
-  .connection { margin-top: 10px; }
-  .toolbar { align-items: stretch; flex-direction: column; }
-  .toolbar-actions { display: grid; grid-template-columns: 1fr 1fr; }
-  .filter-label { grid-column: 1 / -1; }
-  .toolbar-actions select { grid-column: 1 / -1; }
+
+button, input, select, textarea { font: inherit; }
+button, select, input, textarea { min-block-size: 3rem; }
+
+button {
+  cursor: pointer;
+  border: 0;
+  border-radius: 0.7rem;
+  padding-inline: 1rem;
+  font-weight: 800;
+  background: var(--navy-700);
+  color: var(--surface);
+  transition: background-color 120ms ease, transform 120ms ease;
+}
+
+button:hover { background: var(--navy-800); }
+button:active { transform: translateY(1px); }
+button:disabled { cursor: wait; opacity: 0.62; transform: none; }
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+a:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+
+button.secondary { background: var(--navy-800); }
+button.secondary:hover { background: var(--navy-950); }
+
+button.ghost {
+  color: var(--navy-800);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+}
+button.ghost:hover { background: var(--surface-soft); }
+
+.skip-link {
+  position: fixed;
+  inset-block-start: 0.75rem;
+  inset-inline-start: 0.75rem;
+  z-index: 100;
+  min-block-size: 3rem;
+  display: inline-flex;
+  align-items: center;
+  transform: translateY(-200%);
+  padding: 0.7rem 0.9rem;
+  border-radius: 0.5rem;
+  background: var(--surface);
+  color: var(--navy-900);
+  font-weight: 800;
+  box-shadow: var(--shadow-sm);
+}
+.skip-link:focus { transform: translateY(0); }
+
+.topbar {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 20;
+  min-block-size: 4.5rem;
+  padding: 0.65rem clamp(1rem, 3vw, 2.25rem);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.25rem;
+  background: var(--navy-900);
+  color: var(--surface);
+  border-block-end: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.brand { display: flex; align-items: center; gap: 0.75rem; min-width: 0; }
+.brand-mark { width: 3rem; height: 3rem; flex: 0 0 auto; }
+.brand-copy { min-width: 0; }
+.brand strong { display: block; font-size: 1.1rem; letter-spacing: 0.14em; line-height: 1.1; }
+.brand span { display: block; margin-block-start: 0.2rem; color: #dce8f2; font-size: 0.86rem; }
+
+.connection {
+  display: inline-flex;
+  min-block-size: 2.25rem;
+  align-items: center;
+  gap: 0.55rem;
+  padding-inline: 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  color: #e5edf3;
+  background: rgba(255, 255, 255, 0.06);
+  font-weight: 800;
+  font-size: 0.84rem;
+  white-space: nowrap;
+}
+
+.dot {
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 50%;
+  background: #96a7b5;
+  box-shadow: 0 0 0 3px rgba(150, 167, 181, 0.16);
+}
+.dot.online {
+  background: #55c889;
+  box-shadow: 0 0 0 3px rgba(85, 200, 137, 0.16);
+}
+
+main {
+  width: min(96rem, 100%);
+  margin-inline: auto;
+  padding: clamp(1rem, 3vw, 2.25rem);
+}
+
+h1, h2, h3, h4, p { margin-block-start: 0; }
+h2, h3, h4 { color: var(--ink); }
+h2 { margin-block-end: 0.55rem; font-size: clamp(1.65rem, 1.2rem + 1.5vw, 2.4rem); line-height: 1.08; letter-spacing: -0.02em; }
+h3 { margin-block-end: 0.45rem; font-size: 1.2rem; line-height: 1.2; }
+h4 { margin-block-end: 0.4rem; font-size: 1rem; line-height: 1.3; }
+
+.muted { color: var(--ink-soft); }
+
+.eyebrow,
+.section-label {
+  margin-block-end: 0.45rem;
+  color: var(--red-700);
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+.eyebrow-on-dark { color: #ffb5af; }
+
+.auth-shell {
+  width: min(65rem, 100%);
+  margin: clamp(1.5rem, 7vh, 4.5rem) auto 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(22rem, 0.92fr);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 1.25rem;
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.auth-context {
+  padding: clamp(2rem, 5vw, 4rem);
+  background: var(--navy-900);
+  color: var(--surface);
+}
+.auth-context h2 { max-width: 11ch; color: var(--surface); }
+.auth-lede {
+  max-width: 37rem;
+  margin-block: 1rem 2.25rem;
+  color: #dce8f2;
+  font-size: 1.02rem;
+}
+
+.auth-notes { display: grid; gap: 1rem; }
+.auth-note {
+  display: grid;
+  grid-template-columns: 2rem minmax(0, 1fr);
+  gap: 0.85rem;
+  align-items: start;
+  padding-block-start: 1rem;
+  border-block-start: 1px solid rgba(255, 255, 255, 0.18);
+}
+.auth-note-mark {
+  color: #ffb5af;
+  font-size: 0.75rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+.auth-note strong,
+.auth-note span { display: block; }
+.auth-note strong { margin-block-end: 0.2rem; color: var(--surface); }
+.auth-note div > span { color: #cbd9e4; font-size: 0.9rem; }
+
+.auth-card { padding: clamp(2rem, 4vw, 3.5rem); align-self: center; }
+.auth-card > .muted { max-width: 34rem; }
+
+#authForm,
+.ack-form { display: grid; gap: 1rem; margin-block-start: 1.5rem; }
+
+.form-field { display: grid; gap: 0.4rem; }
+
+label { font-weight: 800; font-size: 0.9rem; }
+.field-help { margin: 0; color: var(--ink-soft); font-size: 0.84rem; }
+
+input,
+select,
+textarea {
+  width: 100%;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.65rem;
+  background: var(--surface);
+  color: var(--ink);
+  padding: 0.7rem 0.8rem;
+}
+
+input:hover,
+select:hover,
+textarea:hover { border-color: #7d919f; }
+
+input[aria-invalid="true"] { border-color: var(--red-700); background: #fff8f7; }
+textarea { min-block-size: 6rem; resize: vertical; }
+
+.error,
+.banner-error { color: #821d19; font-weight: 800; }
+.error { min-block-size: 1.5rem; margin-block: 0.75rem 0; }
+
+.banner-error {
+  margin-block-end: 1rem;
+  padding: 0.85rem 1rem;
+  background: var(--red-100);
+  border: 1px solid #e4aaa7;
+  border-inline-start: 4px solid var(--red-700);
+  border-radius: 0.65rem;
+}
+
+.hidden { display: none !important; }
+
+.toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 1.5rem;
+  margin-block-end: 1rem;
+  padding: 1.1rem 1.15rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 1rem;
+  box-shadow: var(--shadow-sm);
+}
+
+.toolbar h2 { margin-block-end: 0.35rem; }
+.toolbar-copy { min-width: 0; }
+
+.queue-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  color: var(--ink-soft);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.toolbar-actions {
+  display: flex;
+  align-items: end;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+}
+.control-field { display: grid; gap: 0.35rem; min-width: 11rem; }
+
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(20rem, 0.82fr) minmax(29rem, 1.55fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.incident-column,
+.detail-panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 1rem;
+  box-shadow: var(--shadow-sm);
+}
+
+.incident-column {
+  position: sticky;
+  inset-block-start: 5.5rem;
+  max-block-size: calc(100dvh - 6.5rem);
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+.panel-header {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 2;
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: end;
+  padding: 1rem 1.1rem 0.85rem;
+  background: rgba(255, 255, 255, 0.96);
+  border-block-end: 1px solid var(--line);
+  backdrop-filter: blur(8px);
+}
+.panel-header h3 { margin: 0; }
+.panel-header > span { color: var(--ink-faint); font-size: 0.78rem; text-align: end; }
+
+.incident-list { display: grid; }
+
+.incident-card {
+  position: relative;
+  width: 100%;
+  min-block-size: 7rem;
+  padding: 1rem 1.05rem;
+  text-align: start;
+  color: var(--ink);
+  background: var(--surface);
+  border-radius: 0;
+  border-block-end: 1px solid #e2e9ed;
+  border-inline-start: 4px solid transparent;
+  display: grid;
+  gap: 0.55rem;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.incident-card:hover {
+  background: #f1f6fa;
+  transform: none;
+}
+
+.incident-card.selected,
+.incident-card[aria-current="true"] {
+  background: var(--navy-100);
+  border-inline-start-color: var(--navy-700);
+}
+
+.incident-top,
+.incident-meta,
+.detail-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.85rem;
+  align-items: center;
+}
+
+.incident-type { font-size: 1rem; font-weight: 900; }
+.urgent { color: var(--red-700); }
+
+.incident-meta {
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+  align-items: flex-start;
+}
+
+.status-pill {
+  display: inline-flex;
+  min-block-size: 1.9rem;
+  align-items: center;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid #cdd9e2;
+  border-radius: 999px;
+  background: #e8eef3;
+  color: #344d61;
+  font-size: 0.72rem;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.status-pill.pending {
+  border-color: #e5c779;
+  background: var(--amber-100);
+  color: var(--amber-700);
+}
+.status-pill.active {
+  border-color: #9acdb2;
+  background: var(--green-100);
+  color: var(--green-700);
+}
+.status-pill.resolved {
+  border-color: #cbd7df;
+  background: #e7eef4;
+  color: #334b5e;
+}
+
+.empty {
+  padding: 3rem 1.5rem;
+  text-align: center;
+  color: var(--ink-soft);
+}
+.empty strong,
+.empty span { display: block; }
+.empty strong { margin-block-end: 0.3rem; color: var(--ink); }
+
+.detail-panel {
+  min-block-size: 38rem;
+  padding: clamp(1.25rem, 3vw, 2rem);
+}
+
+.detail-placeholder {
+  min-block-size: 34rem;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  text-align: center;
+  gap: 0.6rem;
+  color: var(--ink-soft);
+}
+.placeholder-mark {
+  display: grid;
+  width: 3rem;
+  height: 3rem;
+  place-items: center;
+  margin-block-end: 0.25rem;
+  border: 1px solid #c9d6df;
+  border-radius: 50%;
+  background: var(--navy-100);
+  color: var(--red-700);
+  font-size: 1.65rem;
+  font-weight: 600;
+}
+.detail-placeholder strong { font-size: 1.15rem; color: var(--ink); }
+.detail-placeholder > span:last-child { max-width: 34rem; }
+
+.facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-block: 1.25rem;
+}
+
+.fact {
+  min-width: 0;
+  padding: 0.9rem;
+  border: 1px solid #e1e8ed;
+  border-radius: 0.75rem;
+  background: var(--surface-soft);
+}
+.fact dt {
+  color: var(--ink-faint);
+  font-size: 0.7rem;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.fact dd {
+  margin: 0.3rem 0 0;
+  font-weight: 850;
+  overflow-wrap: anywhere;
+}
+
+.location-card {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+  padding: 1rem;
+  border: 1px solid #bed3e1;
+  border-inline-start: 4px solid var(--navy-700);
+  border-radius: 0.8rem;
+  background: #f2f8fc;
+}
+
+.location-copy strong,
+.location-copy > span { display: block; }
+.location-copy strong { margin-block: 0.15rem 0.1rem; }
+
+.map-link {
+  display: inline-flex;
+  min-block-size: 3rem;
+  align-items: center;
+  justify-content: center;
+  padding-inline: 0.9rem;
+  border: 1px solid #9bb8cc;
+  border-radius: 0.65rem;
+  color: var(--navy-700);
+  background: var(--surface);
+  font-weight: 900;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.map-link:hover { background: var(--navy-100); }
+
+.history-section { margin-block-start: 1.6rem; }
+
+.section-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+  margin-block-end: 0.7rem;
+}
+.section-heading h4 { margin: 0; }
+.section-heading span { color: var(--ink-faint); font-size: 0.78rem; }
+
+.history { display: grid; gap: 0.65rem; }
+
+.history-item {
+  padding: 0.8rem 0.9rem;
+  border: 1px solid #e1e8ed;
+  border-inline-start: 4px solid var(--navy-700);
+  background: var(--surface-soft);
+  border-radius: 0.45rem 0.7rem 0.7rem 0.45rem;
+}
+.history-item strong,
+.history-item span { display: block; }
+.history-item span { margin-block-start: 0.2rem; color: var(--ink-soft); font-size: 0.84rem; }
+
+.ack-form {
+  margin-block-start: 1.75rem;
+  padding: 1.15rem;
+  border: 1px solid var(--line);
+  border-radius: 0.85rem;
+  background: var(--surface-soft);
+}
+.form-heading { margin-block-end: 0.15rem; }
+.form-heading h4 { margin-block-end: 0.25rem; }
+.form-heading p:last-child { margin: 0; font-size: 0.86rem; }
+
+.form-result {
+  min-block-size: 1.4rem;
+  margin: 0;
+  font-weight: 800;
+  color: var(--green-700);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 62rem) {
+  .auth-shell { grid-template-columns: 1fr; }
+  .auth-context { padding-block: 2rem; }
+  .auth-context h2 { max-width: none; }
+  .auth-lede { margin-block-end: 1.5rem; }
+  .auth-notes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+  .workspace { grid-template-columns: 1fr; }
+  .incident-column {
+    position: static;
+    max-block-size: none;
+    overflow: visible;
+  }
+  .detail-panel { min-block-size: 24rem; }
+  .detail-placeholder { min-block-size: 20rem; }
+}
+
+@media (max-width: 43rem) {
+  main { padding: 0.85rem; }
+
+  .topbar {
+    position: static;
+    align-items: flex-start;
+    gap: 0.75rem;
+  }
+  .connection { margin-block-start: 0.35rem; }
+
+  .auth-shell {
+    margin-block-start: 0.5rem;
+    border-radius: 0.9rem;
+  }
+  .auth-context,
+  .auth-card { padding: 1.4rem; }
+  .auth-notes { grid-template-columns: 1fr; }
+
+  .toolbar {
+    align-items: stretch;
+    flex-direction: column;
+    padding: 1rem;
+  }
+  .toolbar-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+  .control-field { grid-column: 1 / -1; }
+  .toolbar-actions button { width: 100%; }
+
+  .panel-header { align-items: start; }
+  .panel-header > span { max-width: 8rem; }
+
+  .incident-top,
+  .incident-meta { align-items: flex-start; }
+  .incident-meta { flex-direction: column; gap: 0.2rem; }
+
   .facts { grid-template-columns: 1fr; }
-  .location-card { align-items: flex-start; flex-direction: column; }
+  .detail-heading { align-items: flex-start; }
+  .location-card { align-items: stretch; flex-direction: column; }
+  .map-link { align-self: stretch; }
+  .section-heading { align-items: flex-start; flex-direction: column; gap: 0.15rem; }
+}
+
+@media (pointer: coarse) {
+  button,
+  select,
+  input,
+  textarea,
+  .map-link { min-block-size: 3.25rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button,
+  .incident-card { transition: none; }
+}
+
+@media (forced-colors: active) {
+  .dot,
+  .dot.online,
+  .status-pill,
+  .placeholder-mark,
+  .location-card,
+  .incident-card.selected,
+  .incident-card[aria-current="true"] {
+    forced-color-adjust: auto;
+  }
 }`;
 
 const DASHBOARD_JS = `(() => {
@@ -239,6 +859,7 @@ const DASHBOARD_JS = `(() => {
   const authError = document.getElementById('authError');
   const incidentList = document.getElementById('incidentList');
   const emptyState = document.getElementById('emptyState');
+  const incidentCount = document.getElementById('incidentCount');
   const detailPlaceholder = document.getElementById('detailPlaceholder');
   const detailContent = document.getElementById('detailContent');
   const detailTitle = document.getElementById('detailTitle');
@@ -272,7 +893,19 @@ const DASHBOARD_JS = `(() => {
   }
 
   function statusLabel(incident) {
-    return incident.latestAck ? incident.latestAck.status.replaceAll('_', ' ') : 'PENDING';
+    return incident.latestAck ? incident.latestAck.status : 'PENDING';
+  }
+
+  function formatWords(value, fallback) {
+    return String(value || fallback)
+      .toLowerCase()
+      .split('_')
+      .map((word) => word ? word.charAt(0).toUpperCase() + word.slice(1) : word)
+      .join(' ');
+  }
+
+  function formatStatus(value) {
+    return formatWords(value, 'PENDING');
   }
 
   function statusClass(status) {
@@ -288,7 +921,7 @@ const DASHBOARD_JS = `(() => {
   }
 
   function formatEmergencyType(value) {
-    return String(value || 'OTHER').replaceAll('_', ' ');
+    return formatWords(value, 'OTHER');
   }
 
   function createText(tag, className, text) {
@@ -332,6 +965,7 @@ const DASHBOARD_JS = `(() => {
     consolePanel.classList.add('hidden');
     authPanel.classList.remove('hidden');
     tokenInput.value = '';
+    tokenInput.removeAttribute('aria-invalid');
     authError.textContent = message || '';
     setConnected(false);
   }
@@ -354,13 +988,16 @@ const DASHBOARD_JS = `(() => {
     const card = document.createElement('button');
     card.type = 'button';
     card.className = 'incident-card';
-    if (incident.reportId === selectedReportId) card.classList.add('selected');
-    card.setAttribute('aria-label', formatEmergencyType(incident.emergencyType) + ' incident, ' + statusLabel(incident));
+    if (incident.reportId === selectedReportId) {
+      card.classList.add('selected');
+      card.setAttribute('aria-current', 'true');
+    }
+    card.setAttribute('aria-label', formatEmergencyType(incident.emergencyType) + ' incident, ' + formatStatus(statusLabel(incident)));
 
     const top = document.createElement('div');
     top.className = 'incident-top';
     const type = createText('span', 'incident-type' + (incident.urgency === 'IMMEDIATE_DANGER' ? ' urgent' : ''), formatEmergencyType(incident.emergencyType));
-    const pill = createText('span', 'status-pill ' + statusClass(statusLabel(incident)), statusLabel(incident));
+    const pill = createText('span', 'status-pill ' + statusClass(statusLabel(incident)), formatStatus(statusLabel(incident)));
     top.append(type, pill);
 
     const meta = document.createElement('div');
@@ -378,8 +1015,12 @@ const DASHBOARD_JS = `(() => {
     card.addEventListener('click', () => {
       selectedReportId = incident.reportId;
       void loadDetail(incident.reportId);
-      Array.from(incidentList.children).forEach((item) => item.classList.remove('selected'));
+      Array.from(incidentList.children).forEach((item) => {
+        item.classList.remove('selected');
+        item.removeAttribute('aria-current');
+      });
       card.classList.add('selected');
+      card.setAttribute('aria-current', 'true');
     });
     return card;
   }
@@ -387,6 +1028,7 @@ const DASHBOARD_JS = `(() => {
   function renderIncidents(incidents) {
     incidentList.replaceChildren();
     emptyState.classList.toggle('hidden', incidents.length !== 0);
+    incidentCount.textContent = incidents.length + (incidents.length === 1 ? ' incident' : ' incidents');
     incidents.forEach((incident) => incidentList.appendChild(makeIncidentCard(incident)));
   }
 
@@ -472,7 +1114,7 @@ const DASHBOARD_JS = `(() => {
     detailContent.classList.remove('hidden');
     detailTitle.textContent = formatEmergencyType(detail.emergencyType) + ' emergency';
     const status = statusLabel(detail);
-    detailStatus.textContent = status;
+    detailStatus.textContent = formatStatus(status);
     detailStatus.className = 'status-pill ' + statusClass(status);
 
     detailFacts.replaceChildren();
@@ -526,12 +1168,20 @@ const DASHBOARD_JS = `(() => {
     authError.textContent = '';
     const candidate = tokenInput.value.trim();
     if (!candidate) {
+      tokenInput.setAttribute('aria-invalid', 'true');
       authError.textContent = 'Enter a responder token.';
+      tokenInput.focus();
       return;
     }
+    tokenInput.removeAttribute('aria-invalid');
     token = candidate;
     sessionStorage.setItem(TOKEN_KEY, token);
     await refreshIncidents(true);
+  });
+
+  tokenInput.addEventListener('input', () => {
+    tokenInput.removeAttribute('aria-invalid');
+    authError.textContent = '';
   });
 
   document.getElementById('refreshButton').addEventListener('click', () => {
@@ -563,7 +1213,7 @@ const DASHBOARD_JS = `(() => {
           note: ackNote.value.trim() || null
         })
       });
-      ackResult.textContent = 'Saved: ' + ack.status.replaceAll('_', ' ');
+      ackResult.textContent = 'Saved: ' + formatStatus(ack.status);
       ackNote.value = '';
       await refreshIncidents(false);
       await loadDetail(selectedReportId);
