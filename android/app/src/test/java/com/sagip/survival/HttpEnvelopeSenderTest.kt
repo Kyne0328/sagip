@@ -34,6 +34,40 @@ class HttpEnvelopeSenderTest {
   }
 
   @Test
+  fun `parses responder acknowledgement with authoritative server timestamp`() {
+    val json = """
+      {
+        "reportId": "33333333-3333-3333-3333-333333333333",
+        "serverAccepted": true,
+        "acceptedAt": "2026-09-20T10:00:00.000Z",
+        "latestAck": {
+          "ackId": "44444444-4444-4444-4444-444444444444",
+          "callsign": "RESCUE-1",
+          "status": "EN_ROUTE",
+          "note": "Boat team dispatched",
+          "acknowledgedAt": "2026-09-20T10:05:00.000Z"
+        }
+      }
+    """.trimIndent()
+
+    val ack = HttpEnvelopeSender.parseResponderAck("33333333-3333-3333-3333-333333333333", json)
+
+    requireNotNull(ack)
+    assertEquals("EN_ROUTE", ack.status)
+    assertEquals("RESCUE-1", ack.callsign)
+    assertEquals(java.time.Instant.parse("2026-09-20T10:05:00.000Z").toEpochMilli(), ack.acknowledgedAt)
+  }
+
+  @Test
+  fun `rejects responder acknowledgement without a valid server timestamp`() {
+    val json = """
+      {"latestAck":{"ackId":"ack-1","callsign":"RESCUE-1","status":"ACKNOWLEDGED"}}
+    """.trimIndent()
+
+    assertEquals(null, HttpEnvelopeSender.parseResponderAck("report-1", json))
+  }
+
+  @Test
   fun `OutboundEnvelope supports content equality and hashCode`() {
     val env1 = OutboundEnvelope("msg-1", byteArrayOf(1, 2, 3))
     val env2 = OutboundEnvelope("msg-1", byteArrayOf(1, 2, 3))

@@ -157,6 +157,7 @@ class DeliveryWorkerTest {
     val retriedInbound = mutableListOf<String>()
     val reportsAwaitingAck = mutableListOf<String>()
     val recordedAcks = mutableListOf<ResponderAck>()
+    val scheduledAckPolls = mutableListOf<Pair<String, Long>>()
 
     override fun listDueInbound(now: Long, limit: Int): List<InboundEnvelope> = inboundList.toList()
 
@@ -176,12 +177,17 @@ class DeliveryWorkerTest {
       return now + 5000L
     }
 
-    override fun listInboundReportsAwaitingAck(limit: Int): List<String> =
+    override fun listInboundReportsAwaitingAck(now: Long, limit: Int): List<String> =
       reportsAwaitingAck.take(limit)
+
+    override fun scheduleInboundResponderAckPoll(reportId: String, now: Long): Long {
+      scheduledAckPolls += reportId to now
+      return now + 30_000L
+    }
 
     override fun recordInboundResponderAck(ack: ResponderAck, now: Long): Boolean {
       recordedAcks += ack
-      reportsAwaitingAck.remove(ack.reportId)
+      if (ack.status == "RESOLVED") reportsAwaitingAck.remove(ack.reportId)
       return true
     }
   }
@@ -271,18 +277,25 @@ class DeliveryWorkerTest {
     DeliveryWorker(store, sender, relayStore = relayStore).runOnce(now = 3000L)
 
     assertEquals(listOf(expectedAck), relayStore.recordedAcks)
-    assertTrue(relayStore.reportsAwaitingAck.isEmpty())
+    assertEquals(listOf("rep-relayed-1"), relayStore.reportsAwaitingAck)
+    assertEquals(listOf("rep-relayed-1" to 3000L), relayStore.scheduledAckPolls)
   }
 
   private class FakeResponderAckStore : ResponderAckStore {
     val reportsAwaitingAck = mutableListOf<String>()
     val recordedAcks = mutableListOf<ResponderAck>()
+    val scheduledAckPolls = mutableListOf<Pair<String, Long>>()
 
-    override fun listReportsAwaitingAck(limit: Int): List<String> = reportsAwaitingAck.take(limit)
+    override fun listReportsAwaitingAck(now: Long, limit: Int): List<String> = reportsAwaitingAck.take(limit)
+
+    override fun scheduleResponderAckPoll(reportId: String, now: Long): Long {
+      scheduledAckPolls += reportId to now
+      return now + 30_000L
+    }
 
     override fun recordResponderAck(ack: ResponderAck, now: Long): Boolean {
       recordedAcks += ack
-      reportsAwaitingAck.remove(ack.reportId)
+      if (ack.status == "RESOLVED") reportsAwaitingAck.remove(ack.reportId)
       return true
     }
   }
@@ -318,6 +331,7 @@ class DeliveryWorkerTest {
     assertEquals("ack-1", ackStore.recordedAcks.first().ackId)
     assertEquals("MEDIC-1", ackStore.recordedAcks.first().callsign)
     assertEquals("ACKNOWLEDGED", ackStore.recordedAcks.first().status)
-    assertTrue(ackStore.reportsAwaitingAck.isEmpty())
+    assertEquals(listOf("rep-1"), ackStore.reportsAwaitingAck)
+    assertEquals(listOf("rep-1" to 2000L), ackStore.scheduledAckPolls)
   }
 }

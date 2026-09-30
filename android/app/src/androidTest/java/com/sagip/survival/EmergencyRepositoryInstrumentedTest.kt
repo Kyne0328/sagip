@@ -423,6 +423,83 @@ class EmergencyRepositoryInstrumentedTest {
   }
 
   @Test
+  fun responderStatusPollingContinuesUntilResolvedAndCannotRegress() {
+    val report = repository.createReport(
+      CreateEmergencyReportInput(EmergencyType.MEDICAL, Urgency.IMMEDIATE_DANGER),
+      location = null,
+      now = 5_000L,
+    )
+    val source = repository.listEnvelopePreparationSources().single()
+    repository.markEnvelopeReady(source.messageId, byteArrayOf(1, 2, 3), now = 5_010L)
+    repository.markServerAccepted(
+      ServerReceipt(
+        receiptVersion = 1,
+        state = "SERVER_ACCEPTED",
+        receiptId = "receipt-status-sync",
+        messageId = source.messageId,
+        reportId = report.reportId,
+        revision = 1,
+        acceptedAt = "2026-09-30T07:00:00.000Z",
+      ),
+      now = 5_100L,
+    )
+
+    assertEquals(listOf(report.reportId), repository.listReportsAwaitingAck(now = 5_100L))
+    assertEquals(35_100L, repository.scheduleResponderAckPoll(report.reportId, now = 5_100L))
+    assertTrue(repository.listReportsAwaitingAck(now = 35_099L).isEmpty())
+
+    assertTrue(
+      repository.recordResponderAck(
+        ResponderAck(
+          ackId = "ack-first",
+          reportId = report.reportId,
+          responderId = "responder-1",
+          callsign = "RESCUE-1",
+          status = "ACKNOWLEDGED",
+          note = null,
+          acknowledgedAt = 6_000L,
+        ),
+        now = 6_000L,
+      ),
+    )
+    assertEquals(listOf(report.reportId), repository.listReportsAwaitingAck(now = 35_100L))
+
+    assertTrue(
+      repository.recordResponderAck(
+        ResponderAck(
+          ackId = "ack-resolved",
+          reportId = report.reportId,
+          responderId = "responder-1",
+          callsign = "RESCUE-1",
+          status = "RESOLVED",
+          note = "Incident resolved",
+          acknowledgedAt = 7_000L,
+        ),
+        now = 7_000L,
+      ),
+    )
+    assertTrue(
+      repository.recordResponderAck(
+        ResponderAck(
+          ackId = "ack-late-low-stage",
+          reportId = report.reportId,
+          responderId = "responder-2",
+          callsign = "RESCUE-2",
+          status = "ACKNOWLEDGED",
+          note = "Late sync",
+          acknowledgedAt = 8_000L,
+        ),
+        now = 8_000L,
+      ),
+    )
+
+    assertTrue(repository.listReportsAwaitingAck(now = 100_000L).isEmpty())
+    val restored = repository.listReports().single()
+    assertEquals("RESOLVED", restored.responderAck?.status)
+    assertEquals("ack-resolved", restored.responderAck?.ackId)
+  }
+
+  @Test
   fun migratesV2OutboundEnvelopeToNeedsPreparationWithoutChangingIdentity() {
     database.close()
     context.deleteDatabase(SagipDatabase.DATABASE_NAME)

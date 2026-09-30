@@ -74,6 +74,7 @@ test('shows SAGIP branding and an offline-safe SOS entry point with accessibilit
 
 test('creates a local SOS and tells the user it is pending delivery', async () => {
   core.createEmergencyReport.mockResolvedValue(report);
+  core.listEmergencyReports.mockResolvedValueOnce([]).mockResolvedValue([report]);
   const renderer = await renderApp();
 
   await act(async () => renderer.root.findByProps({accessibilityLabel: 'Create emergency SOS report'}).props.onPress());
@@ -128,6 +129,48 @@ test('renders server accepted delivery state when report is accepted', async () 
   expect(rendered).toContain('Server accepted');
   expect(rendered).toContain('Waiting for responder acknowledgement');
   expect(rendered).not.toContain('Pending delivery');
+});
+
+test('reconciles a server-accepted report even when delivery processes no new envelope', async () => {
+  jest.useFakeTimers();
+  const acknowledged = {
+    ...report,
+    deliveryState: 'RESPONDER_ACKNOWLEDGED' as const,
+    lifecycleState: 'RESPONDER_ACKNOWLEDGED' as const,
+    responderAck: {
+      ackId: 'ack-refresh',
+      responderId: 'SERVER',
+      callsign: 'RESCUE-REFRESH-1',
+      status: 'EN_ROUTE',
+      note: 'Unit dispatched',
+      acknowledgedAt: 1758369900000,
+    },
+  };
+  core.listEmergencyReports
+    .mockResolvedValueOnce([{...report, deliveryState: 'SERVER_ACCEPTED' as const}])
+    .mockResolvedValue([acknowledged]);
+  core.triggerDelivery.mockResolvedValue(0);
+
+  let renderer: ReactTestRenderer.ReactTestRenderer | null = null;
+  try {
+    renderer = await renderApp();
+    expect(JSON.stringify(renderer.toJSON())).toContain('Server accepted');
+
+    await act(async () => {
+      jest.advanceTimersByTime(10_000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(core.triggerDelivery).toHaveBeenCalled();
+    expect(core.listEmergencyReports).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(renderer.toJSON())).toContain('Responders report they are on the way');
+  } finally {
+    if (renderer) {
+      act(() => renderer?.unmount());
+    }
+    jest.useRealTimers();
+  }
 });
 
 test('renders relayed to nearby SAGIP device when report is relayed to peer', async () => {

@@ -1,10 +1,28 @@
 import {useCallback, useEffect, useState} from 'react';
+import {AppState} from 'react-native';
 
 import {SurvivalCore} from './SurvivalCore';
 import type {
   CreateEmergencyReportInput,
   EmergencyReportSummary,
 } from './types';
+
+const STATUS_SYNC_INTERVAL_MS = 10_000;
+
+export function reportNeedsStatusSync(report: EmergencyReportSummary): boolean {
+  if (
+    report.deliveryState === 'DELIVERY_PENDING' ||
+    report.deliveryState === 'RELAYED_TO_PEER' ||
+    report.deliveryState === 'SERVER_ACCEPTED'
+  ) {
+    return true;
+  }
+
+  return (
+    report.deliveryState === 'RESPONDER_ACKNOWLEDGED' &&
+    report.responderAck?.status !== 'RESOLVED'
+  );
+}
 
 export function useEmergencyReports() {
   const [reports, setReports] = useState<EmergencyReportSummary[]>([]);
@@ -26,24 +44,36 @@ export function useEmergencyReports() {
     restore();
   }, [restore]);
 
-  const hasPending = reports.some(item => item.deliveryState === 'DELIVERY_PENDING');
+  const hasStatusSyncWork = reports.some(reportNeedsStatusSync);
+
+  const syncFromNative = useCallback(async () => {
+    try {
+      await SurvivalCore.triggerDelivery();
+    } catch {
+      // Native/background delivery remains best-effort; SQLite is still authoritative.
+    }
+    await restore();
+  }, [restore]);
 
   useEffect(() => {
-    if (!hasPending) return;
+    if (!hasStatusSyncWork) return;
     const timer = setInterval(() => {
-      SurvivalCore.triggerDelivery()
-        .then(count => {
-          if (count > 0) {
-            restore();
-          }
-        })
-        .catch(() => {});
-    }, 10_000);
+      void syncFromNative();
+    }, STATUS_SYNC_INTERVAL_MS);
     if (typeof (timer as unknown as {unref?: () => void}).unref === 'function') {
       (timer as unknown as {unref: () => void}).unref();
     }
     return () => clearInterval(timer);
-  }, [hasPending, restore]);
+  }, [hasStatusSyncWork, syncFromNative]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', state => {
+      if (state === 'active') {
+        void syncFromNative();
+      }
+    });
+    return () => subscription.remove();
+  }, [syncFromNative]);
 
   const create = useCallback(async (input: CreateEmergencyReportInput) => {
     setSaving(true);
@@ -60,20 +90,10 @@ export function useEmergencyReports() {
       setSaving(false);
     }
 
-    // Best-effort background delivery trigger after durable local save
-    try {
-      SurvivalCore.triggerDelivery()
-        .then(count => {
-          if (count > 0) {
-            restore();
-          }
-        })
-        .catch(() => {});
-    } catch {
-      // Best-effort; background sync will retry when connected
-    }
+    // Best-effort delivery plus immediate reconciliation from authoritative SQLite.
+    void syncFromNative();
     return savedReport;
-  }, [restore]);
+  }, [syncFromNative]);
 
   return {reports, loading, saving, message, create};
 }

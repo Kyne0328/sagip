@@ -152,12 +152,22 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
       FROM reports r
       JOIN outbound_envelopes o ON o.report_id = r.report_id
       LEFT JOIN locations l ON l.report_id = r.report_id
-      LEFT JOIN (
-        SELECT report_id, ack_id, responder_id, callsign, status, note, acknowledged_at
-        FROM responder_acks
-        GROUP BY report_id
-        HAVING acknowledged_at = MAX(acknowledged_at)
-      ) ra ON ra.report_id = r.report_id
+      LEFT JOIN responder_acks ra ON ra.ack_id = (
+        SELECT candidate.ack_id
+        FROM responder_acks candidate
+        WHERE candidate.report_id = r.report_id
+        ORDER BY
+          CASE candidate.status
+            WHEN 'RESOLVED' THEN 4
+            WHEN 'ON_SCENE' THEN 3
+            WHEN 'EN_ROUTE' THEN 2
+            WHEN 'ACKNOWLEDGED' THEN 1
+            ELSE 0
+          END DESC,
+          candidate.acknowledged_at DESC,
+          candidate.ack_id DESC
+        LIMIT 1
+      )
       ORDER BY r.created_at DESC, r.report_id DESC
     """.trimIndent()
 
@@ -418,12 +428,22 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
 
       val transitioned = db.update(
         "outbound_envelopes",
-        ContentValues().apply { put("delivery_state", DELIVERY_SERVER_ACCEPTED) },
+        ContentValues().apply {
+          put("delivery_state", DELIVERY_SERVER_ACCEPTED)
+          put("next_attempt_at", now)
+        },
         "message_id = ? AND delivery_state IN (?, ?)",
         arrayOf(receipt.messageId, DELIVERY_PENDING, DELIVERY_RELAYED_TO_PEER),
       )
       if (transitioned == 1) {
         insertDeliveryEvent(db, reportId, receipt.messageId, EVENT_SERVER_ACCEPTED, now)
+      } else {
+        db.update(
+          "outbound_envelopes",
+          ContentValues().apply { put("next_attempt_at", now) },
+          "message_id = ? AND delivery_state = ?",
+          arrayOf(receipt.messageId, DELIVERY_RESPONDER_ACKNOWLEDGED),
+        )
       }
       db.setTransactionSuccessful()
     } finally {
@@ -800,7 +820,10 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
   override fun markInboundServerAccepted(messageId: String, now: Long) {
     database.writableDatabase.update(
       "inbound_envelopes",
-      ContentValues().apply { put("delivery_state", DELIVERY_SERVER_ACCEPTED) },
+      ContentValues().apply {
+        put("delivery_state", DELIVERY_SERVER_ACCEPTED)
+        put("next_attempt_at", now)
+      },
       "message_id = ? AND delivery_state = ?",
       arrayOf(messageId, DELIVERY_PENDING),
     )
@@ -845,7 +868,7 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
     }
   }
 
-  override fun listInboundReportsAwaitingAck(limit: Int): List<String> {
+  override fun listInboundReportsAwaitingAck(now: Long, limit: Int): List<String> {
     require(limit in 1..100) { "limit must be between 1 and 100" }
     backfillInboundReportIds(maxOf(limit, 20))
     val sql = """
@@ -853,23 +876,35 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
       FROM inbound_envelopes i
       WHERE i.delivery_state = ?
         AND i.report_id IS NOT NULL
+        AND i.next_attempt_at <= ?
         AND NOT EXISTS (
           SELECT 1
           FROM relay_responder_acks a
-          WHERE a.report_id = i.report_id
+          WHERE a.report_id = i.report_id AND a.status = 'RESOLVED'
         )
       GROUP BY i.report_id
-      ORDER BY MIN(i.received_at) ASC
+      ORDER BY MIN(i.next_attempt_at) ASC, MIN(i.received_at) ASC, i.report_id ASC
       LIMIT ?
     """.trimIndent()
     return database.readableDatabase.rawQuery(
       sql,
-      arrayOf(DELIVERY_SERVER_ACCEPTED, limit.toString()),
+      arrayOf(DELIVERY_SERVER_ACCEPTED, now.toString(), limit.toString()),
     ).use { cursor ->
       val result = mutableListOf<String>()
       while (cursor.moveToNext()) result += cursor.getString(0)
       result
     }
+  }
+
+  override fun scheduleInboundResponderAckPoll(reportId: String, now: Long): Long {
+    val nextAttemptAt = now + RESPONDER_ACK_POLL_INTERVAL_MS
+    database.writableDatabase.update(
+      "inbound_envelopes",
+      ContentValues().apply { put("next_attempt_at", nextAttemptAt) },
+      "report_id = ? AND delivery_state = ?",
+      arrayOf(reportId, DELIVERY_SERVER_ACCEPTED),
+    )
+    return nextAttemptAt
   }
 
   override fun recordInboundResponderAck(
@@ -944,17 +979,30 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
     }
   }
 
-  override fun listReportsAwaitingAck(limit: Int): List<String> {
+  override fun listReportsAwaitingAck(now: Long, limit: Int): List<String> {
+    require(limit in 1..100) { "limit must be between 1 and 100" }
     val sql = """
       SELECT r.report_id
       FROM reports r
       JOIN outbound_envelopes o ON o.report_id = r.report_id
-      WHERE o.delivery_state = ? AND r.report_id NOT IN (SELECT report_id FROM responder_acks)
+      WHERE o.delivery_state IN (?, ?)
+        AND o.next_attempt_at <= ?
+        AND NOT EXISTS (
+          SELECT 1
+          FROM responder_acks a
+          WHERE a.report_id = r.report_id AND a.status = 'RESOLVED'
+        )
+      ORDER BY o.next_attempt_at ASC, r.created_at ASC, r.report_id ASC
       LIMIT ?
     """.trimIndent()
     return database.readableDatabase.rawQuery(
       sql,
-      arrayOf(DELIVERY_SERVER_ACCEPTED, limit.toString()),
+      arrayOf(
+        DELIVERY_SERVER_ACCEPTED,
+        DELIVERY_RESPONDER_ACKNOWLEDGED,
+        now.toString(),
+        limit.toString(),
+      ),
     ).use { cursor ->
       val result = mutableListOf<String>()
       while (cursor.moveToNext()) {
@@ -962,6 +1010,17 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
       }
       result
     }
+  }
+
+  override fun scheduleResponderAckPoll(reportId: String, now: Long): Long {
+    val nextAttemptAt = now + RESPONDER_ACK_POLL_INTERVAL_MS
+    database.writableDatabase.update(
+      "outbound_envelopes",
+      ContentValues().apply { put("next_attempt_at", nextAttemptAt) },
+      "report_id = ? AND delivery_state IN (?, ?)",
+      arrayOf(reportId, DELIVERY_SERVER_ACCEPTED, DELIVERY_RESPONDER_ACKNOWLEDGED),
+    )
+    return nextAttemptAt
   }
 
   override fun recordResponderAck(
@@ -1048,7 +1107,16 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
       SELECT ack_id, report_id, responder_id, callsign, status, note, acknowledged_at
       FROM responder_acks
       WHERE report_id = ?
-      ORDER BY acknowledged_at DESC
+      ORDER BY
+        CASE status
+          WHEN 'RESOLVED' THEN 4
+          WHEN 'ON_SCENE' THEN 3
+          WHEN 'EN_ROUTE' THEN 2
+          WHEN 'ACKNOWLEDGED' THEN 1
+          ELSE 0
+        END DESC,
+        acknowledged_at DESC,
+        ack_id DESC
       LIMIT 1
     """.trimIndent()
     return database.readableDatabase.rawQuery(sql, arrayOf(reportId)).use { cursor ->
@@ -1109,5 +1177,6 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
     const val EVENT_RELAYED_TO_PEER = "RELAYED_TO_PEER"
     const val EVENT_RESPONDER_ACKNOWLEDGED = "RESPONDER_ACKNOWLEDGED"
     const val ATTEMPT_LEASE_MS = 60_000L
+    const val RESPONDER_ACK_POLL_INTERVAL_MS = 30_000L
   }
 }

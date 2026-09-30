@@ -107,12 +107,14 @@ interface RelayDeliveryStore {
   fun markInboundServerAccepted(messageId: String, now: Long = System.currentTimeMillis())
   fun markInboundDeliveryFailed(messageId: String, now: Long = System.currentTimeMillis())
   fun scheduleInboundRetry(messageId: String, now: Long = System.currentTimeMillis(), jitterUnit: Double = Math.random()): Long
-  fun listInboundReportsAwaitingAck(limit: Int = 10): List<String>
+  fun listInboundReportsAwaitingAck(now: Long = System.currentTimeMillis(), limit: Int = 10): List<String>
+  fun scheduleInboundResponderAckPoll(reportId: String, now: Long = System.currentTimeMillis()): Long
   fun recordInboundResponderAck(ack: ResponderAck, now: Long = System.currentTimeMillis()): Boolean
 }
 
 interface ResponderAckStore {
-  fun listReportsAwaitingAck(limit: Int = 10): List<String>
+  fun listReportsAwaitingAck(now: Long = System.currentTimeMillis(), limit: Int = 10): List<String>
+  fun scheduleResponderAckPoll(reportId: String, now: Long = System.currentTimeMillis()): Long
   fun recordResponderAck(ack: ResponderAck, now: Long = System.currentTimeMillis()): Boolean
 }
 

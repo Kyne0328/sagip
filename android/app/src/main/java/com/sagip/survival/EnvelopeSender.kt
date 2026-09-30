@@ -2,6 +2,9 @@ package com.sagip.survival
 
 import java.net.HttpURLConnection
 import java.net.URL
+import java.text.SimpleDateFormat
+import java.util.Locale
+import java.util.TimeZone
 
 /**
  * Sends an already prepared immutable transport envelope.
@@ -115,8 +118,10 @@ class HttpEnvelopeSender(
             }
             val ackId = extractOptionalString(jsonString, "ackId", "ack_id") ?: return null
             val callsign = extractOptionalString(jsonString, "callsign")
-            val status = extractOptionalString(jsonString, "status") ?: "ACKNOWLEDGED"
+            val status = extractOptionalString(jsonString, "status") ?: return null
             val note = extractOptionalString(jsonString, "note")
+            val acknowledgedAtText = extractOptionalString(jsonString, "acknowledgedAt", "acknowledged_at") ?: return null
+            val acknowledgedAt = parseIso8601Millis(acknowledgedAtText) ?: return null
             return ResponderAck(
                 ackId = ackId,
                 reportId = reportId,
@@ -124,9 +129,16 @@ class HttpEnvelopeSender(
                 callsign = callsign,
                 status = status,
                 note = note,
-                acknowledgedAt = System.currentTimeMillis(),
+                acknowledgedAt = acknowledgedAt,
             )
         }
+
+        private fun parseIso8601Millis(value: String): Long? = runCatching {
+            SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSX", Locale.US).apply {
+                isLenient = false
+                timeZone = TimeZone.getTimeZone("UTC")
+            }.parse(value)?.time
+        }.getOrNull()
 
         private fun extractOptionalString(json: String, vararg keys: String): String? {
             for (key in keys) {

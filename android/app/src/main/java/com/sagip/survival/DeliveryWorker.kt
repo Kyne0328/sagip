@@ -74,20 +74,22 @@ class DeliveryWorker(
                 }
             }
 
-            for (reportId in store.listInboundReportsAwaitingAck(5)) {
+            for (reportId in store.listInboundReportsAwaitingAck(now = now, limit = 5)) {
                 val ack = sender.checkReportStatus(reportId)
                 if (ack != null) {
                     store.recordInboundResponderAck(ack, now = now)
                 }
+                store.scheduleInboundResponderAckPoll(reportId, now = now)
             }
         }
 
         ackStore?.let { store ->
-            for (reportId in store.listReportsAwaitingAck(5)) {
+            for (reportId in store.listReportsAwaitingAck(now = now, limit = 5)) {
                 val ack = sender.checkReportStatus(reportId)
                 if (ack != null) {
                     store.recordResponderAck(ack, now = now)
                 }
+                store.scheduleResponderAckPoll(reportId, now = now)
             }
         }
 

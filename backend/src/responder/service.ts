@@ -27,6 +27,34 @@ const URGENCIES: Record<number, string> = {
   2: 'NEED_ASSISTANCE',
 };
 
+const RESPONDER_STATUS_RANK: Record<ResponderStatus, number> = {
+  ACKNOWLEDGED: 1,
+  EN_ROUTE: 2,
+  ON_SCENE: 3,
+  RESOLVED: 4,
+};
+
+function canonicalResponderAck(acks: ResponderAck[]): ResponderAck | null {
+  let best: ResponderAck | null = null;
+  for (const ack of acks) {
+    if (!best) {
+      best = ack;
+      continue;
+    }
+    const rankDelta = RESPONDER_STATUS_RANK[ack.status] - RESPONDER_STATUS_RANK[best.status];
+    if (rankDelta > 0) {
+      best = ack;
+      continue;
+    }
+    if (rankDelta < 0) continue;
+    const timeDelta = Date.parse(ack.acknowledgedAt) - Date.parse(best.acknowledgedAt);
+    if (timeDelta > 0 || (timeDelta === 0 && ack.ackId > best.ackId)) {
+      best = ack;
+    }
+  }
+  return best;
+}
+
 const LOCATION_SOURCES: Record<number, string> = {
   1: 'GPS',
   2: 'NETWORK',
@@ -211,7 +239,16 @@ export class ResponderService {
           ra.acknowledged_at
         FROM responder_acknowledgements ra
         JOIN responder_identities ri ON ra.responder_id = ri.responder_id
-        ORDER BY ra.report_id, ra.acknowledged_at DESC
+        ORDER BY ra.report_id,
+          CASE ra.status
+            WHEN 'RESOLVED' THEN 4
+            WHEN 'ON_SCENE' THEN 3
+            WHEN 'EN_ROUTE' THEN 2
+            WHEN 'ACKNOWLEDGED' THEN 1
+            ELSE 0
+          END DESC,
+          ra.acknowledged_at DESC,
+          ra.ack_id DESC
       )
       SELECT
         i.report_id,
@@ -237,7 +274,18 @@ export class ResponderService {
       LEFT JOIN best_location bl ON i.report_id = bl.report_id
       LEFT JOIN latest_ack la ON i.report_id = la.report_id
       ${statusFilter ? 'WHERE ($3 = \'PENDING\' AND la.ack_id IS NULL) OR la.status = $3' : ''}
-      ORDER BY lr.urgency ASC, i.created_at_ms DESC
+      ORDER BY
+        CASE WHEN la.status = 'RESOLVED' THEN 1 ELSE 0 END ASC,
+        lr.urgency ASC,
+        CASE la.status
+          WHEN 'ACKNOWLEDGED' THEN 1
+          WHEN 'EN_ROUTE' THEN 2
+          WHEN 'ON_SCENE' THEN 3
+          WHEN 'RESOLVED' THEN 4
+          ELSE 0
+        END ASC,
+        i.first_received_at ASC,
+        i.report_id ASC
       LIMIT $1
       OFFSET $2
     `;
@@ -314,7 +362,16 @@ export class ResponderService {
            ra.report_id,
            ra.status
          FROM responder_acknowledgements ra
-         ORDER BY ra.report_id, ra.acknowledged_at DESC
+         ORDER BY ra.report_id,
+           CASE ra.status
+             WHEN 'RESOLVED' THEN 4
+             WHEN 'ON_SCENE' THEN 3
+             WHEN 'EN_ROUTE' THEN 2
+             WHEN 'ACKNOWLEDGED' THEN 1
+             ELSE 0
+           END DESC,
+           ra.acknowledged_at DESC,
+           ra.ack_id DESC
        )
        SELECT
          COUNT(*) AS total,
@@ -424,7 +481,7 @@ export class ResponderService {
       emergencyType: latestRev.emergencyType,
       urgency: latestRev.urgency,
       location: bestLocation,
-      latestAck: acks.at(-1) ?? null,
+      latestAck: canonicalResponderAck(acks),
       revisions,
       acknowledgements: acks,
     };
@@ -523,7 +580,16 @@ export class ResponderService {
        FROM responder_acknowledgements ra
        JOIN responder_identities ri ON ra.responder_id = ri.responder_id
        WHERE ra.report_id = $1
-       ORDER BY ra.acknowledged_at DESC
+       ORDER BY
+         CASE ra.status
+           WHEN 'RESOLVED' THEN 4
+           WHEN 'ON_SCENE' THEN 3
+           WHEN 'EN_ROUTE' THEN 2
+           WHEN 'ACKNOWLEDGED' THEN 1
+           ELSE 0
+         END DESC,
+         ra.acknowledged_at DESC,
+         ra.ack_id DESC
        LIMIT 1`,
       [reportId],
     );
