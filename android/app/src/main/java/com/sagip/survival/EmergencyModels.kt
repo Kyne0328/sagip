@@ -39,6 +39,11 @@ data class EmergencyReportSummary(
   val responderAck: ResponderAck? = null,
 )
 
+data class RelayCustodyStatus(
+  val heldCount: Int,
+  val pendingForwardCount: Int,
+)
+
 data class EnvelopePreparationSource(
   val messageId: String,
   val reportId: String,

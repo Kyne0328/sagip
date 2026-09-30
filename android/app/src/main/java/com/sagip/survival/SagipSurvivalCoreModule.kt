@@ -78,6 +78,7 @@ class SagipSurvivalCoreModule(
       runtime.bleRelay.stop()
       EmergencyRelayService.stop(reactApplicationContext.applicationContext)
     }
+    val custody = repository.relayCustodyStatus()
     val map = Arguments.createMap().apply {
       putString("availability", readiness.availability.name)
       putBoolean("isSupported", readiness.isSupported)
@@ -87,6 +88,8 @@ class SagipSurvivalCoreModule(
       putBoolean("isAdvertising", status.isAdvertising)
       putBoolean("isDutyCyclePaused", status.isDutyCyclePaused)
       putInt("peerCount", status.peerCount)
+      putInt("heldRelayCount", custody.heldCount)
+      putInt("pendingForwardCount", custody.pendingForwardCount)
     }
     promise.resolve(map)
   }
@@ -130,6 +133,11 @@ class SagipSurvivalCoreModule(
 
     val result = BestEffortPreparation.afterCommit(committed) {
       preparationService.preparePending()
+    }
+    runCatching {
+      if (EmergencyRelayService.start(reactApplicationContext.applicationContext)) {
+        runtime.bleRelay.start()
+      }
     }
     runtime.bleRelay.expediteForNewActivity()
     triggerBackgroundDelivery()

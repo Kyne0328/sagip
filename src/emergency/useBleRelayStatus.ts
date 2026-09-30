@@ -1,10 +1,22 @@
-import {useCallback, useEffect, useState} from 'react';
+import {useCallback, useEffect, useRef, useState} from 'react';
 import {PermissionsAndroid, Platform} from 'react-native';
 
 import {SurvivalCore} from './SurvivalCore';
 import type {BleRelayStatus} from './types';
 
 const RELAY_STATUS_REFRESH_MS = 10_000;
+
+export function relayNeedsAutomaticStart(status: BleRelayStatus | null): boolean {
+  return Boolean(
+    status &&
+      status.availability === 'READY' &&
+      status.permissionGranted &&
+      status.bluetoothEnabled &&
+      !status.isScanning &&
+      !status.isAdvertising &&
+      !status.isDutyCyclePaused,
+  );
+}
 
 export function relayPermissionsForApi(apiLevel: number) {
   return apiLevel >= 31
@@ -38,6 +50,7 @@ export function useBleRelayStatus() {
   const [status, setStatus] = useState<BleRelayStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [requesting, setRequesting] = useState(false);
+  const autoStartAttempted = useRef(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -52,6 +65,8 @@ export function useBleRelayStatus() {
         isAdvertising: false,
         isDutyCyclePaused: false,
         peerCount: 0,
+        heldRelayCount: 0,
+        pendingForwardCount: 0,
       });
     } finally {
       setLoading(false);
@@ -67,6 +82,29 @@ export function useBleRelayStatus() {
     return () => clearInterval(timer);
   }, [refresh]);
 
+  useEffect(() => {
+    if (status?.availability !== 'READY') {
+      autoStartAttempted.current = false;
+      return;
+    }
+    if (status.isScanning || status.isAdvertising || status.isDutyCyclePaused) {
+      autoStartAttempted.current = false;
+      return;
+    }
+    if (!relayNeedsAutomaticStart(status) || autoStartAttempted.current) return;
+
+    autoStartAttempted.current = true;
+    let cancelled = false;
+    SurvivalCore.startBleRelay()
+      .catch(() => false)
+      .finally(() => {
+        if (!cancelled) void refresh();
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [refresh, status]);
+
   const enable = useCallback(async () => {
     setRequesting(true);
     try {
@@ -79,6 +117,7 @@ export function useBleRelayStatus() {
         return false;
       }
 
+      autoStartAttempted.current = true;
       const started = await SurvivalCore.startBleRelay();
       await refresh();
       return started;

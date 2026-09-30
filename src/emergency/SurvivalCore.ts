@@ -139,6 +139,8 @@ function parseRelayStatus(value: unknown): BleRelayStatus {
       isAdvertising: false,
       isDutyCyclePaused: false,
       peerCount: 0,
+      heldRelayCount: 0,
+      pendingForwardCount: 0,
     };
   }
 
@@ -170,6 +172,14 @@ function parseRelayStatus(value: unknown): BleRelayStatus {
     peerCount:
       typeof value.peerCount === 'number' && value.peerCount >= 0
         ? Math.floor(value.peerCount)
+        : 0,
+    heldRelayCount:
+      typeof value.heldRelayCount === 'number' && value.heldRelayCount >= 0
+        ? Math.floor(value.heldRelayCount)
+        : 0,
+    pendingForwardCount:
+      typeof value.pendingForwardCount === 'number' && value.pendingForwardCount >= 0
+        ? Math.floor(value.pendingForwardCount)
         : 0,
   };
 }

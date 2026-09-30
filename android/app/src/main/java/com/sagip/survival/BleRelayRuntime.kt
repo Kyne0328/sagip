@@ -39,11 +39,13 @@ class BleRelayRuntime internal constructor(
   private val activityTimestampProvider: () -> Long,
   private val central: BleCentralController,
   private val peripheral: BlePeripheralController,
+  private val nowProvider: () -> Long = { System.currentTimeMillis() },
 ) {
   private val scheduler = Executors.newSingleThreadScheduledExecutor { runnable ->
     Thread(runnable, "sagip-ble-duty-cycle").apply { isDaemon = true }
   }
   private var requested = false
+  private var activationTimestamp = 0L
   private var dutyCyclePaused = false
   private var scheduledTransition: ScheduledFuture<*>? = null
 
@@ -64,6 +66,7 @@ class BleRelayRuntime internal constructor(
     }
 
     requested = true
+    activationTimestamp = nowProvider()
     return activateCycleLocked()
   }
 
@@ -78,6 +81,7 @@ class BleRelayRuntime internal constructor(
   @Synchronized
   fun stop() {
     requested = false
+    activationTimestamp = 0L
     dutyCyclePaused = false
     scheduledTransition?.cancel(false)
     scheduledTransition = null
@@ -108,8 +112,8 @@ class BleRelayRuntime internal constructor(
       return false
     }
 
-    val now = System.currentTimeMillis()
-    val activityTimestamp = activityTimestampProvider()
+    val now = nowProvider()
+    val activityTimestamp = maxOf(activityTimestampProvider(), activationTimestamp)
     val scanMode = BleDutyCycleManager.getRecommendedScanMode(activityTimestamp, now)
     val advertiseMode = BleDutyCycleManager.getRecommendedAdvertiseMode(activityTimestamp, now)
     val (activeMs, pauseMs) = BleDutyCycleManager.getScanDutyCycleMs(activityTimestamp, now)
@@ -148,8 +152,8 @@ class BleRelayRuntime internal constructor(
       return
     }
 
-    val now = System.currentTimeMillis()
-    val activityTimestamp = activityTimestampProvider()
+    val now = nowProvider()
+    val activityTimestamp = maxOf(activityTimestampProvider(), activationTimestamp)
     val (_, currentPauseMs) = BleDutyCycleManager.getScanDutyCycleMs(activityTimestamp, now)
     if (currentPauseMs == 0L) {
       activateCycleLocked()

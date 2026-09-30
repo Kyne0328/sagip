@@ -35,6 +35,23 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
     }
   }
 
+  fun relayCustodyStatus(): RelayCustodyStatus {
+    val sql = """
+      SELECT
+        COUNT(*),
+        COALESCE(SUM(CASE WHEN delivery_state = ? THEN 1 ELSE 0 END), 0)
+      FROM inbound_envelopes
+      WHERE delivery_state IN (?, ?)
+    """.trimIndent()
+    return database.readableDatabase.rawQuery(
+      sql,
+      arrayOf(DELIVERY_PENDING, DELIVERY_PENDING, DELIVERY_SERVER_ACCEPTED),
+    ).use { cursor ->
+      if (!cursor.moveToFirst()) RelayCustodyStatus(0, 0)
+      else RelayCustodyStatus(cursor.getInt(0), cursor.getInt(1))
+    }
+  }
+
   fun hasActiveRelayWork(): Boolean {
     val localActive = database.readableDatabase.rawQuery(
       """

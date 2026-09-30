@@ -316,10 +316,14 @@ class BleCentralManager(
           gatt.disconnect()
         }
       } else if (characteristic.uuid == BleProtocolConstants.CHARACTERISTIC_CHUNK_UUID) {
-        // Send next chunk
         chunkIndex++
         if (chunkIndex < chunksToSend.size) {
           sendNextChunk(gatt)
+        } else {
+          // Notifications are best-effort across OEM BLE stacks. The peer also
+          // exposes its durable custody receipt as a readable characteristic,
+          // so read it back after the final chunk as a deterministic fallback.
+          readDurableAck(gatt)
         }
       } else if (characteristic.uuid == BleProtocolConstants.CHARACTERISTIC_RETURN_ACK_UUID) {
         // Return ACK write completed
@@ -354,8 +358,8 @@ class BleCentralManager(
           }
           OfferDecision.ALREADY_HAVE -> {
             // A peer with a durable inbound copy re-emits the normal custody ACK.
-            // Keep the connection alive for that notification; the existing
-            // connection timeout remains the retry fallback for older peers.
+            // Read it as well so a missed notification cannot strand custody.
+            readDurableAck(gatt)
           }
           else -> {
             if (transfer != null && !attemptCompleted) {
@@ -364,6 +368,10 @@ class BleCentralManager(
             }
             syncReturnAckAndFinish(gatt)
           }
+        }
+      } else if (characteristic.uuid == BleProtocolConstants.CHARACTERISTIC_ACK_UUID) {
+        if (status == BluetoothGatt.GATT_SUCCESS) {
+          characteristic.value?.let { handleDurableAck(gatt, it) }
         }
       } else if (characteristic.uuid == BleProtocolConstants.CHARACTERISTIC_RETURN_ACK_UUID) {
         if (status == BluetoothGatt.GATT_SUCCESS) {
@@ -413,41 +421,54 @@ class BleCentralManager(
       characteristic: BluetoothGattCharacteristic,
     ) {
       if (characteristic.uuid == BleProtocolConstants.CHARACTERISTIC_ACK_UUID) {
-        val currentWork = work ?: return
-        val ackBytes = characteristic.value ?: return
-        val ack = try {
-          BleProtocolConstants.decodeAck(ackBytes)
-        } catch (_: Exception) {
-          gatt.disconnect()
-          return
-        }
-
-        val decoded = try {
-          TransportEnvelope.decodeAndVerify(currentWork.envelopeBytes)
-        } catch (_: Exception) {
-          gatt.disconnect()
-          return
-        }
-
-        if (ack.first.toString() == decoded.messageId) {
-          // Record successful peer relay receipt in SQLite before completing
-          // the transport attempt. If persistence fails, the lease expires and
-          // the same immutable envelope remains retryable.
-          val receiptStored = runCatching {
-            repository.recordRelayReceipt(
-              receiptId = ack.second.toString(),
-              messageId = currentWork.messageId,
-              peerIdentifier = gatt.device.address,
-              acknowledgedAt = ack.third,
-            )
-          }.getOrDefault(false)
-          if (receiptStored && transfer != null && !attemptCompleted) {
-            completeAttempt(transfer, "SUCCESS", null, ack.third)
-            attemptCompleted = true
-          }
-        }
-        syncReturnAckAndFinish(gatt)
+        characteristic.value?.let { handleDurableAck(gatt, it) }
       }
+    }
+
+    private fun readDurableAck(gatt: BluetoothGatt) {
+      if (attemptCompleted) return
+      val characteristic = ackChar ?: return
+      val started = try {
+        gatt.readCharacteristic(characteristic)
+      } catch (_: SecurityException) {
+        false
+      }
+      if (!started) {
+        // Keep the existing connection timeout as the retry fallback.
+        return
+      }
+    }
+
+    private fun handleDurableAck(gatt: BluetoothGatt, ackBytes: ByteArray) {
+      if (attemptCompleted || ackBytes.size != BleProtocolConstants.ACK_PAYLOAD_SIZE) return
+      val currentWork = work ?: return
+      val ack = try {
+        BleProtocolConstants.decodeAck(ackBytes)
+      } catch (_: Exception) {
+        return
+      }
+      val decoded = try {
+        TransportEnvelope.decodeAndVerify(currentWork.envelopeBytes)
+      } catch (_: Exception) {
+        gatt.disconnect()
+        return
+      }
+      if (ack.first.toString() != decoded.messageId) return
+
+      // Persist peer custody evidence before completing the BLE attempt.
+      val receiptStored = runCatching {
+        repository.recordRelayReceipt(
+          receiptId = ack.second.toString(),
+          messageId = currentWork.messageId,
+          peerIdentifier = gatt.device.address,
+          acknowledgedAt = ack.third,
+        )
+      }.getOrDefault(false)
+      if (receiptStored && transfer != null) {
+        completeAttempt(transfer, "SUCCESS", null, ack.third)
+        attemptCompleted = true
+      }
+      syncReturnAckAndFinish(gatt)
     }
 
     private fun discoverServicesOrDisconnect(gatt: BluetoothGatt) {

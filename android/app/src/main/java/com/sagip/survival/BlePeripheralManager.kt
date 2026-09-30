@@ -28,11 +28,14 @@ class BlePeripheralManager(
   private var advertiser: BluetoothLeAdvertiser? = null
   private var gattServer: BluetoothGattServer? = null
   private var currentAdvertiseMode: Int? = null
+  private var pendingAdvertiseMode: Int? = null
+  @Volatile private var serviceReady = false
 
   private var isAdvertising = false
   private val activeReassemblers = ConcurrentHashMap<String, BleEnvelopeReassembler>()
   private val activeOffers = ConcurrentHashMap<String, BleManifestOffer>()
   private val offerDecisions = ConcurrentHashMap<String, OfferDecision>()
+  private val durableAcks = ConcurrentHashMap<String, ByteArray>()
 
   private val advertiseCallback = object : AdvertiseCallback() {
     override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
@@ -47,11 +50,24 @@ class BlePeripheralManager(
   }
 
   private val gattServerCallback = object : BluetoothGattServerCallback() {
+    override fun onServiceAdded(status: Int, service: BluetoothGattService) {
+      if (service.uuid != BleProtocolConstants.SERVICE_UUID) return
+      synchronized(this@BlePeripheralManager) {
+        serviceReady = status == BluetoothGatt.GATT_SUCCESS
+        if (!serviceReady) {
+          stopAdvertising()
+          return
+        }
+        pendingAdvertiseMode?.let { mode -> startAdvertising(mode) }
+      }
+    }
+
     override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
       if (newState == BluetoothGatt.STATE_DISCONNECTED) {
         activeReassemblers.remove(device.address)
         activeOffers.remove(device.address)
         offerDecisions.remove(device.address)
+        durableAcks.remove(device.address)
       }
     }
 
@@ -79,6 +95,12 @@ class BlePeripheralManager(
         if (durableDuplicate != null) {
           sendDurableAck(device, UUID.fromString(durableDuplicate.messageId))
         }
+        return
+      }
+      if (characteristic.uuid == BleProtocolConstants.CHARACTERISTIC_ACK_UUID) {
+        val encoded = durableAcks[device.address] ?: ByteArray(0)
+        val responseBytes = if (offset < encoded.size) encoded.copyOfRange(offset, encoded.size) else ByteArray(0)
+        gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, responseBytes)
         return
       }
       if (characteristic.uuid == BleProtocolConstants.CHARACTERISTIC_RETURN_ACK_UUID) {
@@ -166,7 +188,9 @@ class BlePeripheralManager(
   @Synchronized
   override fun start(advertiseMode: Int) {
     if (!BleRelayReadinessChecker.evaluate(context).canRun) return
+    pendingAdvertiseMode = advertiseMode
     startGattServer()
+    if (!serviceReady) return
     if (isAdvertising && currentAdvertiseMode == advertiseMode) return
     if (isAdvertising) pauseAdvertising()
     startAdvertising(advertiseMode)
@@ -174,19 +198,22 @@ class BlePeripheralManager(
 
   @Synchronized
   override fun pauseAdvertising() {
+    pendingAdvertiseMode = null
     stopAdvertising()
   }
 
   @Synchronized
   override fun stop() {
+    pendingAdvertiseMode = null
     stopAdvertising()
     stopGattServer()
     activeReassemblers.clear()
     activeOffers.clear()
     offerDecisions.clear()
+    durableAcks.clear()
   }
 
-  override fun isRunning(): Boolean = isAdvertising && gattServer != null
+  override fun isRunning(): Boolean = isAdvertising && serviceReady && gattServer != null
 
   private fun startGattServer() {
     if (gattServer != null || bluetoothManager == null) return
@@ -235,11 +262,15 @@ class BlePeripheralManager(
     service.addCharacteristic(ackChar)
     service.addCharacteristic(returnAckChar)
 
-    gattServer?.addService(service)
+    serviceReady = false
+    val added = gattServer?.addService(service) == true
+    if (!added) {
+      stopGattServer()
+    }
   }
 
   private fun startAdvertising(advertiseMode: Int) {
-    if (advertiser != null || bluetoothAdapter == null) return
+    if (!serviceReady || advertiser != null || bluetoothAdapter == null) return
     advertiser = try {
       bluetoothAdapter.bluetoothLeAdvertiser
     } catch (_: SecurityException) {
@@ -288,6 +319,7 @@ class BlePeripheralManager(
     } catch (_: Exception) {
     }
     gattServer = null
+    serviceReady = false
   }
 
   private fun handleOfferWrite(
@@ -353,12 +385,14 @@ class BlePeripheralManager(
         val persistResult = repository.persistInboundEnvelope(result.envelopeBytes)
         when (persistResult) {
           is InboundPersistResult.Stored -> {
+            runCatching { EmergencyJobScheduler.scheduleImmediateNetworkSync(context.applicationContext) }
             sendDurableAck(device, UUID.fromString(persistResult.messageId))
             if (responseNeeded) {
               gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
             }
           }
           is InboundPersistResult.DuplicateIgnored -> {
+            runCatching { EmergencyJobScheduler.scheduleImmediateNetworkSync(context.applicationContext) }
             sendDurableAck(device, UUID.fromString(persistResult.messageId))
             if (responseNeeded) {
               gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
@@ -390,6 +424,7 @@ class BlePeripheralManager(
     val receiptId = UUID.randomUUID()
     val now = System.currentTimeMillis()
     val ackBytes = BleProtocolConstants.encodeAck(messageId, receiptId, now)
+    durableAcks[device.address] = ackBytes
     ackChar.value = ackBytes
 
     try {

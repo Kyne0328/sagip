@@ -251,6 +251,18 @@ export default function App() {
   );
 }
 
+function relayCustodySummary(status: BleRelayStatus | null): string | null {
+  if (!status || status.heldRelayCount <= 0) return null;
+  const heldLabel = `${status.heldRelayCount} relayed SOS message${status.heldRelayCount === 1 ? '' : 's'}`;
+  if (status.pendingForwardCount <= 0) {
+    return `This phone is safely carrying ${heldLabel}; server forwarding has completed.`;
+  }
+  if (status.pendingForwardCount === status.heldRelayCount) {
+    return `This phone is safely carrying ${heldLabel} and is waiting to forward ${status.pendingForwardCount === 1 ? 'it' : 'them'} to the SAGIP server.`;
+  }
+  return `This phone is safely carrying ${heldLabel}; ${status.pendingForwardCount} still ${status.pendingForwardCount === 1 ? 'needs' : 'need'} server forwarding.`;
+}
+
 function NearbyRelayCard({
   status,
   loading,
@@ -268,6 +280,7 @@ function NearbyRelayCard({
   let detail = 'Your SOS can still be saved on this phone while relay is checked.';
   let actionLabel: string | null = null;
   let action: (() => void) | null = null;
+  const custodySummary = relayCustodySummary(status);
 
   if (!loading || status) {
     switch (status?.availability) {
@@ -291,24 +304,28 @@ function NearbyRelayCard({
       case 'READY':
         if (status.isDutyCyclePaused) {
           stateText = 'Nearby relay active';
-          detail =
-            'SAGIP is conserving battery between nearby-device checks. Relay will resume automatically.';
+          detail = custodySummary
+            ? `${custodySummary} SAGIP is conserving battery between nearby-device checks.`
+            : 'SAGIP is conserving battery between nearby-device checks. Relay will resume automatically.';
         } else if (status.isScanning && status.isAdvertising) {
           stateText = 'Nearby relay active';
-          detail =
+          const discoveryDetail =
             status.peerCount > 0
               ? `${status.peerCount} nearby SAGIP device${status.peerCount === 1 ? '' : 's'} detected.`
               : 'Searching for nearby SAGIP devices.';
+          detail = custodySummary ? `${custodySummary} ${discoveryDetail}` : discoveryDetail;
         } else if (status.isScanning || status.isAdvertising) {
           stateText = 'Nearby relay partially active';
-          detail =
-            'Bluetooth relay is running, but one relay mode is not active. SAGIP will keep retrying delivery.';
+          detail = custodySummary
+            ? `${custodySummary} Bluetooth relay is running, but one nearby mode is not active.`
+            : 'Bluetooth relay is running, but one relay mode is not active. SAGIP will keep retrying delivery.';
           actionLabel = 'Retry nearby relay';
           action = onEnable;
         } else {
           stateText = 'Nearby relay not active';
-          detail =
-            'Bluetooth is ready, but nearby relay is not running. Your SOS remains saved locally.';
+          detail = custodySummary
+            ? `${custodySummary} Bluetooth is ready, but nearby relay is not running.`
+            : 'Bluetooth is ready, but nearby relay is not running. Your SOS remains saved locally.';
           actionLabel = 'Retry nearby relay';
           action = onEnable;
         }

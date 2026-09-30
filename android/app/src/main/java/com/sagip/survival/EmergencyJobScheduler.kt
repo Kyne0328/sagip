@@ -11,6 +11,7 @@ import android.content.Context
  */
 object EmergencyJobScheduler {
   const val EMERGENCY_SYNC_JOB_ID = 54420
+  const val EMERGENCY_IMMEDIATE_SYNC_JOB_ID = 54421
 
   fun scheduleNetworkSync(context: Context): Int {
     val scheduler = context.getSystemService(Context.JOB_SCHEDULER_SERVICE) as? JobScheduler ?: return JobScheduler.RESULT_FAILURE
@@ -25,8 +26,19 @@ object EmergencyJobScheduler {
     return scheduler.schedule(jobInfo)
   }
 
+  fun scheduleImmediateNetworkSync(context: Context): Int {
+    val scheduler = context.getSystemService(Context.JOB_SCHEDULER_SERVICE) as? JobScheduler ?: return JobScheduler.RESULT_FAILURE
+    val component = ComponentName(context, EmergencyDeliveryJobService::class.java)
+    val jobInfo = JobInfo.Builder(EMERGENCY_IMMEDIATE_SYNC_JOB_ID, component)
+      .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
+      .setPersisted(true)
+      .build()
+    return scheduler.schedule(jobInfo)
+  }
+
   fun cancel(context: Context) {
     val scheduler = context.getSystemService(Context.JOB_SCHEDULER_SERVICE) as? JobScheduler
     scheduler?.cancel(EMERGENCY_SYNC_JOB_ID)
+    scheduler?.cancel(EMERGENCY_IMMEDIATE_SYNC_JOB_ID)
   }
 }

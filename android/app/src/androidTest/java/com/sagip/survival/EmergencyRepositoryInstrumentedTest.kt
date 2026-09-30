@@ -348,6 +348,14 @@ class EmergencyRepositoryInstrumentedTest {
     assertTableCount("inbound_envelopes", 1)
     assertTableCount("seen_messages", 1)
 
+    val pendingCustody = repository.relayCustodyStatus()
+    assertEquals(1, pendingCustody.heldCount)
+    assertEquals(1, pendingCustody.pendingForwardCount)
+    repository.markInboundServerAccepted(decoded.messageId, now = 7_150L)
+    val forwardedCustody = repository.relayCustodyStatus()
+    assertEquals(1, forwardedCustody.heldCount)
+    assertEquals(0, forwardedCustody.pendingForwardCount)
+
     val corruptedSignature = envelopeBytes.copyOf().also { bytes ->
       bytes[bytes.lastIndex] = (bytes.last().toInt() xor 0x01).toByte()
     }

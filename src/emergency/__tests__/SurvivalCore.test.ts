@@ -145,6 +145,8 @@ describe('SurvivalCore', () => {
       isAdvertising: true,
       isDutyCyclePaused: false,
       peerCount: 2,
+      heldRelayCount: 3,
+      pendingForwardCount: 1,
     });
 
     await expect(SurvivalCore.getRelayStatus()).resolves.toEqual({
@@ -156,6 +158,8 @@ describe('SurvivalCore', () => {
       isAdvertising: true,
       isDutyCyclePaused: false,
       peerCount: 2,
+      heldRelayCount: 3,
+      pendingForwardCount: 1,
     });
   });
 

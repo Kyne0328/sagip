@@ -1,5 +1,7 @@
 package com.sagip.survival
 
+import android.bluetooth.le.AdvertiseSettings
+import android.bluetooth.le.ScanSettings
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -89,6 +91,23 @@ class BleRelayRuntimeTest {
     assertEquals(2, status.peerCount)
     assertEquals(1, central.starts)
     assertEquals(1, peripheral.starts)
+  }
+
+  @Test
+  fun `fresh relay activation boosts an idle helper phone into rapid discovery`() {
+    val central = FakeCentral()
+    val peripheral = FakePeripheral()
+    val runtime = BleRelayRuntime(
+      readinessProvider = { readiness(true) },
+      activityTimestampProvider = { 0L },
+      central = central,
+      peripheral = peripheral,
+      nowProvider = { 1_000_000L },
+    )
+
+    assertTrue(runtime.start())
+    assertEquals(ScanSettings.SCAN_MODE_LOW_LATENCY, central.lastScanMode)
+    assertEquals(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY, peripheral.lastAdvertiseMode)
   }
 
   @Test

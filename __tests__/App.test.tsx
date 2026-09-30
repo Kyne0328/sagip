@@ -49,6 +49,8 @@ beforeEach(() => {
     isAdvertising: true,
     isDutyCyclePaused: false,
     peerCount: 0,
+    heldRelayCount: 0,
+    pendingForwardCount: 0,
   });
   core.startBleRelay.mockResolvedValue(true);
 });
@@ -197,6 +199,8 @@ test('shows relay permission as separate from local SOS persistence', async () =
     isAdvertising: false,
     isDutyCyclePaused: false,
     peerCount: 0,
+    heldRelayCount: 0,
+    pendingForwardCount: 0,
   });
   const renderer = await renderApp();
 
@@ -218,12 +222,34 @@ test('shows active relay and nearby peer count', async () => {
     isAdvertising: true,
     isDutyCyclePaused: false,
     peerCount: 2,
+    heldRelayCount: 0,
+    pendingForwardCount: 0,
   });
   const renderer = await renderApp();
 
   const rendered = JSON.stringify(renderer.toJSON());
   expect(rendered).toContain('Nearby relay active');
   expect(rendered).toContain('2 nearby SAGIP devices detected.');
+});
+
+test('shows gateway custody without exposing another persons incident contents', async () => {
+  core.getRelayStatus.mockResolvedValue({
+    availability: 'READY',
+    isSupported: true,
+    permissionGranted: true,
+    bluetoothEnabled: true,
+    isScanning: true,
+    isAdvertising: true,
+    isDutyCyclePaused: false,
+    peerCount: 1,
+    heldRelayCount: 1,
+    pendingForwardCount: 1,
+  });
+  const renderer = await renderApp();
+
+  const rendered = JSON.stringify(renderer.toJSON());
+  expect(rendered).toContain('safely carrying 1 relayed SOS message');
+  expect(rendered).toContain('waiting to forward it to the SAGIP server');
 });
 
 test('shows battery-saving relay pause as active rather than failed', async () => {
@@ -236,6 +262,8 @@ test('shows battery-saving relay pause as active rather than failed', async () =
     isAdvertising: false,
     isDutyCyclePaused: true,
     peerCount: 0,
+    heldRelayCount: 0,
+    pendingForwardCount: 0,
   });
   const renderer = await renderApp();
 

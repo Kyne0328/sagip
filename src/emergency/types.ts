@@ -42,6 +42,8 @@ export interface BleRelayStatus {
   isAdvertising: boolean;
   isDutyCyclePaused: boolean;
   peerCount: number;
+  heldRelayCount: number;
+  pendingForwardCount: number;
 }
 
 export interface ResponderAckInfo {
