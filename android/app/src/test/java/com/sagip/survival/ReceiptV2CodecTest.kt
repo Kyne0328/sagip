@@ -22,7 +22,7 @@ class ReceiptV2CodecTest {
   }
   @Test fun sharedGoldenRoundTripAndRejections() {
     val fixtures = vectors()
-    assertEquals(17, fixtures.size)
+    assertEquals(19, fixtures.size)
     fixtures.forEach { v ->
       if (!v.accepts) {
         assertThrows(v.name, IllegalArgumentException::class.java) { ReceiptV2Codec.decode(v.bytes) }
