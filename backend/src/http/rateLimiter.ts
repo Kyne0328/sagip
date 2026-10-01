@@ -8,7 +8,39 @@ export interface RateLimiterOptions {
 }
 
 export interface RateLimiter {
-  isAllowed(ip: string, now?: number): boolean | Promise<boolean>;
+  isAllowed(identifier: string, now?: number): boolean | Promise<boolean>;
+}
+
+export interface SagipRateLimiters {
+  envelopeIngest: RateLimiter;
+  reportStatus: RateLimiter;
+  responderSession: RateLimiter;
+  responderApi: RateLimiter;
+}
+
+export const PITCH_RATE_LIMIT_POLICY = {
+  envelopeIngest: {windowMs: 60_000, maxRequests: 300},
+  reportStatus: {windowMs: 60_000, maxRequests: 600},
+  responderSession: {windowMs: 60_000, maxRequests: 120},
+  responderApi: {windowMs: 60_000, maxRequests: 600},
+} as const;
+
+export function createPostgresSagipRateLimiters(pool: Pool): SagipRateLimiters {
+  return {
+    envelopeIngest: new PostgresSlidingWindowRateLimiter(pool, PITCH_RATE_LIMIT_POLICY.envelopeIngest),
+    reportStatus: new PostgresSlidingWindowRateLimiter(pool, PITCH_RATE_LIMIT_POLICY.reportStatus),
+    responderSession: new PostgresSlidingWindowRateLimiter(pool, PITCH_RATE_LIMIT_POLICY.responderSession),
+    responderApi: new PostgresSlidingWindowRateLimiter(pool, PITCH_RATE_LIMIT_POLICY.responderApi),
+  };
+}
+
+export function createLocalSagipRateLimiters(): SagipRateLimiters {
+  return {
+    envelopeIngest: new SlidingWindowRateLimiter(PITCH_RATE_LIMIT_POLICY.envelopeIngest),
+    reportStatus: new SlidingWindowRateLimiter(PITCH_RATE_LIMIT_POLICY.reportStatus),
+    responderSession: new SlidingWindowRateLimiter(PITCH_RATE_LIMIT_POLICY.responderSession),
+    responderApi: new SlidingWindowRateLimiter(PITCH_RATE_LIMIT_POLICY.responderApi),
+  };
 }
 
 /**

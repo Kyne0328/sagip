@@ -32,6 +32,7 @@ class DeliveryPipelineIntegrationTest {
 
     @Volatile var responseCode: Int = 200
     @Volatile var responseBody: String = ""
+    val responseHeaders = mutableMapOf<String, String>()
     val capturedRequests = mutableListOf<CapturedRequest>()
 
     private val executor = Executors.newSingleThreadExecutor()
@@ -90,9 +91,13 @@ class DeliveryPipelineIntegrationTest {
         }
         val bodyBytes = responseBody.toByteArray(Charsets.UTF_8)
         val output = it.getOutputStream()
+        val extraHeaders = synchronized(responseHeaders) {
+          responseHeaders.entries.joinToString(separator = "") { (name, value) -> "$name: $value\r\n" }
+        }
         val responseHeader = "HTTP/1.1 $responseCode $statusText\r\n" +
           "Content-Type: application/json; charset=utf-8\r\n" +
           "Content-Length: ${bodyBytes.size}\r\n" +
+          extraHeaders +
           "Connection: close\r\n" +
           "\r\n"
         output.write(responseHeader.toByteArray(Charsets.US_ASCII))
@@ -136,6 +141,7 @@ class DeliveryPipelineIntegrationTest {
     val completedAttempts = mutableListOf<Pair<String, String>>()
     val acceptedReceipts = mutableListOf<ServerReceipt>()
     val retriedMessages = mutableListOf<String>()
+    val retryMinimumDelays = mutableListOf<Long?>()
     val failedMessages = mutableListOf<Pair<String, String?>>()
 
     override fun listDueOutbound(now: Long, limit: Int): List<OutboundEnvelopeWork> = dueList.toList()
@@ -164,10 +170,16 @@ class DeliveryPipelineIntegrationTest {
       dueList.removeAll { it.messageId == receipt.messageId }
     }
 
-    override fun scheduleRetry(messageId: String, now: Long, jitterUnit: Double): Long {
+    override fun scheduleRetry(
+      messageId: String,
+      now: Long,
+      jitterUnit: Double,
+      minimumDelayMs: Long?,
+    ): Long {
       retriedMessages += messageId
+      retryMinimumDelays += minimumDelayMs
       dueList.removeAll { it.messageId == messageId }
-      return now + 5000L
+      return now + maxOf(5000L, minimumDelayMs ?: 0L)
     }
 
     override fun markDeliveryFailed(messageId: String, reason: String?, now: Long) {
@@ -261,6 +273,23 @@ class DeliveryPipelineIntegrationTest {
     assertEquals("RETRYABLE_FAILURE", store.completedAttempts.first().second)
     assertEquals(listOf("msg-e2e-1"), store.retriedMessages)
     assertTrue(store.acceptedReceipts.isEmpty())
+  }
+
+  @Test
+  fun `server 429 rate limit remains retryable and honors Retry-After`() = runBlocking {
+    server.responseCode = 429
+    server.responseBody = """{"error":"TOO_MANY_REQUESTS"}"""
+    server.responseHeaders["Retry-After"] = "60"
+
+    val store = IntegrationDeliveryStore(mutableListOf(sampleEnvelope))
+    val worker = DeliveryWorker(store, HttpEnvelopeSender(serverUrl))
+
+    val count = worker.runOnce(now = 2_000L)
+
+    assertEquals(0, count)
+    assertEquals(listOf("msg-e2e-1"), store.retriedMessages)
+    assertEquals(listOf(60_000L), store.retryMinimumDelays)
+    assertTrue(store.failedMessages.isEmpty())
   }
 
   @Test

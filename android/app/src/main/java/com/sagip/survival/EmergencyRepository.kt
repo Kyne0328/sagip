@@ -512,6 +512,7 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
     messageId: String,
     now: Long,
     jitterUnit: Double,
+    minimumDelayMs: Long?,
   ): Long {
     val db = database.writableDatabase
     db.beginTransaction()
@@ -525,7 +526,8 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
         cursor.getInt(0)
       }
       require(attemptCount >= 1) { "Cannot schedule retry before a delivery attempt" }
-      val nextAttemptAt = RetryPolicy.nextAttemptAt(now, attemptCount, jitterUnit)
+      val policyDelayMs = RetryPolicy.delayMs(attemptCount, jitterUnit)
+      val nextAttemptAt = now + maxOf(policyDelayMs, minimumDelayMs ?: 0L)
       db.execSQL(
         "UPDATE outbound_envelopes SET next_attempt_at = ? WHERE message_id = ?",
         arrayOf<Any?>(nextAttemptAt, messageId),
@@ -859,6 +861,7 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
     messageId: String,
     now: Long,
     jitterUnit: Double,
+    minimumDelayMs: Long?,
   ): Long {
     val db = database.writableDatabase
     db.beginTransaction()
@@ -871,7 +874,8 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
         cursor.getInt(0)
       }
       require(attemptCount >= 1) { "Cannot schedule inbound retry before a delivery attempt" }
-      val nextAttemptAt = RetryPolicy.nextAttemptAt(now, attemptCount, jitterUnit)
+      val policyDelayMs = RetryPolicy.delayMs(attemptCount, jitterUnit)
+      val nextAttemptAt = now + maxOf(policyDelayMs, minimumDelayMs ?: 0L)
       db.update(
         "inbound_envelopes",
         ContentValues().apply { put("next_attempt_at", nextAttemptAt) },

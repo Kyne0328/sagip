@@ -3,7 +3,7 @@ import {
   handleSagipRequest,
   type SagipServerDependencies,
 } from '../http/handleRequest.js';
-import {PostgresSlidingWindowRateLimiter} from '../http/rateLimiter.js';
+import {createPostgresSagipRateLimiters} from '../http/rateLimiter.js';
 import {IngestionService} from '../ingestion/service.js';
 import {ResponderService} from '../responder/service.js';
 
@@ -28,7 +28,7 @@ function getDependencies(): SagipServerDependencies {
   dependencies = {
     ingestEnvelope: bytes => ingestion.ingestEnvelope(bytes),
     responderService: new ResponderService(pool),
-    rateLimiter: new PostgresSlidingWindowRateLimiter(pool),
+    rateLimiters: createPostgresSagipRateLimiters(pool),
   };
   return dependencies;
 }

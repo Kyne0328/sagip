@@ -9,12 +9,17 @@ import {
 } from '../responder/service.js';
 import type {ResponderIdentity, ResponderStatus} from '../responder/types.js';
 import {responderDashboardResponse} from '../responder/dashboard.js';
-import {SlidingWindowRateLimiter, type RateLimiter} from './rateLimiter.js';
+import {
+  createLocalSagipRateLimiters,
+  type RateLimiter,
+  type SagipRateLimiters,
+} from './rateLimiter.js';
 
 export interface SagipServerDependencies {
   ingestEnvelope(bytes: Buffer): Promise<ServerReceipt>;
   responderService?: ResponderService;
   rateLimiter?: RateLimiter;
+  rateLimiters?: SagipRateLimiters;
 }
 
 export interface SagipRequestContext {
@@ -22,7 +27,7 @@ export interface SagipRequestContext {
   discardBody?: () => void;
 }
 
-const defaultRateLimiter = new SlidingWindowRateLimiter();
+const defaultRateLimiters = createLocalSagipRateLimiters();
 
 class RequestBodyTooLargeError extends Error {}
 
@@ -53,17 +58,14 @@ export async function handleSagipRequest(
       return jsonResponse(200, {status: 'ok'});
     }
 
-    const isRateLimitedEndpoint =
-      pathname === '/v1/envelopes' ||
-      pathname === RESPONDER_SESSION_PATH ||
-      REPORT_STATUS_RE.test(pathname) ||
-      pathname.startsWith('/v1/incidents');
-    if (isRateLimitedEndpoint) {
+    const rateLimitSelection = selectRateLimiter(pathname, deps);
+    if (rateLimitSelection) {
       const clientIp = context.clientIp ?? '127.0.0.1';
-      const limiter = deps.rateLimiter ?? defaultRateLimiter;
       let allowed: boolean;
       try {
-        allowed = await limiter.isAllowed(clientIp);
+        allowed = await rateLimitSelection.limiter.isAllowed(
+          `${rateLimitSelection.bucket}:${clientIp}`,
+        );
       } catch {
         discardRequestBody(context);
         return jsonResponse(503, {error: 'SERVICE_UNAVAILABLE'});
@@ -289,6 +291,38 @@ export async function handleSagipRequest(
     }
     return jsonResponse(500, {error: 'INTERNAL_ERROR'});
   }
+}
+
+function selectRateLimiter(
+  pathname: string,
+  deps: SagipServerDependencies,
+): {bucket: string; limiter: RateLimiter} | null {
+  if (deps.rateLimiter) {
+    if (
+      pathname === '/v1/envelopes' ||
+      pathname === RESPONDER_SESSION_PATH ||
+      REPORT_STATUS_RE.test(pathname) ||
+      pathname.startsWith('/v1/incidents')
+    ) {
+      return {bucket: 'legacy', limiter: deps.rateLimiter};
+    }
+    return null;
+  }
+
+  const limiters = deps.rateLimiters ?? defaultRateLimiters;
+  if (pathname === '/v1/envelopes') {
+    return {bucket: 'envelope-ingest', limiter: limiters.envelopeIngest};
+  }
+  if (REPORT_STATUS_RE.test(pathname)) {
+    return {bucket: 'report-status', limiter: limiters.reportStatus};
+  }
+  if (pathname === RESPONDER_SESSION_PATH) {
+    return {bucket: 'responder-session', limiter: limiters.responderSession};
+  }
+  if (pathname.startsWith('/v1/incidents')) {
+    return {bucket: 'responder-api', limiter: limiters.responderApi};
+  }
+  return null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

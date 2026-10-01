@@ -40,7 +40,11 @@ class DeliveryWorker(
                         retryClassification = result.reason,
                         now = now,
                     )
-                    repository.scheduleRetry(envelope.messageId, now = now)
+                    repository.scheduleRetry(
+                        envelope.messageId,
+                        now = now,
+                        minimumDelayMs = result.minimumRetryDelayMs,
+                    )
                 }
                 is DeliveryTransportResult.PermanentFailure -> {
                     repository.recordAttemptCompleted(
@@ -60,13 +64,17 @@ class DeliveryWorker(
                     messageId = inbound.messageId,
                     bytes = inbound.envelopeBytes,
                 )
-                when (sender.send(outbound)) {
+                when (val result = sender.send(outbound)) {
                     is DeliveryTransportResult.Accepted -> {
                         store.markInboundServerAccepted(inbound.messageId, now = now)
                         completed++
                     }
                     is DeliveryTransportResult.RetryableFailure -> {
-                        store.scheduleInboundRetry(inbound.messageId, now = now)
+                        store.scheduleInboundRetry(
+                            inbound.messageId,
+                            now = now,
+                            minimumDelayMs = result.minimumRetryDelayMs,
+                        )
                     }
                     is DeliveryTransportResult.PermanentFailure -> {
                         store.markInboundDeliveryFailed(inbound.messageId, now = now)

@@ -57,6 +57,11 @@ class HttpEnvelopeSender(
                 val responseBody = connection.inputStream.bufferedReader().use { it.readText() }
                 val receipt = parseServerReceipt(responseBody)
                 DeliveryTransportResult.Accepted(receipt)
+            } else if (responseCode == 429) {
+                DeliveryTransportResult.RetryableFailure(
+                    reason = "HTTP_429",
+                    minimumRetryDelayMs = parseRetryAfterMillis(connection.getHeaderField("Retry-After")) ?: 60_000L,
+                )
             } else if (responseCode in 400..499 && responseCode != 408) {
                 DeliveryTransportResult.PermanentFailure("HTTP_$responseCode")
             } else {
@@ -92,6 +97,12 @@ class HttpEnvelopeSender(
     }
 
     companion object {
+        internal fun parseRetryAfterMillis(value: String?): Long? {
+            val seconds = value?.trim()?.toLongOrNull() ?: return null
+            if (seconds <= 0L) return null
+            return seconds.coerceAtMost(300L) * 1000L
+        }
+
         fun parseServerReceipt(jsonString: String): ServerReceipt {
             val receiptVersion = extractInt(jsonString, "receiptVersion", "receipt_version")
             val state = extractString(jsonString, "state")

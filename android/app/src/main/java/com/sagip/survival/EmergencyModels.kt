@@ -103,7 +103,7 @@ interface OutboundDeliveryStore {
   fun recordAttemptStarted(messageId: String, transport: String, peerIdentifier: String? = null, now: Long = System.currentTimeMillis()): String
   fun recordAttemptCompleted(attemptId: String, outcome: String, retryClassification: String? = null, now: Long = System.currentTimeMillis())
   fun markServerAccepted(receipt: ServerReceipt, now: Long = System.currentTimeMillis())
-  fun scheduleRetry(messageId: String, now: Long = System.currentTimeMillis(), jitterUnit: Double = Math.random()): Long
+  fun scheduleRetry(messageId: String, now: Long = System.currentTimeMillis(), jitterUnit: Double = Math.random(), minimumDelayMs: Long? = null): Long
   fun markDeliveryFailed(messageId: String, reason: String? = null, now: Long = System.currentTimeMillis())
 }
 
@@ -111,7 +111,7 @@ interface RelayDeliveryStore {
   fun listDueInbound(now: Long, limit: Int = 20): List<InboundEnvelope>
   fun markInboundServerAccepted(messageId: String, now: Long = System.currentTimeMillis())
   fun markInboundDeliveryFailed(messageId: String, now: Long = System.currentTimeMillis())
-  fun scheduleInboundRetry(messageId: String, now: Long = System.currentTimeMillis(), jitterUnit: Double = Math.random()): Long
+  fun scheduleInboundRetry(messageId: String, now: Long = System.currentTimeMillis(), jitterUnit: Double = Math.random(), minimumDelayMs: Long? = null): Long
   fun listInboundReportsAwaitingAck(now: Long = System.currentTimeMillis(), limit: Int = 10): List<String>
   fun scheduleInboundResponderAckPoll(reportId: String, now: Long = System.currentTimeMillis()): Long
   fun recordInboundResponderAck(ack: ResponderAck, now: Long = System.currentTimeMillis()): Boolean
