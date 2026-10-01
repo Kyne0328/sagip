@@ -1,0 +1,86 @@
+{
+  "id": "fig3-validation-process",
+  "type": "process",
+  "title": "SAGIP DEVELOPMENT AND VALIDATION EVIDENCE",
+  "subtitle": "Evidence labels describe what has been demonstrated. They are not maturity scores and do not collapse automated, device, backend, and field evidence into one status.",
+  "output": "artifacts/ch2_fig3_process.svg",
+  "width": 2350,
+  "height": 1800,
+  "columns": 2,
+  "stages": [
+    {
+      "title": "Requirements and Architecture",
+      "status": "implemented",
+      "evidence": "IMPLEMENTED",
+      "detail": "Canonical design, delivery semantics, protocols, field acceptance, and responder operations are documented."
+    },
+    {
+      "title": "Core SOS and Delivery Pipeline",
+      "status": "automated_verified",
+      "evidence": "AUTOMATED VERIFIED",
+      "detail": "Durable local creation, immutable SGP1 preparation, direct delivery, retry, deduplication, and ACK logic have automated coverage."
+    },
+    {
+      "title": "Android Runtime and Lifecycle",
+      "status": "physical_device_verified",
+      "evidence": "PHYSICAL-DEVICE VERIFIED · SELECTED PATHS",
+      "detail": "Instrumentation and foreground-service behavior have physical-device evidence. This does not prove two-phone RF custody."
+    },
+    {
+      "title": "Live Backend",
+      "status": "live_backend_verified",
+      "evidence": "LIVE-BACKEND VERIFIED",
+      "detail": "Live PostgreSQL migrations/runtime and a concurrent duplicate-ingestion scenario have direct backend evidence."
+    },
+    {
+      "title": "BLE Store-Carry-Forward",
+      "status": "pending_field_validation",
+      "evidence": "IMPLEMENTED · FIELD PATH PENDING",
+      "detail": "Protocol/runtime code exists, but end-to-end custody across two physical phones remains unverified."
+    },
+    {
+      "title": "Security v2 Components",
+      "status": "automated_verified",
+      "evidence": "IMPLEMENTED / AUTOMATED VERIFIED",
+      "detail": "SQLCipher and SGP2/HPKE code/tests exist. SGP1 remains normal emission; representative SQLCipher device migration/recovery qualification is still required."
+    },
+    {
+      "title": "Complete Two-Phone Acceptance Loop",
+      "status": "pending_field_validation",
+      "evidence": "PENDING FIELD VALIDATION",
+      "detail": "Required: A offline → BLE custody B → B online → backend → responder ACK → physical SGA1 return to A."
+    },
+    {
+      "title": "Production Emergency-Service Deployment",
+      "status": "production_gated",
+      "evidence": "PRODUCTION-GATED",
+      "detail": "Production signing, encryption/key distribution, field acceptance, and operational service gates must be satisfied before production claims."
+    }
+  ],
+  "legend": [
+    {
+      "status": "implemented",
+      "label": "Implemented"
+    },
+    {
+      "status": "automated_verified",
+      "label": "Automated Verified"
+    },
+    {
+      "status": "physical_device_verified",
+      "label": "Physical-Device Verified"
+    },
+    {
+      "status": "live_backend_verified",
+      "label": "Live-Backend Verified"
+    },
+    {
+      "status": "pending_field_validation",
+      "label": "Pending Field Validation"
+    },
+    {
+      "status": "production_gated",
+      "label": "Production-Gated"
+    }
+  ]
+}

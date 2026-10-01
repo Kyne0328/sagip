@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2800" height="1900" viewBox="0 0 2800 1900">
+<defs>
+<marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="4" orient="auto" markerUnits="strokeWidth">
+<path d="M0,0 L0,8 L11,4 z" fill="#334e68"/>
+</marker>
+</defs>
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="1400.0" y="62.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="54" font-weight="700" fill="#17202a">SAGIP LEVEL 1 LOGICAL DATA FLOW DIAGRAM</text>
+<text x="1400.0" y="108.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="30" font-weight="400" fill="#5f6b76"><tspan x="1400.0" dy="0">Gane-Sarson style: external entities, processes, data stores, and labeled data flows.</tspan></text>
+<rect x="96.0" y="189.0" width="628.0" height="279.0" rx="2" fill="#f5f7f9" stroke="#6b7785" stroke-width="3"/>
+<text x="410.0" y="320.5" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="38" font-weight="700" fill="#17202a">Civilian User</text>
+<rect x="756.0" y="189.0" width="628.0" height="279.0" rx="28" fill="#eaf2fb" stroke="#2d5f8b" stroke-width="3"/>
+<rect x="770.0" y="203.0" width="92.0" height="48.0" rx="8" fill="#ffffff" stroke="#2d5f8b" stroke-width="2"/>
+<text x="816.0" y="236.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="700" fill="#2d5f8b">1.0</text>
+<text x="1070.0" y="271.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="38" font-weight="700" fill="#17202a">Create and Store SOS</text>
+<text x="1070.0" y="323.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="400" fill="#5f6b76">Validate input and commit</text>
+<text x="1070.0" y="355.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="400" fill="#5f6b76">the report locally.</text>
+<rect x="1416.0" y="189.0" width="628.0" height="279.0" rx="2" fill="#eaf7ee" stroke="#2f6b45" stroke-width="3"/>
+<line x1="1508.0" y1="189.0" x2="1508.0" y2="468.0" stroke="#2f6b45" stroke-width="3" fill="none"/>
+<text x="1462.0" y="338.5" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="30" font-weight="700" fill="#2f6b45">D1</text>
+<text x="1776.0" y="261.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="38" font-weight="700" fill="#17202a">Origin Device Store</text>
+<text x="1776.0" y="313.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="400" fill="#5f6b76">reports, revisions,</text>
+<text x="1776.0" y="345.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="400" fill="#5f6b76">location, outbound state</text>
+<rect x="1416.0" y="496.0" width="628.0" height="279.0" rx="28" fill="#eaf2fb" stroke="#2d5f8b" stroke-width="3"/>
+<rect x="1430.0" y="510.0" width="92.0" height="48.0" rx="8" fill="#ffffff" stroke="#2d5f8b" stroke-width="2"/>
+<text x="1476.0" y="543.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="700" fill="#2d5f8b">2.0</text>
+<text x="1730.0" y="578.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="38" font-weight="700" fill="#17202a">Prepare Emergency</text>
+<text x="1730.0" y="622.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="38" font-weight="700" fill="#17202a">Envelope</text>
+<text x="1730.0" y="674.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="400" fill="#5f6b76">Prepare one immutable SGP1</text>
+<text x="1730.0" y="706.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="400" fill="#5f6b76">envelope after local</text>
+<rect x="96.0" y="803.0" width="628.0" height="279.0" rx="28" fill="#eaf2fb" stroke="#2d5f8b" stroke-width="3"/>
+<rect x="110.0" y="817.0" width="92.0" height="48.0" rx="8" fill="#ffffff" stroke="#2d5f8b" stroke-width="2"/>
+<text x="156.0" y="850.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="700" fill="#2d5f8b">4.0</text>
+<text x="410.0" y="885.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="38" font-weight="700" fill="#17202a">Receive and Store Relay</text>
+<text x="410.0" y="929.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="38" font-weight="700" fill="#17202a">Copy</text>
+<text x="410.0" y="981.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="400" fill="#5f6b76">Validate and persist the</text>
+<text x="410.0" y="1013.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="400" fill="#5f6b76">complete BLE envelope</text>
+<rect x="1416.0" y="803.0" width="628.0" height="279.0" rx="28" fill="#eaf2fb" stroke="#2d5f8b" stroke-width="3"/>
+<rect x="1430.0" y="817.0" width="92.0" height="48.0" rx="8" fill="#ffffff" stroke="#2d5f8b" stroke-width="2"/>
+<text x="1476.0" y="850.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="700" fill="#2d5f8b">3.0</text>
+<text x="1730.0" y="885.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="38" font-weight="700" fill="#17202a">Deliver Emergency</text>
+<text x="1730.0" y="929.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="38" font-weight="700" fill="#17202a">Envelope</text>
+<text x="1730.0" y="981.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="400" fill="#5f6b76">Try direct internet</text>
+<text x="1730.0" y="1013.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="400" fill="#5f6b76">delivery or BLE</text>
+<rect x="96.0" y="1110.0" width="628.0" height="279.0" rx="2" fill="#eaf7ee" stroke="#2f6b45" stroke-width="3"/>
+<line x1="188.0" y1="1110.0" x2="188.0" y2="1389.0" stroke="#2f6b45" stroke-width="3" fill="none"/>
+<text x="142.0" y="1259.5" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="30" font-weight="700" fill="#2f6b45">D2</text>
+<text x="456.0" y="1182.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="38" font-weight="700" fill="#17202a">Relay Device Store</text>
+<text x="456.0" y="1234.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="400" fill="#5f6b76">inbound envelope, custody</text>
+<text x="456.0" y="1266.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="400" fill="#5f6b76">evidence, gateway-held ACK</text>
+<rect x="1416.0" y="1110.0" width="628.0" height="279.0" rx="28" fill="#eaf2fb" stroke="#2d5f8b" stroke-width="3"/>
+<rect x="1430.0" y="1124.0" width="92.0" height="48.0" rx="8" fill="#ffffff" stroke="#2d5f8b" stroke-width="2"/>
+<text x="1476.0" y="1157.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="700" fill="#2d5f8b">5.0</text>
+<text x="1730.0" y="1192.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="38" font-weight="700" fill="#17202a">Validate and Ingest</text>
+<text x="1730.0" y="1236.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="38" font-weight="700" fill="#17202a">Envelope</text>
+<text x="1730.0" y="1288.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="400" fill="#5f6b76">Validate, deduplicate, and</text>
+<text x="1730.0" y="1320.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="400" fill="#5f6b76">accept the original</text>
+<rect x="2076.0" y="1110.0" width="628.0" height="279.0" rx="2" fill="#eaf7ee" stroke="#2f6b45" stroke-width="3"/>
+<line x1="2168.0" y1="1110.0" x2="2168.0" y2="1389.0" stroke="#2f6b45" stroke-width="3" fill="none"/>
+<text x="2122.0" y="1259.5" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="30" font-weight="700" fill="#2f6b45">D3</text>
+<text x="2436.0" y="1182.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="38" font-weight="700" fill="#17202a">Backend Incident Store</text>
+<text x="2436.0" y="1234.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="400" fill="#5f6b76">incidents, receipts,</text>
+<text x="2436.0" y="1266.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="400" fill="#5f6b76">responder state</text>
+<rect x="1416.0" y="1417.0" width="628.0" height="279.0" rx="28" fill="#eaf2fb" stroke="#2d5f8b" stroke-width="3"/>
+<rect x="1430.0" y="1431.0" width="92.0" height="48.0" rx="8" fill="#ffffff" stroke="#2d5f8b" stroke-width="2"/>
+<text x="1476.0" y="1464.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="700" fill="#2d5f8b">6.0</text>
+<text x="1730.0" y="1499.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="38" font-weight="700" fill="#17202a">Record and Return</text>
+<text x="1730.0" y="1543.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="38" font-weight="700" fill="#17202a">Responder ACK</text>
+<text x="1730.0" y="1595.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="400" fill="#5f6b76">Persist responder status</text>
+<text x="1730.0" y="1627.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="400" fill="#5f6b76">and make return</text>
+<rect x="2076.0" y="1417.0" width="628.0" height="279.0" rx="2" fill="#f5f7f9" stroke="#6b7785" stroke-width="3"/>
+<text x="2390.0" y="1548.5" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="38" font-weight="700" fill="#17202a">Authorized Responder</text>
+<polyline points="724.0,328.5 740.0,328.5 740.0,328.5 756.0,328.5" fill="none" stroke="#334e68" stroke-width="3" marker-end="url(#arrow)"/>
+<text x="740.0" y="300.5" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="400" fill="#5f6b76"><tspan x="740.0" dy="0">SOS details</tspan></text>
+<polyline points="1384.0,328.5 1400.0,328.5 1400.0,328.5 1416.0,328.5" fill="none" stroke="#334e68" stroke-width="3" marker-end="url(#arrow)"/>
+<text x="1400.0" y="300.5" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="400" fill="#5f6b76"><tspan x="1400.0" dy="0">report + revision + location</tspan></text>
+<polyline points="1730.0,468.0 1730.0,496.0" fill="none" stroke="#334e68" stroke-width="3" marker-end="url(#arrow)"/>
+<text x="1895.0" y="472.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="400" fill="#5f6b76"><tspan x="1895.0" dy="0">stored report data</tspan></text>
+<polyline points="1730.0,775.0 1730.0,803.0" fill="none" stroke="#334e68" stroke-width="3" marker-end="url(#arrow)"/>
+<text x="1915.0" y="779.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="400" fill="#5f6b76"><tspan x="1915.0" dy="0">prepared SGP1 envelope</tspan></text>
+<polyline points="1730.0,1082.0 1730.0,1110.0" fill="none" stroke="#334e68" stroke-width="3" marker-end="url(#arrow)"/>
+<text x="1920.0" y="1086.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="400" fill="#5f6b76"><tspan x="1920.0" dy="0">SGP1 envelope (internet)</tspan></text>
+<polyline points="1416.0,942.5 1070.0,942.5 1070.0,942.5 724.0,942.5" fill="none" stroke="#334e68" stroke-width="3" marker-end="url(#arrow)"/>
+<text x="1070.0" y="914.5" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="400" fill="#5f6b76"><tspan x="1070.0" dy="0">SGP1 envelope (BLE)</tspan></text>
+<polyline points="410.0,1082.0 410.0,1110.0" fill="none" stroke="#334e68" stroke-width="3" marker-end="url(#arrow)"/>
+<text x="600.0" y="1086.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="400" fill="#5f6b76"><tspan x="600.0" dy="0">persisted inbound</tspan><tspan x="600.0" dy="30">envelope</tspan></text>
+<polyline points="724.0,1249.5 1070.0,1249.5 1070.0,1249.5 1416.0,1249.5" fill="none" stroke="#334e68" stroke-width="3" marker-end="url(#arrow)"/>
+<text x="1070.0" y="1221.5" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="400" fill="#5f6b76"><tspan x="1070.0" dy="0">same envelope when internet</tspan><tspan x="1070.0" dy="30">returns</tspan></text>
+<polyline points="2044.0,1249.5 2060.0,1249.5 2060.0,1249.5 2076.0,1249.5" fill="none" stroke="#334e68" stroke-width="3" marker-end="url(#arrow)"/>
+<text x="2060.0" y="1221.5" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="400" fill="#5f6b76"><tspan x="2060.0" dy="0">incident + server</tspan><tspan x="2060.0" dy="30">receipt</tspan></text>
+<polyline points="2390.0,1389.0 2390.0,1417.0" fill="none" stroke="#334e68" stroke-width="3" marker-end="url(#arrow)"/>
+<text x="2210.0" y="1393.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="400" fill="#5f6b76"><tspan x="2210.0" dy="0">accepted incident /</tspan><tspan x="2210.0" dy="30">status</tspan></text>
+<polyline points="2076.0,1556.5 2060.0,1556.5 2060.0,1556.5 2044.0,1556.5" fill="none" stroke="#334e68" stroke-width="3" marker-end="url(#arrow)"/>
+<text x="2060.0" y="1528.5" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="400" fill="#5f6b76"><tspan x="2060.0" dy="0">operational status</tspan></text>
+<polyline points="2044.0,1556.5 2060.0,1556.5 2060.0,1249.5 2076.0,1249.5" fill="none" stroke="#334e68" stroke-width="3" marker-end="url(#arrow)"/>
+<text x="2140.0" y="1375.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="400" fill="#5f6b76"><tspan x="2140.0" dy="0">responder</tspan><tspan x="2140.0" dy="30">acknowledgement</tspan></text>
+<polyline points="1416.0,1556.5 1070.0,1556.5 1070.0,1249.5 724.0,1249.5" fill="none" stroke="#334e68" stroke-width="3" marker-end="url(#arrow)"/>
+<text x="1070.0" y="1411.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="400" fill="#5f6b76"><tspan x="1070.0" dy="0">gateway-held ACK</tspan></text>
+<polyline points="1730.0,1696.0 1730.0,1780.0 1730.0,1780.0 1730.0,468.0" fill="none" stroke="#334e68" stroke-width="3" marker-end="url(#arrow)"/>
+<text x="1610.0" y="1409.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="400" fill="#5f6b76"><tspan x="1610.0" dy="0">SGA1 / responder ACK</tspan></text>
+<text x="1400.0" y="1852.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="400" fill="#5f6b76"><tspan x="1400.0" dy="0">Logical DFD only. React Native, Android Survival Core, BLE, and backend technologies are described in the architecture text rather than</tspan><tspan x="1400.0" dy="31">used as DFD symbols.</tspan></text>
+</svg>

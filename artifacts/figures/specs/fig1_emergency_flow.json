@@ -1,0 +1,221 @@
+{
+  "id": "fig1-logical-dfd",
+  "type": "flow",
+  "title": "SAGIP LEVEL 1 LOGICAL DATA FLOW DIAGRAM",
+  "subtitle": "Gane-Sarson style: external entities, processes, data stores, and labeled data flows.",
+  "output": "artifacts/ch2_fig1_dfd.svg",
+  "width": 2800,
+  "height": 1900,
+  "grid": {
+    "rows": 5,
+    "cols": 4
+  },
+  "show_edge_labels": true,
+  "nodes": [
+    {
+      "id": "civilian",
+      "row": 0,
+      "col": 0,
+      "label": "Civilian User",
+      "shape": "external_entity",
+      "kind": "user"
+    },
+    {
+      "id": "p1",
+      "row": 0,
+      "col": 1,
+      "label": "Create and Store SOS",
+      "shape": "process",
+      "kind": "component",
+      "number": "1.0",
+      "detail": "Validate input and commit the report locally."
+    },
+    {
+      "id": "d1",
+      "row": 0,
+      "col": 2,
+      "label": "Origin Device Store",
+      "shape": "data_store",
+      "kind": "data_store",
+      "number": "D1",
+      "detail": "reports, revisions, location, outbound state"
+    },
+    {
+      "id": "p2",
+      "row": 1,
+      "col": 2,
+      "label": "Prepare Emergency Envelope",
+      "shape": "process",
+      "kind": "component",
+      "number": "2.0",
+      "detail": "Prepare one immutable SGP1 envelope after local commit."
+    },
+    {
+      "id": "p4",
+      "row": 2,
+      "col": 0,
+      "label": "Receive and Store Relay Copy",
+      "shape": "process",
+      "kind": "component",
+      "number": "4.0",
+      "detail": "Validate and persist the complete BLE envelope before custody ACK."
+    },
+    {
+      "id": "p3",
+      "row": 2,
+      "col": 2,
+      "label": "Deliver Emergency Envelope",
+      "shape": "process",
+      "kind": "component",
+      "number": "3.0",
+      "detail": "Try direct internet delivery or BLE store-carry-forward."
+    },
+    {
+      "id": "d2",
+      "row": 3,
+      "col": 0,
+      "label": "Relay Device Store",
+      "shape": "data_store",
+      "kind": "data_store",
+      "number": "D2",
+      "detail": "inbound envelope, custody evidence, gateway-held ACK"
+    },
+    {
+      "id": "p5",
+      "row": 3,
+      "col": 2,
+      "label": "Validate and Ingest Envelope",
+      "shape": "process",
+      "kind": "component",
+      "number": "5.0",
+      "detail": "Validate, deduplicate, and accept the original envelope."
+    },
+    {
+      "id": "d3",
+      "row": 3,
+      "col": 3,
+      "label": "Backend Incident Store",
+      "shape": "data_store",
+      "kind": "data_store",
+      "number": "D3",
+      "detail": "incidents, receipts, responder state"
+    },
+    {
+      "id": "p6",
+      "row": 4,
+      "col": 2,
+      "label": "Record and Return Responder ACK",
+      "shape": "process",
+      "kind": "component",
+      "number": "6.0",
+      "detail": "Persist responder status and make return acknowledgement available."
+    },
+    {
+      "id": "responder",
+      "row": 4,
+      "col": 3,
+      "label": "Authorized Responder",
+      "shape": "external_entity",
+      "kind": "responder"
+    }
+  ],
+  "edges": [
+    {
+      "from": "civilian",
+      "to": "p1",
+      "label": "SOS details",
+      "label_dy": -18
+    },
+    {
+      "from": "p1",
+      "to": "d1",
+      "label": "report + revision + location",
+      "label_dy": -18,
+      "label_max_chars": 30
+    },
+    {
+      "from": "d1",
+      "to": "p2",
+      "label": "stored report data",
+      "label_dx": 165,
+      "label_dy": 0
+    },
+    {
+      "from": "p2",
+      "to": "p3",
+      "label": "prepared SGP1 envelope",
+      "label_dx": 185,
+      "label_dy": 0
+    },
+    {
+      "from": "p3",
+      "to": "p5",
+      "label": "SGP1 envelope (internet)",
+      "label_dx": 190,
+      "label_dy": 0
+    },
+    {
+      "from": "p3",
+      "to": "p4",
+      "label": "SGP1 envelope (BLE)",
+      "label_dy": -18
+    },
+    {
+      "from": "p4",
+      "to": "d2",
+      "label": "persisted inbound envelope",
+      "label_dx": 190,
+      "label_dy": 0
+    },
+    {
+      "from": "d2",
+      "to": "p5",
+      "label": "same envelope when internet returns",
+      "label_dy": -18,
+      "label_max_chars": 32
+    },
+    {
+      "from": "p5",
+      "to": "d3",
+      "label": "incident + server receipt",
+      "label_dy": -18
+    },
+    {
+      "from": "d3",
+      "to": "responder",
+      "label": "accepted incident / status",
+      "label_dx": -180,
+      "label_dy": 0
+    },
+    {
+      "from": "responder",
+      "to": "p6",
+      "label": "operational status",
+      "label_dy": -18
+    },
+    {
+      "from": "p6",
+      "to": "d3",
+      "label": "responder acknowledgement",
+      "label_dx": 80,
+      "label_dy": -18
+    },
+    {
+      "from": "p6",
+      "to": "d2",
+      "label": "gateway-held ACK",
+      "label_dy": 18
+    },
+    {
+      "from": "p6",
+      "to": "d1",
+      "label": "SGA1 / responder ACK",
+      "route": "return",
+      "label_dx": -120,
+      "label_dy": -12
+    }
+  ],
+  "notes": [
+    "Logical DFD only. React Native, Android Survival Core, BLE, and backend technologies are described in the architecture text rather than used as DFD symbols."
+  ]
+}

@@ -1,0 +1,116 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2700" height="2250" viewBox="0 0 2700 2250">
+<defs>
+<marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="4" orient="auto" markerUnits="strokeWidth">
+<path d="M0,0 L0,8 L11,4 z" fill="#334e68"/>
+</marker>
+</defs>
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="1350.0" y="62.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="54" font-weight="700" fill="#17202a">SAGIP ON-DEVICE ENTITY RELATIONSHIP DIAGRAM</text>
+<text x="1350.0" y="108.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="30" font-weight="400" fill="#5f6b76"><tspan x="1350.0" dy="0">SQLite schema v7. Core declared relationships are shown; selected columns are included for readability.</tspan></text>
+<rect x="69.0" y="217.2" width="835.3" height="398.0" rx="14" fill="#eaf7ee" stroke="#2f6b45" stroke-width="3"/>
+<rect x="69.0" y="217.2" width="835.3" height="96.0" rx="14" fill="#2f6b45" opacity="0.10"/>
+<text x="91.0" y="280.2" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="48" font-weight="700" fill="#17202a">reports</text>
+<text x="91.0" y="356.2" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="700" fill="#17202a">PK report_id : TEXT</text>
+<text x="91.0" y="412.2" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">created_at : INTEGER</text>
+<text x="91.0" y="468.2" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">emergency_type : TEXT</text>
+<text x="91.0" y="524.2" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">urgency : TEXT</text>
+<text x="91.0" y="580.2" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">lifecycle_state : TEXT</text>
+<rect x="932.3" y="217.2" width="835.3" height="398.0" rx="14" fill="#eaf7ee" stroke="#2f6b45" stroke-width="3"/>
+<rect x="932.3" y="217.2" width="835.3" height="96.0" rx="14" fill="#2f6b45" opacity="0.10"/>
+<text x="954.3" y="280.2" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="48" font-weight="700" fill="#17202a">report_revisions</text>
+<text x="954.3" y="356.2" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="700" fill="#17202a">PK/FK report_id : TEXT</text>
+<text x="954.3" y="412.2" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="700" fill="#17202a">PK revision : INTEGER</text>
+<text x="954.3" y="468.2" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">created_at : INTEGER</text>
+<text x="954.3" y="524.2" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">emergency_type : TEXT</text>
+<text x="954.3" y="580.2" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">urgency : TEXT</text>
+<rect x="1795.7" y="217.2" width="835.3" height="398.0" rx="14" fill="#eaf7ee" stroke="#2f6b45" stroke-width="3"/>
+<rect x="1795.7" y="217.2" width="835.3" height="96.0" rx="14" fill="#2f6b45" opacity="0.10"/>
+<text x="1817.7" y="280.2" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="48" font-weight="700" fill="#17202a">locations</text>
+<text x="1817.7" y="356.2" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="700" fill="#17202a">PK location_id : INTEGER</text>
+<text x="1817.7" y="412.2" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="700" fill="#17202a">FK/UQ report_id : TEXT</text>
+<text x="1817.7" y="468.2" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">latitude : REAL</text>
+<text x="1817.7" y="524.2" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">longitude : REAL</text>
+<text x="1817.7" y="580.2" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">captured_at : INTEGER</text>
+<rect x="69.0" y="671.8" width="835.3" height="454.0" rx="14" fill="#eaf7ee" stroke="#2f6b45" stroke-width="3"/>
+<rect x="69.0" y="671.8" width="835.3" height="96.0" rx="14" fill="#2f6b45" opacity="0.10"/>
+<text x="91.0" y="734.8" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="48" font-weight="700" fill="#17202a">outbound_envelopes</text>
+<text x="91.0" y="810.8" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="700" fill="#17202a">PK message_id : TEXT</text>
+<text x="91.0" y="866.8" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="700" fill="#17202a">FK/UQ report_id : TEXT</text>
+<text x="91.0" y="922.8" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="700" fill="#17202a">FK revision : INTEGER</text>
+<text x="91.0" y="978.8" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">envelope_bytes : BLOB</text>
+<text x="91.0" y="1034.8" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">delivery_state : TEXT</text>
+<text x="91.0" y="1090.8" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">preparation_state : TEXT</text>
+<rect x="932.3" y="699.8" width="835.3" height="398.0" rx="14" fill="#eaf7ee" stroke="#2f6b45" stroke-width="3"/>
+<rect x="932.3" y="699.8" width="835.3" height="96.0" rx="14" fill="#2f6b45" opacity="0.10"/>
+<text x="954.3" y="762.8" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="48" font-weight="700" fill="#17202a">delivery_attempts</text>
+<text x="954.3" y="838.8" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="700" fill="#17202a">PK attempt_id : TEXT</text>
+<text x="954.3" y="894.8" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="700" fill="#17202a">FK message_id : TEXT</text>
+<text x="954.3" y="950.8" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">transport : TEXT</text>
+<text x="954.3" y="1006.8" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">peer_identifier : TEXT</text>
+<text x="954.3" y="1062.8" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">outcome : TEXT</text>
+<rect x="1795.7" y="699.8" width="835.3" height="398.0" rx="14" fill="#eaf7ee" stroke="#2f6b45" stroke-width="3"/>
+<rect x="1795.7" y="699.8" width="835.3" height="96.0" rx="14" fill="#2f6b45" opacity="0.10"/>
+<text x="1817.7" y="762.8" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="48" font-weight="700" fill="#17202a">server_receipts</text>
+<text x="1817.7" y="838.8" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="700" fill="#17202a">PK receipt_id : TEXT</text>
+<text x="1817.7" y="894.8" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="700" fill="#17202a">FK/UQ message_id : TEXT</text>
+<text x="1817.7" y="950.8" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">report_id : TEXT</text>
+<text x="1817.7" y="1006.8" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">revision : INTEGER</text>
+<text x="1817.7" y="1062.8" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">accepted_at : TEXT</text>
+<rect x="69.0" y="1210.2" width="835.3" height="342.0" rx="14" fill="#eaf7ee" stroke="#2f6b45" stroke-width="3"/>
+<rect x="69.0" y="1210.2" width="835.3" height="96.0" rx="14" fill="#2f6b45" opacity="0.10"/>
+<text x="91.0" y="1273.2" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="48" font-weight="700" fill="#17202a">relay_receipts</text>
+<text x="91.0" y="1349.2" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="700" fill="#17202a">PK receipt_id : TEXT</text>
+<text x="91.0" y="1405.2" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="700" fill="#17202a">FK message_id : TEXT</text>
+<text x="91.0" y="1461.2" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">peer_identifier : TEXT</text>
+<text x="91.0" y="1517.2" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">acknowledged_at : INTEGER</text>
+<rect x="1795.7" y="1182.2" width="835.3" height="398.0" rx="14" fill="#eaf7ee" stroke="#2f6b45" stroke-width="3"/>
+<rect x="1795.7" y="1182.2" width="835.3" height="96.0" rx="14" fill="#2f6b45" opacity="0.10"/>
+<text x="1817.7" y="1245.2" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="48" font-weight="700" fill="#17202a">responder_acks</text>
+<text x="1817.7" y="1321.2" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="700" fill="#17202a">PK ack_id : TEXT</text>
+<text x="1817.7" y="1377.2" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="700" fill="#17202a">FK report_id : TEXT</text>
+<text x="1817.7" y="1433.2" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">responder_id : TEXT</text>
+<text x="1817.7" y="1489.2" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">status : TEXT</text>
+<text x="1817.7" y="1545.2" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">acknowledged_at : INTEGER</text>
+<rect x="69.0" y="1664.8" width="835.3" height="398.0" rx="14" fill="#eaf7ee" stroke="#2f6b45" stroke-width="3"/>
+<rect x="69.0" y="1664.8" width="835.3" height="96.0" rx="14" fill="#2f6b45" opacity="0.10"/>
+<text x="91.0" y="1727.8" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="48" font-weight="700" fill="#17202a">inbound_envelopes</text>
+<text x="91.0" y="1803.8" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="700" fill="#17202a">PK inbound_id : TEXT</text>
+<text x="91.0" y="1859.8" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="700" fill="#17202a">UQ message_id : TEXT</text>
+<text x="91.0" y="1915.8" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">report_id : TEXT</text>
+<text x="91.0" y="1971.8" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">envelope_bytes : BLOB</text>
+<text x="91.0" y="2027.8" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">delivery_state : TEXT</text>
+<rect x="1795.7" y="1664.8" width="835.3" height="398.0" rx="14" fill="#f5f7f9" stroke="#6b7785" stroke-width="3" stroke-dasharray="9 6"/>
+<rect x="1795.7" y="1664.8" width="835.3" height="96.0" rx="14" fill="#6b7785" opacity="0.10"/>
+<text x="1817.7" y="1727.8" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="48" font-weight="700" fill="#17202a">relay_responder_acks</text>
+<text x="1817.7" y="1803.8" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="700" fill="#17202a">PK ack_id : TEXT</text>
+<text x="1817.7" y="1859.8" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">report_id : TEXT</text>
+<text x="1817.7" y="1915.8" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">responder_id : TEXT</text>
+<text x="1817.7" y="1971.8" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">status : TEXT</text>
+<text x="1817.7" y="2027.8" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">acknowledged_at : INTEGER</text>
+<polyline points="904.3,416.2 918.3,416.2 918.3,416.2 932.3,416.2" fill="none" stroke="#334e68" stroke-width="2"/>
+<text x="916.3" y="406.2" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#334e68">1</text>
+<text x="920.3" y="406.2" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#334e68">0..*</text>
+<polyline points="904.3,416.2 1350.0,416.2 1350.0,416.2 1795.7,416.2" fill="none" stroke="#334e68" stroke-width="2"/>
+<text x="916.3" y="406.2" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#334e68">1</text>
+<text x="1783.7" y="406.2" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#334e68">0..1</text>
+<polyline points="932.3,416.2 918.3,416.2 918.3,898.8 904.3,898.8" fill="none" stroke="#334e68" stroke-width="2"/>
+<text x="944.3" y="406.2" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#334e68">1</text>
+<text x="892.3" y="888.8" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#334e68">0..1</text>
+<polyline points="904.3,898.8 918.3,898.8 918.3,898.8 932.3,898.8" fill="none" stroke="#334e68" stroke-width="2"/>
+<text x="916.3" y="888.8" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#334e68">1</text>
+<text x="920.3" y="888.8" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#334e68">0..*</text>
+<polyline points="904.3,898.8 1350.0,898.8 1350.0,898.8 1795.7,898.8" fill="none" stroke="#334e68" stroke-width="2"/>
+<text x="916.3" y="888.8" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#334e68">1</text>
+<text x="1783.7" y="888.8" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#334e68">0..1</text>
+<polyline points="486.7,1125.8 486.7,1168.0 486.7,1168.0 486.7,1210.2" fill="none" stroke="#334e68" stroke-width="2"/>
+<text x="498.7" y="1115.8" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#334e68">1</text>
+<text x="474.7" y="1200.2" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#334e68">0..*</text>
+<polyline points="904.3,416.2 1350.0,416.2 1350.0,1381.2 1795.7,1381.2" fill="none" stroke="#334e68" stroke-width="2"/>
+<text x="916.3" y="406.2" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#334e68">1</text>
+<text x="1783.7" y="1371.2" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#334e68">0..*</text>
+<polyline points="904.3,1863.8 1350.0,1863.8 1350.0,1863.8 1795.7,1863.8" fill="none" stroke="#334e68" stroke-width="2" stroke-dasharray="8 6"/>
+<text x="916.3" y="1853.8" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#334e68">1</text>
+<text x="1783.7" y="1853.8" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#334e68">0..*</text>
+<text x="1350.0" y="2168.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="400" fill="#5f6b76"><tspan x="1350.0" dy="0">Solid lines are declared foreign keys. The dashed relationship is a logical report_id association because relay_responder_acks has no</tspan><tspan x="1350.0" dy="31">declared foreign key.</tspan></text>
+<text x="1350.0" y="2202.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="400" fill="#5f6b76"><tspan x="1350.0" dy="0">delivery_events and seen_messages are operational tables and are omitted from this core ERD for readability.</tspan></text>
+</svg>

@@ -1,0 +1,263 @@
+{
+  "id": "fig2b-backend-erd",
+  "type": "erd",
+  "title": "SAGIP BACKEND ENTITY RELATIONSHIP DIAGRAM",
+  "subtitle": "PostgreSQL migrations 001-003. Core incident and responder relationships are shown; operational rate-limit state is omitted.",
+  "output": "artifacts/ch2_fig2b_backend_erd.svg",
+  "width": 2700,
+  "height": 2050,
+  "grid": {
+    "rows": 3,
+    "cols": 3
+  },
+  "entities": [
+    {
+      "id": "origin_keys",
+      "row": 0,
+      "col": 0,
+      "label": "origin_keys",
+      "attributes": [
+        {
+          "name": "origin_key_id",
+          "type": "BYTEA",
+          "key": "PK"
+        },
+        {
+          "name": "public_key_der",
+          "type": "BYTEA"
+        },
+        {
+          "name": "first_seen_at",
+          "type": "TIMESTAMPTZ"
+        },
+        {
+          "name": "last_seen_at",
+          "type": "TIMESTAMPTZ"
+        }
+      ]
+    },
+    {
+      "id": "incidents",
+      "row": 0,
+      "col": 1,
+      "label": "incidents",
+      "attributes": [
+        {
+          "name": "report_id",
+          "type": "UUID",
+          "key": "PK"
+        },
+        {
+          "name": "origin_key_id",
+          "type": "BYTEA",
+          "key": "FK"
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT"
+        },
+        {
+          "name": "first_received_at",
+          "type": "TIMESTAMPTZ"
+        }
+      ]
+    },
+    {
+      "id": "revisions",
+      "row": 0,
+      "col": 2,
+      "label": "incident_revisions",
+      "attributes": [
+        {
+          "name": "report_id",
+          "type": "UUID",
+          "key": "PK/FK"
+        },
+        {
+          "name": "revision",
+          "type": "INTEGER",
+          "key": "PK"
+        },
+        {
+          "name": "emergency_type",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "urgency",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "payload_digest",
+          "type": "BYTEA"
+        }
+      ]
+    },
+    {
+      "id": "accepted",
+      "row": 1,
+      "col": 1,
+      "label": "accepted_messages",
+      "attributes": [
+        {
+          "name": "message_id",
+          "type": "UUID",
+          "key": "PK"
+        },
+        {
+          "name": "report_id",
+          "type": "UUID",
+          "key": "FK/UQ"
+        },
+        {
+          "name": "revision",
+          "type": "INTEGER",
+          "key": "FK/UQ"
+        },
+        {
+          "name": "origin_key_id",
+          "type": "BYTEA",
+          "key": "FK"
+        },
+        {
+          "name": "envelope_sha256",
+          "type": "BYTEA"
+        },
+        {
+          "name": "accepted_at",
+          "type": "TIMESTAMPTZ"
+        }
+      ]
+    },
+    {
+      "id": "server_receipts",
+      "row": 1,
+      "col": 2,
+      "label": "server_receipts",
+      "attributes": [
+        {
+          "name": "message_id",
+          "type": "UUID",
+          "key": "PK/FK"
+        },
+        {
+          "name": "receipt_id",
+          "type": "UUID",
+          "key": "UQ"
+        },
+        {
+          "name": "state",
+          "type": "TEXT"
+        },
+        {
+          "name": "accepted_at",
+          "type": "TIMESTAMPTZ"
+        }
+      ]
+    },
+    {
+      "id": "responders",
+      "row": 2,
+      "col": 0,
+      "label": "responder_identities",
+      "attributes": [
+        {
+          "name": "responder_id",
+          "type": "UUID",
+          "key": "PK"
+        },
+        {
+          "name": "callsign",
+          "type": "VARCHAR(64)",
+          "key": "UQ"
+        },
+        {
+          "name": "role",
+          "type": "VARCHAR(32)"
+        },
+        {
+          "name": "api_key_hash",
+          "type": "VARCHAR(64)",
+          "key": "UQ"
+        }
+      ]
+    },
+    {
+      "id": "acks",
+      "row": 2,
+      "col": 1,
+      "label": "responder_acknowledgements",
+      "attributes": [
+        {
+          "name": "ack_id",
+          "type": "UUID",
+          "key": "PK"
+        },
+        {
+          "name": "report_id",
+          "type": "UUID",
+          "key": "FK"
+        },
+        {
+          "name": "responder_id",
+          "type": "UUID",
+          "key": "FK"
+        },
+        {
+          "name": "status",
+          "type": "VARCHAR(32)"
+        },
+        {
+          "name": "acknowledged_at",
+          "type": "TIMESTAMPTZ"
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "from": "origin_keys",
+      "to": "incidents",
+      "from_card": "1",
+      "to_card": "0..*"
+    },
+    {
+      "from": "origin_keys",
+      "to": "accepted",
+      "from_card": "1",
+      "to_card": "0..*"
+    },
+    {
+      "from": "incidents",
+      "to": "revisions",
+      "from_card": "1",
+      "to_card": "0..*"
+    },
+    {
+      "from": "revisions",
+      "to": "accepted",
+      "from_card": "1",
+      "to_card": "0..1"
+    },
+    {
+      "from": "accepted",
+      "to": "server_receipts",
+      "from_card": "1",
+      "to_card": "0..1"
+    },
+    {
+      "from": "incidents",
+      "to": "acks",
+      "from_card": "1",
+      "to_card": "0..*"
+    },
+    {
+      "from": "responders",
+      "to": "acks",
+      "from_card": "1",
+      "to_card": "0..*"
+    }
+  ],
+  "notes": [
+    "request_rate_limit_windows is operational infrastructure without incident foreign keys and is omitted from the core ERD."
+  ]
+}

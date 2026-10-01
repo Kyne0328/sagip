@@ -1,0 +1,97 @@
+{
+  "id": "fig5-field-sequence",
+  "type": "sequence",
+  "title": "SAGIP PHYSICAL STORE-CARRY-FORWARD FIELD ACCEPTANCE SEQUENCE",
+  "subtitle": "This is the required end-to-end acceptance path from the canonical physical testing runbook.",
+  "output": "artifacts/ch2_fig5_field_sequence.svg",
+  "width": 2400,
+  "height": 1900,
+  "actors": [
+    {
+      "id": "a",
+      "label": "Phone A — Origin / Civilian",
+      "kind": "component"
+    },
+    {
+      "id": "b",
+      "label": "Phone B — Relay / Gateway",
+      "kind": "component"
+    },
+    {
+      "id": "backend",
+      "label": "Live SAGIP Backend",
+      "kind": "backend"
+    },
+    {
+      "id": "responder",
+      "label": "Authorized Responder",
+      "kind": "responder"
+    }
+  ],
+  "messages": [
+    {
+      "from": "a",
+      "to": "a",
+      "label": "Create SOS and durably commit local state",
+      "note": "Internet is unavailable. Local persistence succeeds first."
+    },
+    {
+      "from": "a",
+      "to": "b",
+      "label": "Transfer immutable SGP1 envelope over BLE",
+      "note": "SGC1 chunks carry the persisted origin envelope."
+    },
+    {
+      "from": "b",
+      "to": "a",
+      "label": "Return durable custody acknowledgement",
+      "note": "Phone B persists the complete valid envelope before ACK."
+    },
+    {
+      "from": "b",
+      "to": "backend",
+      "label": "Later obtain internet and submit the same envelope",
+      "note": "Phone A and Phone B may already be separated."
+    },
+    {
+      "from": "backend",
+      "to": "b",
+      "label": "Return canonical SERVER_ACCEPTED receipt",
+      "note": "Repeated submission must remain idempotent."
+    },
+    {
+      "from": "backend",
+      "to": "responder",
+      "label": "Expose accepted incident to authenticated responder",
+      "note": "Server acceptance is not yet responder acknowledgement."
+    },
+    {
+      "from": "responder",
+      "to": "backend",
+      "label": "Record responder operational status",
+      "note": "ACKNOWLEDGED / EN_ROUTE / ON_SCENE / RESOLVED."
+    },
+    {
+      "from": "backend",
+      "to": "b",
+      "label": "Gateway polls and stores responder acknowledgement",
+      "note": "Gateway-held ACK remains separate from Phone B's own civilian reports."
+    },
+    {
+      "from": "b",
+      "to": "a",
+      "label": "Return SGA1 responder ACK over physical BLE",
+      "note": "Phones meet again after the gateway has stored the ACK."
+    },
+    {
+      "from": "a",
+      "to": "a",
+      "label": "Durably record and display responder acknowledgement",
+      "note": "Only after valid local persistence may Phone A show responder acknowledgement."
+    }
+  ],
+  "acceptance_status": {
+    "status": "pending_field_validation",
+    "label": "CURRENT EVIDENCE: COMPLETE TWO-PHYSICAL-PHONE LOOP REMAINS PENDING FIELD VALIDATION"
+  }
+}

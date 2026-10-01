@@ -1,0 +1,370 @@
+{
+  "id": "fig2a-device-erd",
+  "type": "erd",
+  "title": "SAGIP ON-DEVICE ENTITY RELATIONSHIP DIAGRAM",
+  "subtitle": "SQLite schema v7. Core declared relationships are shown; selected columns are included for readability.",
+  "output": "artifacts/ch2_fig2_erd.svg",
+  "width": 2700,
+  "height": 2250,
+  "grid": {
+    "rows": 4,
+    "cols": 3
+  },
+  "entities": [
+    {
+      "id": "reports",
+      "row": 0,
+      "col": 0,
+      "label": "reports",
+      "attributes": [
+        {
+          "name": "report_id",
+          "type": "TEXT",
+          "key": "PK"
+        },
+        {
+          "name": "created_at",
+          "type": "INTEGER"
+        },
+        {
+          "name": "emergency_type",
+          "type": "TEXT"
+        },
+        {
+          "name": "urgency",
+          "type": "TEXT"
+        },
+        {
+          "name": "lifecycle_state",
+          "type": "TEXT"
+        }
+      ]
+    },
+    {
+      "id": "revisions",
+      "row": 0,
+      "col": 1,
+      "label": "report_revisions",
+      "attributes": [
+        {
+          "name": "report_id",
+          "type": "TEXT",
+          "key": "PK/FK"
+        },
+        {
+          "name": "revision",
+          "type": "INTEGER",
+          "key": "PK"
+        },
+        {
+          "name": "created_at",
+          "type": "INTEGER"
+        },
+        {
+          "name": "emergency_type",
+          "type": "TEXT"
+        },
+        {
+          "name": "urgency",
+          "type": "TEXT"
+        }
+      ]
+    },
+    {
+      "id": "locations",
+      "row": 0,
+      "col": 2,
+      "label": "locations",
+      "attributes": [
+        {
+          "name": "location_id",
+          "type": "INTEGER",
+          "key": "PK"
+        },
+        {
+          "name": "report_id",
+          "type": "TEXT",
+          "key": "FK/UQ"
+        },
+        {
+          "name": "latitude",
+          "type": "REAL"
+        },
+        {
+          "name": "longitude",
+          "type": "REAL"
+        },
+        {
+          "name": "captured_at",
+          "type": "INTEGER"
+        }
+      ]
+    },
+    {
+      "id": "outbound",
+      "row": 1,
+      "col": 0,
+      "label": "outbound_envelopes",
+      "attributes": [
+        {
+          "name": "message_id",
+          "type": "TEXT",
+          "key": "PK"
+        },
+        {
+          "name": "report_id",
+          "type": "TEXT",
+          "key": "FK/UQ"
+        },
+        {
+          "name": "revision",
+          "type": "INTEGER",
+          "key": "FK"
+        },
+        {
+          "name": "envelope_bytes",
+          "type": "BLOB"
+        },
+        {
+          "name": "delivery_state",
+          "type": "TEXT"
+        },
+        {
+          "name": "preparation_state",
+          "type": "TEXT"
+        }
+      ]
+    },
+    {
+      "id": "attempts",
+      "row": 1,
+      "col": 1,
+      "label": "delivery_attempts",
+      "attributes": [
+        {
+          "name": "attempt_id",
+          "type": "TEXT",
+          "key": "PK"
+        },
+        {
+          "name": "message_id",
+          "type": "TEXT",
+          "key": "FK"
+        },
+        {
+          "name": "transport",
+          "type": "TEXT"
+        },
+        {
+          "name": "peer_identifier",
+          "type": "TEXT"
+        },
+        {
+          "name": "outcome",
+          "type": "TEXT"
+        }
+      ]
+    },
+    {
+      "id": "server_receipts",
+      "row": 1,
+      "col": 2,
+      "label": "server_receipts",
+      "attributes": [
+        {
+          "name": "receipt_id",
+          "type": "TEXT",
+          "key": "PK"
+        },
+        {
+          "name": "message_id",
+          "type": "TEXT",
+          "key": "FK/UQ"
+        },
+        {
+          "name": "report_id",
+          "type": "TEXT"
+        },
+        {
+          "name": "revision",
+          "type": "INTEGER"
+        },
+        {
+          "name": "accepted_at",
+          "type": "TEXT"
+        }
+      ]
+    },
+    {
+      "id": "relay_receipts",
+      "row": 2,
+      "col": 0,
+      "label": "relay_receipts",
+      "attributes": [
+        {
+          "name": "receipt_id",
+          "type": "TEXT",
+          "key": "PK"
+        },
+        {
+          "name": "message_id",
+          "type": "TEXT",
+          "key": "FK"
+        },
+        {
+          "name": "peer_identifier",
+          "type": "TEXT"
+        },
+        {
+          "name": "acknowledged_at",
+          "type": "INTEGER"
+        }
+      ]
+    },
+    {
+      "id": "responder_acks",
+      "row": 2,
+      "col": 2,
+      "label": "responder_acks",
+      "attributes": [
+        {
+          "name": "ack_id",
+          "type": "TEXT",
+          "key": "PK"
+        },
+        {
+          "name": "report_id",
+          "type": "TEXT",
+          "key": "FK"
+        },
+        {
+          "name": "responder_id",
+          "type": "TEXT"
+        },
+        {
+          "name": "status",
+          "type": "TEXT"
+        },
+        {
+          "name": "acknowledged_at",
+          "type": "INTEGER"
+        }
+      ]
+    },
+    {
+      "id": "inbound",
+      "row": 3,
+      "col": 0,
+      "label": "inbound_envelopes",
+      "attributes": [
+        {
+          "name": "inbound_id",
+          "type": "TEXT",
+          "key": "PK"
+        },
+        {
+          "name": "message_id",
+          "type": "TEXT",
+          "key": "UQ"
+        },
+        {
+          "name": "report_id",
+          "type": "TEXT"
+        },
+        {
+          "name": "envelope_bytes",
+          "type": "BLOB"
+        },
+        {
+          "name": "delivery_state",
+          "type": "TEXT"
+        }
+      ]
+    },
+    {
+      "id": "relay_ack",
+      "row": 3,
+      "col": 2,
+      "label": "relay_responder_acks",
+      "semantic_only": true,
+      "attributes": [
+        {
+          "name": "ack_id",
+          "type": "TEXT",
+          "key": "PK"
+        },
+        {
+          "name": "report_id",
+          "type": "TEXT"
+        },
+        {
+          "name": "responder_id",
+          "type": "TEXT"
+        },
+        {
+          "name": "status",
+          "type": "TEXT"
+        },
+        {
+          "name": "acknowledged_at",
+          "type": "INTEGER"
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "from": "reports",
+      "to": "revisions",
+      "from_card": "1",
+      "to_card": "0..*"
+    },
+    {
+      "from": "reports",
+      "to": "locations",
+      "from_card": "1",
+      "to_card": "0..1"
+    },
+    {
+      "from": "revisions",
+      "to": "outbound",
+      "from_card": "1",
+      "to_card": "0..1"
+    },
+    {
+      "from": "outbound",
+      "to": "attempts",
+      "from_card": "1",
+      "to_card": "0..*"
+    },
+    {
+      "from": "outbound",
+      "to": "server_receipts",
+      "from_card": "1",
+      "to_card": "0..1"
+    },
+    {
+      "from": "outbound",
+      "to": "relay_receipts",
+      "from_card": "1",
+      "to_card": "0..*"
+    },
+    {
+      "from": "reports",
+      "to": "responder_acks",
+      "from_card": "1",
+      "to_card": "0..*"
+    },
+    {
+      "from": "inbound",
+      "to": "relay_ack",
+      "from_card": "1",
+      "to_card": "0..*",
+      "logical": true
+    }
+  ],
+  "notes": [
+    "Solid lines are declared foreign keys. The dashed relationship is a logical report_id association because relay_responder_acks has no declared foreign key.",
+    "delivery_events and seen_messages are operational tables and are omitted from this core ERD for readability."
+  ]
+}

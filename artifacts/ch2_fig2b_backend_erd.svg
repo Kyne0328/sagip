@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2700" height="2050" viewBox="0 0 2700 2050">
+<defs>
+<marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="4" orient="auto" markerUnits="strokeWidth">
+<path d="M0,0 L0,8 L11,4 z" fill="#334e68"/>
+</marker>
+</defs>
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="1350.0" y="62.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="54" font-weight="700" fill="#17202a">SAGIP BACKEND ENTITY RELATIONSHIP DIAGRAM</text>
+<text x="1350.0" y="108.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="30" font-weight="400" fill="#5f6b76"><tspan x="1350.0" dy="0">PostgreSQL migrations 001-003. Core incident and responder relationships are shown; operational rate-limit state is</tspan><tspan x="1350.0" dy="34">omitted.</tspan></text>
+<rect x="69.0" y="292.3" width="835.3" height="342.0" rx="14" fill="#eaf7ee" stroke="#2f6b45" stroke-width="3"/>
+<rect x="69.0" y="292.3" width="835.3" height="96.0" rx="14" fill="#2f6b45" opacity="0.10"/>
+<text x="91.0" y="355.3" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="48" font-weight="700" fill="#17202a">origin_keys</text>
+<text x="91.0" y="431.3" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="700" fill="#17202a">PK origin_key_id : BYTEA</text>
+<text x="91.0" y="487.3" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">public_key_der : BYTEA</text>
+<text x="91.0" y="543.3" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">first_seen_at : TIMESTAMPTZ</text>
+<text x="91.0" y="599.3" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">last_seen_at : TIMESTAMPTZ</text>
+<rect x="932.3" y="292.3" width="835.3" height="342.0" rx="14" fill="#eaf7ee" stroke="#2f6b45" stroke-width="3"/>
+<rect x="932.3" y="292.3" width="835.3" height="96.0" rx="14" fill="#2f6b45" opacity="0.10"/>
+<text x="954.3" y="355.3" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="48" font-weight="700" fill="#17202a">incidents</text>
+<text x="954.3" y="431.3" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="700" fill="#17202a">PK report_id : UUID</text>
+<text x="954.3" y="487.3" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="700" fill="#17202a">FK origin_key_id : BYTEA</text>
+<text x="954.3" y="543.3" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">created_at_ms : BIGINT</text>
+<text x="954.3" y="599.3" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">first_received_at : TIMESTAMPTZ</text>
+<rect x="1795.7" y="264.3" width="835.3" height="398.0" rx="14" fill="#eaf7ee" stroke="#2f6b45" stroke-width="3"/>
+<rect x="1795.7" y="264.3" width="835.3" height="96.0" rx="14" fill="#2f6b45" opacity="0.10"/>
+<text x="1817.7" y="327.3" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="48" font-weight="700" fill="#17202a">incident_revisions</text>
+<text x="1817.7" y="403.3" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="700" fill="#17202a">PK/FK report_id : UUID</text>
+<text x="1817.7" y="459.3" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="700" fill="#17202a">PK revision : INTEGER</text>
+<text x="1817.7" y="515.3" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">emergency_type : SMALLINT</text>
+<text x="1817.7" y="571.3" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">urgency : SMALLINT</text>
+<text x="1817.7" y="627.3" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">payload_digest : BYTEA</text>
+<rect x="932.3" y="813.0" width="835.3" height="454.0" rx="14" fill="#eaf7ee" stroke="#2f6b45" stroke-width="3"/>
+<rect x="932.3" y="813.0" width="835.3" height="96.0" rx="14" fill="#2f6b45" opacity="0.10"/>
+<text x="954.3" y="876.0" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="48" font-weight="700" fill="#17202a">accepted_messages</text>
+<text x="954.3" y="952.0" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="700" fill="#17202a">PK message_id : UUID</text>
+<text x="954.3" y="1008.0" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="700" fill="#17202a">FK/UQ report_id : UUID</text>
+<text x="954.3" y="1064.0" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="700" fill="#17202a">FK/UQ revision : INTEGER</text>
+<text x="954.3" y="1120.0" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="700" fill="#17202a">FK origin_key_id : BYTEA</text>
+<text x="954.3" y="1176.0" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">envelope_sha256 : BYTEA</text>
+<text x="954.3" y="1232.0" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">accepted_at : TIMESTAMPTZ</text>
+<rect x="1795.7" y="869.0" width="835.3" height="342.0" rx="14" fill="#eaf7ee" stroke="#2f6b45" stroke-width="3"/>
+<rect x="1795.7" y="869.0" width="835.3" height="96.0" rx="14" fill="#2f6b45" opacity="0.10"/>
+<text x="1817.7" y="932.0" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="48" font-weight="700" fill="#17202a">server_receipts</text>
+<text x="1817.7" y="1008.0" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="700" fill="#17202a">PK/FK message_id : UUID</text>
+<text x="1817.7" y="1064.0" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="700" fill="#17202a">UQ receipt_id : UUID</text>
+<text x="1817.7" y="1120.0" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">state : TEXT</text>
+<text x="1817.7" y="1176.0" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">accepted_at : TIMESTAMPTZ</text>
+<rect x="69.0" y="1445.7" width="835.3" height="342.0" rx="14" fill="#eaf7ee" stroke="#2f6b45" stroke-width="3"/>
+<rect x="69.0" y="1445.7" width="835.3" height="96.0" rx="14" fill="#2f6b45" opacity="0.10"/>
+<text x="91.0" y="1508.7" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="48" font-weight="700" fill="#17202a">responder_identities</text>
+<text x="91.0" y="1584.7" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="700" fill="#17202a">PK responder_id : UUID</text>
+<text x="91.0" y="1640.7" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="700" fill="#17202a">UQ callsign : VARCHAR(64)</text>
+<text x="91.0" y="1696.7" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">role : VARCHAR(32)</text>
+<text x="91.0" y="1752.7" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="700" fill="#17202a">UQ api_key_hash : VARCHAR(64)</text>
+<rect x="932.3" y="1417.7" width="835.3" height="398.0" rx="14" fill="#eaf7ee" stroke="#2f6b45" stroke-width="3"/>
+<rect x="932.3" y="1417.7" width="835.3" height="96.0" rx="14" fill="#2f6b45" opacity="0.10"/>
+<text x="954.3" y="1480.7" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="48" font-weight="700" fill="#17202a">responder_acknowledgements</text>
+<text x="954.3" y="1556.7" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="700" fill="#17202a">PK ack_id : UUID</text>
+<text x="954.3" y="1612.7" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="700" fill="#17202a">FK report_id : UUID</text>
+<text x="954.3" y="1668.7" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="700" fill="#17202a">FK responder_id : UUID</text>
+<text x="954.3" y="1724.7" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">status : VARCHAR(32)</text>
+<text x="954.3" y="1780.7" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="41" font-weight="400" fill="#17202a">acknowledged_at : TIMESTAMPTZ</text>
+<polyline points="904.3,463.3 918.3,463.3 918.3,463.3 932.3,463.3" fill="none" stroke="#334e68" stroke-width="2"/>
+<text x="916.3" y="453.3" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#334e68">1</text>
+<text x="920.3" y="453.3" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#334e68">0..*</text>
+<polyline points="904.3,463.3 918.3,463.3 918.3,1040.0 932.3,1040.0" fill="none" stroke="#334e68" stroke-width="2"/>
+<text x="916.3" y="453.3" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#334e68">1</text>
+<text x="920.3" y="1030.0" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#334e68">0..*</text>
+<polyline points="1767.7,463.3 1781.7,463.3 1781.7,463.3 1795.7,463.3" fill="none" stroke="#334e68" stroke-width="2"/>
+<text x="1779.7" y="453.3" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#334e68">1</text>
+<text x="1783.7" y="453.3" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#334e68">0..*</text>
+<polyline points="1795.7,463.3 1781.7,463.3 1781.7,1040.0 1767.7,1040.0" fill="none" stroke="#334e68" stroke-width="2"/>
+<text x="1807.7" y="453.3" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#334e68">1</text>
+<text x="1755.7" y="1030.0" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#334e68">0..1</text>
+<polyline points="1767.7,1040.0 1781.7,1040.0 1781.7,1040.0 1795.7,1040.0" fill="none" stroke="#334e68" stroke-width="2"/>
+<text x="1779.7" y="1030.0" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#334e68">1</text>
+<text x="1783.7" y="1030.0" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#334e68">0..1</text>
+<polyline points="1350.0,634.3 1350.0,1026.0 1350.0,1026.0 1350.0,1417.7" fill="none" stroke="#334e68" stroke-width="2"/>
+<text x="1362.0" y="624.3" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#334e68">1</text>
+<text x="1338.0" y="1407.7" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#334e68">0..*</text>
+<polyline points="904.3,1616.7 918.3,1616.7 918.3,1616.7 932.3,1616.7" fill="none" stroke="#334e68" stroke-width="2"/>
+<text x="916.3" y="1606.7" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#334e68">1</text>
+<text x="920.3" y="1606.7" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#334e68">0..*</text>
+<text x="1350.0" y="2002.0" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="400" fill="#5f6b76"><tspan x="1350.0" dy="0">request_rate_limit_windows is operational infrastructure without incident foreign keys and is omitted from the core ERD.</tspan></text>
+</svg>

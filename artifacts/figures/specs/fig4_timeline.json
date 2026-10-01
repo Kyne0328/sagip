@@ -1,0 +1,119 @@
+{
+  "id": "fig4-timeline",
+  "type": "timeline",
+  "title": "SAGIP PROJECT DEVELOPMENT TIMELINE — SEPTEMBER 14–29, 2026",
+  "subtitle": "Continuous bars replace per-day blocks to improve document-scale readability. The final physical field loop is shown as pending rather than completed.",
+  "output": "artifacts/ch2_fig4_timeline.svg",
+  "width": 2400,
+  "height": 1750,
+  "start_day": 14,
+  "end_day": 29,
+  "tasks": [
+    {
+      "label": "Concept and requirements",
+      "start": 14,
+      "end": 15,
+      "status": "implemented"
+    },
+    {
+      "label": "Architecture and database design",
+      "start": 14,
+      "end": 17,
+      "status": "implemented"
+    },
+    {
+      "label": "Emergency UI and local persistence",
+      "start": 15,
+      "end": 19,
+      "status": "implemented"
+    },
+    {
+      "label": "Transport and direct delivery",
+      "start": 16,
+      "end": 20,
+      "status": "implemented"
+    },
+    {
+      "label": "Backend integration",
+      "start": 17,
+      "end": 22,
+      "status": "implemented"
+    },
+    {
+      "label": "BLE relay implementation",
+      "start": 19,
+      "end": 23,
+      "status": "implemented"
+    },
+    {
+      "label": "Responder coordination and return ACK",
+      "start": 20,
+      "end": 24,
+      "status": "implemented"
+    },
+    {
+      "label": "Lifecycle hardening",
+      "start": 22,
+      "end": 25,
+      "status": "implemented"
+    },
+    {
+      "label": "Android/device validation",
+      "start": 23,
+      "end": 25,
+      "status": "physical_device_verified",
+      "status_label": "selected physical evidence"
+    },
+    {
+      "label": "Live backend validation",
+      "start": 25,
+      "end": 25,
+      "status": "live_backend_verified",
+      "status_label": "live PostgreSQL"
+    },
+    {
+      "label": "Security v2 implementation and tests",
+      "start": 26,
+      "end": 29,
+      "status": "automated_verified",
+      "status_label": "implemented/tested"
+    },
+    {
+      "label": "Documentation and refinement",
+      "start": 24,
+      "end": 29,
+      "status": "automated_verified"
+    },
+    {
+      "label": "Complete two-phone field acceptance",
+      "start": 27,
+      "end": 29,
+      "status": "pending_field_validation",
+      "status_label": "PENDING",
+      "pending": true,
+      "milestone": true
+    }
+  ],
+  "legend": [
+    {
+      "status": "implemented",
+      "label": "Implementation activity"
+    },
+    {
+      "status": "physical_device_verified",
+      "label": "Physical-device evidence"
+    },
+    {
+      "status": "live_backend_verified",
+      "label": "Live-backend evidence"
+    },
+    {
+      "status": "pending_field_validation",
+      "label": "Pending field acceptance",
+      "pending": true
+    }
+  ],
+  "notes": [
+    "The timeline summarizes the project work window. Evidence labels, not bar length, determine what validation claims are supported."
+  ]
+}
