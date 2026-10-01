@@ -115,6 +115,21 @@ function signatureCheck(bytes: Bytes): void {
     s = BigInt('0x' + b.subarray(32).toString('hex'));
   check(r > 0n && r < N && s > 0n && s <= N / 2n, 'signature canonicality');
 }
+// Only for fresh signer output. Incoming/relayed immutable object bytes must
+// retain strict low-S rejection and must never be transformed by this helper.
+export function canonicalizeNewReceiptSignature(bytes: Bytes): Buffer {
+  check(bytes.length === 64, 'signature length');
+  const signature = Buffer.from(bytes);
+  const r = BigInt('0x' + signature.subarray(0, 32).toString('hex'));
+  const s = BigInt('0x' + signature.subarray(32).toString('hex'));
+  check(r > 0n && r < N && s > 0n && s < N, 'signature scalar');
+  if (s > N / 2n)
+    Buffer.from((N - s).toString(16).padStart(64, '0'), 'hex').copy(
+      signature,
+      32,
+    );
+  return signature;
+}
 type StringKind = 'callsign' | 'scope' | 'note';
 function stringCheck(s: string, kind: StringKind): void {
   check(

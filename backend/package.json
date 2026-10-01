@@ -11,6 +11,7 @@
     "dev": "tsx src/devServer.ts",
     "migrate": "tsx src/migrate.ts",
     "provision-responder": "tsx src/provisionResponder.ts",
+    "provision-gateway-authority": "tsx src/provisionGatewayAuthority.ts",
     "test": "tsx --test test/**/*.test.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src test --ext .ts"

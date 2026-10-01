@@ -711,7 +711,7 @@ test('migration ledger stays isolated when a public ledger already exists', asyn
         assert.equal(
           (await isolated.pool.query('SELECT * FROM schema_migrations'))
             .rowCount,
-          5,
+          6,
         );
         assert.deepEqual(
           (

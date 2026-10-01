@@ -6,6 +6,7 @@ import {
   decodeReceipt,
   encodeReceipt,
   verifyReceiptSignature,
+  canonicalizeNewReceiptSignature,
 } from '../../src/protocol/receiptV2.js';
 const fixture = JSON.parse(
   readFileSync(
@@ -23,6 +24,28 @@ const fixture = JSON.parse(
     expected: { parse: string; signature?: boolean };
   }>;
 };
+test('new signature normalization preserves crypto validity; received high-S still rejects', () => {
+  const cloud = fixture.vectors.find(v => v.name === 'valid_cloud_ack')!;
+  const high = Buffer.from(
+    fixture.vectors.find(v => v.name === 'high_s_signature')!.hex,
+    'hex',
+  );
+  const original = decodeReceipt(Buffer.from(cloud.hex, 'hex'));
+  assert.throws(() => decodeReceipt(high));
+  const raw = Buffer.from(high.subarray(-64));
+  const normalized = canonicalizeNewReceiptSignature(raw);
+  assert.deepEqual(normalized, original.signature);
+  assert.deepEqual(raw, high.subarray(-64));
+  assert.equal(
+    verifyReceiptSignature(
+      { ...original, signature: normalized },
+      Buffer.from(cloud.publicKeyDerHex, 'hex'),
+    ),
+    true,
+  );
+  assert.throws(() => canonicalizeNewReceiptSignature(Buffer.alloc(64)));
+  assert.throws(() => canonicalizeNewReceiptSignature(Buffer.alloc(65)));
+});
 for (const v of fixture.vectors) {
   test(`shared vector: ${v.name}`, () => {
     const bytes = Buffer.from(v.hex, 'hex');

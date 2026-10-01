@@ -16,6 +16,12 @@ export function createMemoryPostgresPool(): Pool {
     implementation: (value: Buffer) => logicalByteLength(value),
   });
   memory.public.registerFunction({
+    name: 'octet_length',
+    args: [DataType.text],
+    returns: DataType.integer,
+    implementation: (value: string) => Buffer.byteLength(value, 'utf8'),
+  });
+  memory.public.registerFunction({
     name: 'pg_advisory_lock',
     args: [DataType.integer],
     returns: DataType.integer,
