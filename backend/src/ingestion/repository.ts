@@ -108,12 +108,12 @@ export class IngestionRepository {
       ],
     );
 
-    await client.query(
+    const insertedMessage = await client.query(
       `INSERT INTO accepted_messages(
          message_id, report_id, revision, origin_key_id, envelope_sha256, envelope_bytes,
          created_at_ms, expires_at_ms, priority, accepted_at
        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-       ON CONFLICT DO NOTHING`,
+       ON CONFLICT DO NOTHING RETURNING message_id`,
       [
         envelope.messageId,
         envelope.reportId,
@@ -141,6 +141,15 @@ export class IngestionRepository {
       throw new Error('Accepted message insert did not persist and no conflicting owner was found');
     }
     this.requireSameAcceptedMessage(acceptedMessage, input, envelopeSha256);
+
+    if ((insertedMessage.rowCount ?? 0) > 0) {
+      // Serialize receipt allocation with accepted revision changes. Duplicate
+      // envelopes retain their original receipt and do not advance this version.
+      await client.query(
+        'UPDATE incidents SET receipt_version = receipt_version + 1 WHERE report_id = $1',
+        [envelope.reportId],
+      );
+    }
 
     await client.query(
       `INSERT INTO server_receipts(
@@ -177,7 +186,7 @@ export class IngestionRepository {
     originKeyId: Buffer,
   ): Promise<void> {
     const result = await client.query<{origin_key_id: Buffer}>(
-      'SELECT origin_key_id FROM incidents WHERE report_id = $1',
+      'SELECT origin_key_id FROM incidents WHERE report_id = $1 FOR UPDATE',
       [reportId],
     );
     const row = result.rows[0];

@@ -63,6 +63,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           persist-credentials: false
+          submodules: true
 
       - name: Validate release inputs and required configuration
         shell: bash
@@ -151,7 +152,11 @@ jobs:
           npm ci
           npm --prefix backend ci
 
+      - name: Start isolated PostgreSQL test database
+        run: bash scripts/start-test-postgres.sh
+
       - name: Validate application and backend
+        # The real transaction gate uses only the disposable loopback database.
         shell: bash
         run: |
           npm test -- --runInBand
@@ -160,6 +165,10 @@ jobs:
           npm --prefix backend test
           npm --prefix backend run typecheck
           npm --prefix backend run lint
+
+      - name: Stop isolated PostgreSQL test database
+        if: ${{ always() }}
+        run: docker rm --force sagip-test-postgres || true
 
       - name: Materialize production signing keystore
         env:

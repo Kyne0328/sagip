@@ -581,3 +581,18 @@ export function verifyReceiptSignature(
     return false;
   }
 }
+// Canonical input for a new signature. The placeholder only permits the
+// existing strict codec to validate the complete object/proof profile; it is
+// removed before these bytes leave the codec. Never use this to resign imports.
+export function receiptSigningInput(
+  fields: ReceiptFields,
+  proof: Bytes,
+): Buffer {
+  const scalarOne = Buffer.concat([Buffer.alloc(31), Buffer.from([1])]);
+  const bytes = encodeReceipt(
+    fields,
+    Buffer.concat([scalarOne, scalarOne]),
+    proof,
+  );
+  return Buffer.concat([DOMAIN, bytes.subarray(0, -64)]);
+}

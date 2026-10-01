@@ -91,7 +91,7 @@ async function ensureMigrationTable(client: PoolClient): Promise<void> {
   const existing = await client.query(
     `SELECT 1
      FROM information_schema.tables
-     WHERE table_schema = 'public' AND table_name = 'schema_migrations'`,
+     WHERE table_schema = current_schema() AND table_name = 'schema_migrations'`,
   );
   if ((existing.rowCount ?? 0) > 0) return;
 
