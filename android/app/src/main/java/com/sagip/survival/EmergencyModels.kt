@@ -28,6 +28,17 @@ data class LocationSnapshot(
   val freshness: String,
 )
 
+data class VerifiedReceiptSummary(
+  val eventId: String,
+  val revision: Int,
+  val verificationKind: String,
+  val authorityCheckedAt: Long?,
+  val status: String,
+  val callsign: String,
+  val note: String,
+  val requesterDeliveryState: String,
+)
+
 data class EmergencyReportSummary(
   val reportId: String,
   val createdAt: Long,
@@ -37,6 +48,7 @@ data class EmergencyReportSummary(
   val deliveryState: String,
   val location: LocationSnapshot?,
   val responderAck: ResponderAck? = null,
+  val verifiedReceipt: VerifiedReceiptSummary? = null,
 )
 
 data class RelayCustodyStatus(

@@ -7,7 +7,7 @@ import org.junit.Test
 class SchemaTest {
   @Test
   fun `schema version is explicit and preparation state is present`() {
-    assertEquals(7, Schema.VERSION)
+    assertEquals(11, Schema.VERSION)
     val ddl = Schema.CREATE_STATEMENTS.joinToString("\n")
     listOf(
       "reports",
@@ -22,6 +22,24 @@ class SchemaTest {
       "relay_receipts",
       "responder_acks",
       "relay_responder_acks",
+      "receipt_report_state",
+      "receipt_report_identities",
+      "receipt_sequences",
+      "receipt_actions",
+      "receipt_records",
+      "receipt_projections",
+      "requester_receipt_actions",
+      "receipt_quarantine",
+      "receipt_grants",
+      "receipt_time_challenges",
+      "receipt_time_checkpoints",
+      "receipt_time_high_water",
+      "relay_objects",
+      "relay_object_tombstones",
+      "relay_time_state",
+      "relay_peer_object_state",
+      "relay_transfer_leases",
+      "relay_peer_contacts",
     ).forEach {
       assertTrue("missing table $it", ddl.contains("CREATE TABLE $it"))
     }
@@ -85,6 +103,43 @@ class SchemaTest {
     assertTrue(migration.contains("ALTER TABLE inbound_envelopes ADD COLUMN report_id"))
     assertTrue(migration.contains("CREATE TABLE relay_responder_acks"))
     assertTrue(migration.contains("idx_relay_responder_acks_report"))
+    assertTrue(!migration.contains("DROP TABLE"))
+  }
+  @Test
+  fun `v7 to v8 migration is non destructive and adds durable receipt state`() {
+    val migration = Schema.MIGRATE_7_TO_8.joinToString("\n")
+    assertTrue(migration.contains("CREATE TABLE receipt_actions"))
+    assertTrue(migration.contains("CREATE TABLE receipt_records"))
+    assertTrue(migration.contains("CREATE TABLE receipt_projections"))
+    assertTrue(migration.contains("CREATE TABLE receipt_time_checkpoints"))
+    assertTrue(migration.contains("CREATE UNIQUE INDEX idx_receipt_actions_issuer_sequence"))
+    assertTrue(!migration.contains("DROP TABLE"))
+  }
+
+  @Test
+  fun `v8 to v9 migration is non destructive and adds bounded relay custody`() {
+    val migration = Schema.MIGRATE_8_TO_9.joinToString("\n")
+    assertTrue(migration.contains("CREATE TABLE relay_objects"))
+    assertTrue(migration.contains("CREATE TABLE relay_object_tombstones"))
+    assertTrue(migration.contains("CREATE TABLE relay_time_state"))
+    assertTrue(migration.contains("ALTER TABLE receipt_quarantine ADD COLUMN claimed_object_kind"))
+    assertTrue(!migration.contains("DROP TABLE"))
+  }
+
+  @Test
+  fun `v9 to v10 migration is non destructive and adds persisted transfer state`() {
+    val migration = Schema.MIGRATE_9_TO_10.joinToString("\n")
+    assertTrue(migration.contains("CREATE TABLE relay_peer_object_state"))
+    assertTrue(migration.contains("CREATE TABLE relay_transfer_leases"))
+    assertTrue(migration.contains("idx_relay_transfer_active_object"))
+    assertTrue(!migration.contains("DROP TABLE"))
+  }
+  @Test
+  fun `v10 to v11 migration is non destructive and adds persistent contact quota`() {
+    val migration = Schema.MIGRATE_10_TO_11.joinToString("\n")
+    assertTrue(migration.contains("CREATE TABLE relay_peer_contacts"))
+    assertTrue(migration.contains("attempted_transfers INTEGER NOT NULL DEFAULT 0"))
+    assertTrue(migration.contains("idx_relay_peer_contacts_activity"))
     assertTrue(!migration.contains("DROP TABLE"))
   }
 }

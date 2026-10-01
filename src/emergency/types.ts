@@ -55,6 +55,36 @@ export interface ResponderAckInfo {
   acknowledgedAt: number;
 }
 
+export const VERIFIED_RECEIPT_KINDS = [
+  'VERIFIED_CURRENT',
+  'VERIFIED_OFFLINE_AUTHORITY',
+] as const;
+export type VerifiedReceiptKind = (typeof VERIFIED_RECEIPT_KINDS)[number];
+
+export const VERIFIED_RESPONDER_STATUSES = [
+  'ACKNOWLEDGED',
+  'EN_ROUTE',
+  'ON_SCENE',
+  'RESOLVED',
+] as const;
+export type VerifiedResponderStatus =
+  (typeof VERIFIED_RESPONDER_STATUSES)[number];
+
+export const REQUESTER_DELIVERY_STATES = ['UNKNOWN', 'RECEIVED'] as const;
+export type RequesterDeliveryState =
+  (typeof REQUESTER_DELIVERY_STATES)[number];
+
+export interface VerifiedReceiptInfo {
+  eventId: string;
+  revision: number;
+  verificationKind: VerifiedReceiptKind;
+  authorityCheckedAt: number | null;
+  status: VerifiedResponderStatus;
+  callsign: string;
+  note: string;
+  requesterDeliveryState: RequesterDeliveryState;
+}
+
 export interface LocationSnapshot {
   latitude: number;
   longitude: number;
@@ -78,4 +108,5 @@ export interface EmergencyReportSummary {
   deliveryState: DeliveryState;
   location: LocationSnapshot | null;
   responderAck?: ResponderAckInfo | null;
+  verifiedReceipt?: VerifiedReceiptInfo;
 }

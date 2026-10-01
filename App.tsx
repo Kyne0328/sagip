@@ -1,5 +1,6 @@
-import React, {useState} from 'react';
+import React, {useEffect, useState} from 'react';
 import {
+  AccessibilityInfo,
   Pressable,
   ScrollView,
   StatusBar,
@@ -16,8 +17,10 @@ import {
   type BleRelayStatus,
   type EmergencyType,
   type ResponderAckInfo,
+  type VerifiedReceiptInfo,
   type Urgency,
 } from './src/emergency/types';
+import {SurvivalCore} from './src/emergency/SurvivalCore';
 import {useBleRelayStatus} from './src/emergency/useBleRelayStatus';
 import {useEmergencyReports} from './src/emergency/useEmergencyReports';
 
@@ -58,6 +61,51 @@ function responderAcknowledgementText(ack: ResponderAckInfo | null | undefined) 
     .join(' ');
 }
 
+function verifiedResponderHeadline(receipt: VerifiedReceiptInfo): string {
+  switch (receipt.status) {
+    case 'EN_ROUTE':
+      return 'Responder reports they are on the way';
+    case 'ON_SCENE':
+      return 'Responder reports they are on scene';
+    case 'RESOLVED':
+      return 'Responder reports this incident is resolved';
+    default:
+      return 'Responder acknowledged your current SOS';
+  }
+}
+
+function verifiedResponderText(receipt: VerifiedReceiptInfo): string {
+  return [
+    verifiedResponderHeadline(receipt),
+    receipt.callsign ? `· ${receipt.callsign}` : null,
+    receipt.note ? `(${receipt.note})` : null,
+  ]
+    .filter(Boolean)
+    .join(' ');
+}
+
+function verifiedAuthorityText(receipt: VerifiedReceiptInfo): string {
+  if (receipt.verificationKind === 'VERIFIED_OFFLINE_AUTHORITY') {
+    const checkedAt = (() => {
+      if (receipt.authorityCheckedAt === null) {
+        return 'Authority check time is unavailable.';
+      }
+      const date = new Date(receipt.authorityCheckedAt);
+      return Number.isNaN(date.getTime())
+        ? 'Authority check time could not be formatted.'
+        : `Authority last checked ${date.toISOString()}.`;
+    })();
+    return `Verified using offline responder credentials. Current revocation status is unavailable. ${checkedAt}`;
+  }
+  return 'Responder authority verified with current authorization evidence.';
+}
+
+function requesterDeliveryText(receipt: VerifiedReceiptInfo): string {
+  return receipt.requesterDeliveryState === 'RECEIVED'
+    ? 'Responder received your return confirmation'
+    : 'Requester return confirmation not yet received';
+}
+
 export default function App() {
   const {reports, loading, saving, message, create} = useEmergencyReports();
   const {
@@ -71,6 +119,36 @@ export default function App() {
   const [emergencyType, setEmergencyType] = useState<EmergencyType | null>(null);
   const [urgency, setUrgency] = useState<Urgency | null>(null);
   const latest = reports[0];
+  const latestVerifiedReportId = latest?.reportId;
+  const latestVerifiedReceipt = latest?.verifiedReceipt;
+  const latestVerifiedEventId = latestVerifiedReceipt?.eventId;
+  const latestVerifiedHeadline = latestVerifiedReceipt
+    ? verifiedResponderHeadline(latestVerifiedReceipt)
+    : null;
+
+  useEffect(() => {
+    if (!latestVerifiedReportId || !latestVerifiedEventId || !latestVerifiedHeadline) {
+      return;
+    }
+
+    let cancelled = false;
+    void SurvivalCore.claimVerifiedReceiptNotification(
+      latestVerifiedReportId,
+      latestVerifiedEventId,
+    )
+      .then(claimed => {
+        if (claimed && !cancelled) {
+          AccessibilityInfo.announceForAccessibility(latestVerifiedHeadline);
+        }
+      })
+      .catch(() => {
+        // Notification delivery is best-effort. Verified evidence remains visible.
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [latestVerifiedEventId, latestVerifiedHeadline, latestVerifiedReportId]);
   const messageIsError =
     message === 'SOS was not saved. Please try again.' ||
     message === 'Saved SOS reports could not be loaded.';
@@ -183,25 +261,50 @@ export default function App() {
           </View>
         ) : null}
 
-        <View accessibilityLiveRegion="polite" style={styles.statusCard}>
+        <View style={styles.statusCard}>
           <Text style={styles.sectionTitle}>Latest SOS status</Text>
           {loading ? (
             <Text style={styles.statusText}>Checking this device…</Text>
           ) : latest ? (
             <>
               <Text style={styles.savedText}>Saved on this device</Text>
+              {latest.verifiedReceipt ? (
+                <View style={styles.verifiedReceiptBlock}>
+                  <Text style={styles.responderText}>Verified responder update</Text>
+                  <Text style={styles.statusDetailText}>
+                    {verifiedResponderText(latest.verifiedReceipt)}
+                  </Text>
+                  <Text style={styles.evidenceText}>
+                    {verifiedAuthorityText(latest.verifiedReceipt)}
+                  </Text>
+                  <Text style={styles.evidenceText}>
+                    {requesterDeliveryText(latest.verifiedReceipt)}
+                  </Text>
+                </View>
+              ) : null}
               {latest.deliveryState === 'RESPONDER_ACKNOWLEDGED' ? (
                 <>
-                  <Text style={styles.responderText}>Responder acknowledged</Text>
+                  <Text
+                    style={
+                      latest.verifiedReceipt
+                        ? styles.deliveryEvidenceText
+                        : styles.pendingText
+                    }>
+                    {latest.verifiedReceipt
+                      ? 'Responder acknowledgement transport state recorded'
+                      : 'Unverified responder update'}
+                  </Text>
                   <Text style={styles.statusDetailText}>
-                    {responderAcknowledgementText(latest.responderAck)}
+                    {latest.verifiedReceipt
+                      ? 'Verified responder evidence is shown separately above.'
+                      : `${responderAcknowledgementText(latest.responderAck)}. This legacy acknowledgement is not cryptographically verified.`}
                   </Text>
                 </>
               ) : latest.deliveryState === 'SERVER_ACCEPTED' ? (
                 <>
                   <Text style={styles.acceptedText}>Server accepted</Text>
                   <Text style={styles.statusDetailText}>
-                    The SAGIP server has accepted this SOS. Waiting for responder acknowledgement.
+                    The SAGIP server has accepted this SOS. Server acceptance does not by itself prove responder acknowledgement.
                   </Text>
                 </>
               ) : latest.deliveryState === 'PERMANENT_FAILURE' ? (
@@ -426,6 +529,9 @@ const styles = StyleSheet.create({
   relayedText: {fontSize: 16, fontWeight: '800', color: '#B26B00'},
   acceptedText: {fontSize: 16, fontWeight: '800', color: '#1B6B38'},
   responderText: {fontSize: 16, fontWeight: '800', color: '#0D6857'},
+  verifiedReceiptBlock: {gap: 6, paddingVertical: 4},
+  evidenceText: {fontSize: 14, lineHeight: 20, color: '#56615D'},
+  deliveryEvidenceText: {fontSize: 15, lineHeight: 21, fontWeight: '700', color: '#56615D'},
   failedText: {fontSize: 16, fontWeight: '800', color: '#B33A32'},
   statusDetailText: {fontSize: 15, lineHeight: 22, fontWeight: '600', color: '#44524D'},
   statusText: {fontSize: 15, lineHeight: 22, color: '#56615D'},

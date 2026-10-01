@@ -21,6 +21,9 @@ import java.util.concurrent.ConcurrentHashMap
 class BlePeripheralManager(
   private val context: Context,
   private val repository: EmergencyRepository,
+  private val receiptQueue: ReceiptQueue? = null,
+  private val verificationContextProvider: () -> VerificationContext? = { null },
+  private val nowProvider: () -> Long = { System.currentTimeMillis() },
 ) : BlePeripheralController {
   private val bluetoothManager: BluetoothManager? =
     context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
@@ -36,6 +39,23 @@ class BlePeripheralManager(
   private val activeOffers = ConcurrentHashMap<String, BleManifestOffer>()
   private val offerDecisions = ConcurrentHashMap<String, OfferDecision>()
   private val durableAcks = ConcurrentHashMap<String, ByteArray>()
+  private data class ExtensionSnapshot(
+    val snapshotId: String,
+    val entries: List<InventoryEntry>,
+    var lastActivityAtMs: Long,
+  )
+  private val extensionControlResponses = ConcurrentHashMap<String, ByteArray>()
+  private val extensionCustodyResponses = ConcurrentHashMap<String, ByteArray>()
+  private val extensionSnapshots = ConcurrentHashMap<String, ExtensionSnapshot>()
+  private val extensionPeerActivity = ConcurrentHashMap<String, Long>()
+  private val extensionMtu = ConcurrentHashMap<String, Int>()
+  private val extensionReceiver = BleReceiptExchangeReceiver(
+    admit = ::admitExtensionObject,
+    alreadyHaveVerified = ::alreadyHaveVerifiedExtensionObject,
+    preflightDecision = ::extensionPreflightDecision,
+    offerAllowed = { peerId, _ -> claimExtensionOffer(peerId) },
+    nowProvider = nowProvider,
+  )
 
   private val advertiseCallback = object : AdvertiseCallback() {
     override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
@@ -62,12 +82,22 @@ class BlePeripheralManager(
       }
     }
 
+    override fun onMtuChanged(device: BluetoothDevice, mtu: Int) {
+      extensionMtu[device.address] = mtu
+    }
+
     override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
       if (newState == BluetoothGatt.STATE_DISCONNECTED) {
         activeReassemblers.remove(device.address)
         activeOffers.remove(device.address)
         offerDecisions.remove(device.address)
         durableAcks.remove(device.address)
+        extensionReceiver.disconnect(device.address)
+        extensionControlResponses.remove(device.address)
+        extensionCustodyResponses.remove(device.address)
+        extensionSnapshots.remove(device.address)
+        extensionPeerActivity.remove(device.address)
+        extensionMtu.remove(device.address)
       }
     }
 
@@ -77,6 +107,19 @@ class BlePeripheralManager(
       offset: Int,
       characteristic: BluetoothGattCharacteristic,
     ) {
+      if (characteristic.uuid == BleProtocolConstants.CHARACTERISTIC_EXTENSION_CAPABILITY_UUID) {
+        val encoded = if (extensionEnabled()) BleReceiptExchangeCodec.encodeCapability() else ByteArray(0)
+        sendLongReadResponse(device, requestId, offset, encoded)
+        return
+      }
+      if (characteristic.uuid == BleProtocolConstants.CHARACTERISTIC_EXTENSION_CONTROL_UUID) {
+        sendLongReadResponse(device, requestId, offset, extensionControlResponses[device.address] ?: ByteArray(0))
+        return
+      }
+      if (characteristic.uuid == BleProtocolConstants.CHARACTERISTIC_EXTENSION_CUSTODY_UUID) {
+        sendLongReadResponse(device, requestId, offset, extensionCustodyResponses[device.address] ?: ByteArray(0))
+        return
+      }
       if (characteristic.uuid == BleProtocolConstants.CHARACTERISTIC_OFFER_UUID) {
         val decision = offerDecisions.remove(device.address)
           ?: OfferDecision.REJECT_UNSUPPORTED
@@ -143,6 +186,12 @@ class BlePeripheralManager(
         BleProtocolConstants.CHARACTERISTIC_RETURN_ACK_UUID -> {
           handleReturnAckWrite(device, requestId, value, responseNeeded)
         }
+        BleProtocolConstants.CHARACTERISTIC_EXTENSION_CONTROL_UUID -> {
+          handleExtensionControlWrite(device, requestId, value, responseNeeded)
+        }
+        BleProtocolConstants.CHARACTERISTIC_EXTENSION_CHUNK_UUID -> {
+          handleExtensionChunkWrite(device, requestId, value, responseNeeded)
+        }
         else -> {
           if (responseNeeded) {
             gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_FAILURE, 0, null)
@@ -164,6 +213,174 @@ class BlePeripheralManager(
         gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
       }
     }
+  }
+
+  private fun extensionEnabled(): Boolean = receiptQueue != null && verificationContextProvider() != null
+
+  private fun ensureExtensionPeer(peerId: String, nowMs: Long): Boolean {
+    val stale = extensionPeerActivity.entries
+      .filter { (_, last) -> nowMs < last || nowMs - last >= EXTENSION_CONTACT_TIMEOUT_MS }
+      .map { it.key }
+    stale.forEach { stalePeer ->
+      extensionPeerActivity.remove(stalePeer)
+      extensionSnapshots.remove(stalePeer)
+      extensionControlResponses.remove(stalePeer)
+      extensionCustodyResponses.remove(stalePeer)
+      extensionReceiver.disconnect(stalePeer)
+    }
+    if (!extensionPeerActivity.containsKey(peerId) && extensionPeerActivity.size >= MAX_EXTENSION_PEERS) return false
+    extensionPeerActivity[peerId] = nowMs
+    receiptQueue?.touchContact(peerId, nowMs)
+    return true
+  }
+
+  private fun extensionMtuReady(peerId: String): Boolean =
+    (extensionMtu[peerId] ?: 23) >= BleReceiptExchangeCodec.MIN_EXTENSION_MTU
+
+  private fun sendLongReadResponse(
+    device: BluetoothDevice,
+    requestId: Int,
+    offset: Int,
+    encoded: ByteArray,
+  ) {
+    if (offset < 0 || offset > encoded.size) {
+      gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_FAILURE, offset, null)
+      return
+    }
+    val maxResponseBytes = maxOf(1, (extensionMtu[device.address] ?: 23) - 1)
+    val end = minOf(encoded.size, offset + maxResponseBytes)
+    gattServer?.sendResponse(
+      device,
+      requestId,
+      BluetoothGatt.GATT_SUCCESS,
+      offset,
+      encoded.copyOfRange(offset, end),
+    )
+  }
+
+  private fun admitExtensionObject(kind: ObjectKind, bytes: ByteArray): CustodyResult {
+    val queue = receiptQueue
+      ?: return CustodyResult(CustodyResultKind.PENDING_VERIFICATION, reason = "RECEIPT_EXTENSION_DISABLED")
+    val context = verificationContextProvider()
+      ?: return CustodyResult(CustodyResultKind.PENDING_VERIFICATION, reason = "VERIFICATION_CONTEXT_UNAVAILABLE")
+    return queue.admitObject(bytes, kind, context)
+  }
+
+  private fun extensionPreflightDecision(entry: InventoryEntry): BleDecisionCode? {
+    val known = receiptQueue?.knownVerifiedDigest(entry.objectKind, entry.objectId) ?: return null
+    return if (java.security.MessageDigest.isEqual(known, entry.digest)) {
+      BleDecisionCode.ALREADY_HAVE_VERIFIED
+    } else {
+      BleDecisionCode.REJECTED
+    }
+  }
+
+  private fun claimExtensionOffer(peerId: String): Boolean {
+    val now = nowProvider()
+    if (!ensureExtensionPeer(peerId, now)) return false
+    return receiptQueue?.claimContactTransfer(peerId, now) == true
+  }
+
+  private fun alreadyHaveVerifiedExtensionObject(entry: InventoryEntry): Boolean {
+    val queue = receiptQueue ?: return false
+    return queue.getObject(entry.objectId, entry.digest) != null
+  }
+
+  private fun handleExtensionControlWrite(
+    device: BluetoothDevice,
+    requestId: Int,
+    value: ByteArray,
+    responseNeeded: Boolean,
+  ) {
+    if (!extensionEnabled() || !extensionMtuReady(device.address) || !ensureExtensionPeer(device.address, nowProvider()) || value.size < 4) {
+      if (responseNeeded) gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_FAILURE, 0, null)
+      return
+    }
+    val magic = value.copyOfRange(0, 4).toString(Charsets.US_ASCII)
+    val response = try {
+      when (magic) {
+        "SGQ2" -> encodeExtensionInventory(device.address, value)
+        "SGO2" -> BleReceiptExchangeCodec.encodeDecision(extensionReceiver.beginOffer(device.address, value))
+        else -> throw IllegalArgumentException("unsupported extension control frame")
+      }
+    } catch (_: Exception) {
+      null
+    }
+    if (response == null) {
+      extensionControlResponses.remove(device.address)
+      if (responseNeeded) gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_FAILURE, 0, null)
+      return
+    }
+    extensionControlResponses[device.address] = response
+    if (responseNeeded) gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
+  }
+
+  private fun encodeExtensionInventory(peerId: String, requestBytes: ByteArray): ByteArray {
+    val request = BleReceiptExchangeCodec.decodeInventoryRequest(requestBytes)
+    val now = nowProvider()
+    require(ensureExtensionPeer(peerId, now)) { "extension peer capacity" }
+    var snapshot = extensionSnapshots[peerId]
+    if (snapshot != null && now - snapshot.lastActivityAtMs >= EXTENSION_CONTACT_TIMEOUT_MS) {
+      extensionSnapshots.remove(peerId)
+      extensionReceiver.disconnect(peerId)
+      snapshot = null
+    }
+    if (request.snapshotId == null) {
+      if (snapshot == null) {
+        val entries = requireNotNull(receiptQueue).contactInventory(BleReceiptExchangeCodec.MAX_INVENTORY_ENTRIES)
+        snapshot = ExtensionSnapshot(UUID.randomUUID().toString(), entries.map { it.copy(digest = it.digest.copyOf()) }, now)
+        extensionSnapshots[peerId] = snapshot
+      }
+    } else {
+      require(snapshot != null && snapshot.snapshotId == request.snapshotId) { "unknown inventory snapshot" }
+    }
+    val active = requireNotNull(snapshot)
+    active.lastActivityAtMs = now
+    val from = request.pageIndex * BleReceiptExchangeCodec.MAX_INVENTORY_PAGE_ENTRIES
+    if (active.entries.isEmpty()) {
+      require(request.pageIndex == 0) { "inventory page out of range" }
+    } else {
+      require(from < active.entries.size) { "inventory page out of range" }
+    }
+    val pageEntries = active.entries.drop(from).take(BleReceiptExchangeCodec.MAX_INVENTORY_PAGE_ENTRIES)
+    val next = if (from + pageEntries.size < active.entries.size) request.pageIndex + 1 else null
+    return BleReceiptExchangeCodec.encodeInventory(
+      InventoryPage(
+        entries = pageEntries,
+        nextCursor = null,
+        snapshotId = active.snapshotId,
+        pageIndex = request.pageIndex,
+        totalCount = active.entries.size,
+        nextPage = next,
+      ),
+    )
+  }
+
+  private fun handleExtensionChunkWrite(
+    device: BluetoothDevice,
+    requestId: Int,
+    value: ByteArray,
+    responseNeeded: Boolean,
+  ) {
+    if (!extensionEnabled() || !extensionMtuReady(device.address) || !ensureExtensionPeer(device.address, nowProvider())) {
+      if (responseNeeded) gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_FAILURE, 0, null)
+      return
+    }
+    val result = extensionReceiver.addChunk(device.address, value)
+    if (result != null) {
+      val encoded = BleReceiptExchangeCodec.encodeCustody(result)
+      extensionCustodyResponses[device.address] = encoded
+      val service = gattServer?.getService(BleProtocolConstants.SERVICE_UUID)
+      val custody = service?.getCharacteristic(BleProtocolConstants.CHARACTERISTIC_EXTENSION_CUSTODY_UUID)
+      if (custody != null) {
+        custody.value = encoded
+        try {
+          gattServer?.notifyCharacteristicChanged(device, custody, false)
+        } catch (_: SecurityException) {
+        }
+      }
+    }
+    if (responseNeeded) gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
   }
 
   private fun handleReturnAckWrite(
@@ -211,6 +428,12 @@ class BlePeripheralManager(
     activeOffers.clear()
     offerDecisions.clear()
     durableAcks.clear()
+    extensionControlResponses.clear()
+    extensionCustodyResponses.clear()
+    extensionReceiver.clear()
+    extensionSnapshots.clear()
+    extensionPeerActivity.clear()
+    extensionMtu.clear()
   }
 
   override fun isRunning(): Boolean = isAdvertising && serviceReady && gattServer != null
@@ -261,6 +484,39 @@ class BlePeripheralManager(
     service.addCharacteristic(chunkChar)
     service.addCharacteristic(ackChar)
     service.addCharacteristic(returnAckChar)
+
+    if (extensionEnabled()) {
+      val capabilityChar = BluetoothGattCharacteristic(
+        BleProtocolConstants.CHARACTERISTIC_EXTENSION_CAPABILITY_UUID,
+        BluetoothGattCharacteristic.PROPERTY_READ,
+        BluetoothGattCharacteristic.PERMISSION_READ,
+      )
+      val controlChar = BluetoothGattCharacteristic(
+        BleProtocolConstants.CHARACTERISTIC_EXTENSION_CONTROL_UUID,
+        BluetoothGattCharacteristic.PROPERTY_READ or BluetoothGattCharacteristic.PROPERTY_WRITE,
+        BluetoothGattCharacteristic.PERMISSION_READ or BluetoothGattCharacteristic.PERMISSION_WRITE,
+      )
+      val extensionChunkChar = BluetoothGattCharacteristic(
+        BleProtocolConstants.CHARACTERISTIC_EXTENSION_CHUNK_UUID,
+        BluetoothGattCharacteristic.PROPERTY_WRITE or BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE,
+        BluetoothGattCharacteristic.PERMISSION_WRITE,
+      )
+      val extensionCustodyChar = BluetoothGattCharacteristic(
+        BleProtocolConstants.CHARACTERISTIC_EXTENSION_CUSTODY_UUID,
+        BluetoothGattCharacteristic.PROPERTY_READ or BluetoothGattCharacteristic.PROPERTY_NOTIFY or BluetoothGattCharacteristic.PROPERTY_INDICATE,
+        BluetoothGattCharacteristic.PERMISSION_READ,
+      )
+      extensionCustodyChar.addDescriptor(
+        BluetoothGattDescriptor(
+          BleProtocolConstants.CLIENT_CONFIG_DESCRIPTOR_UUID,
+          BluetoothGattDescriptor.PERMISSION_WRITE or BluetoothGattDescriptor.PERMISSION_READ,
+        ),
+      )
+      service.addCharacteristic(capabilityChar)
+      service.addCharacteristic(controlChar)
+      service.addCharacteristic(extensionChunkChar)
+      service.addCharacteristic(extensionCustodyChar)
+    }
 
     serviceReady = false
     val added = gattServer?.addService(service) == true
@@ -431,5 +687,10 @@ class BlePeripheralManager(
       gattServer?.notifyCharacteristicChanged(device, ackChar, false)
     } catch (_: SecurityException) {
     }
+  }
+
+  companion object {
+    private const val EXTENSION_CONTACT_TIMEOUT_MS = 60_000L
+    private const val MAX_EXTENSION_PEERS = 4
   }
 }

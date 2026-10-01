@@ -4,11 +4,15 @@ import {
   BLE_RELAY_AVAILABILITIES,
   DELIVERY_STATES,
   EMERGENCY_TYPES,
+  REQUESTER_DELIVERY_STATES,
   URGENCIES,
+  VERIFIED_RECEIPT_KINDS,
+  VERIFIED_RESPONDER_STATUSES,
   type BleRelayStatus,
   type CreateEmergencyReportInput,
   type EmergencyReportSummary,
   type LocationSnapshot,
+  type VerifiedReceiptInfo,
 } from './types';
 
 interface NativeSurvivalCore {
@@ -16,6 +20,7 @@ interface NativeSurvivalCore {
     input: CreateEmergencyReportInput,
   ): Promise<unknown>;
   listEmergencyReports(): Promise<unknown>;
+  claimVerifiedReceiptNotification(reportId: string, eventId: string): Promise<unknown>;
   triggerDelivery(): Promise<unknown>;
   getRelayStatus(): Promise<unknown>;
   startBleRelay(): Promise<unknown>;
@@ -87,6 +92,62 @@ function parseResponderAck(value: unknown): EmergencyReportSummary['responderAck
   };
 }
 
+function invalidEmergencyReport(): never {
+  throw new Error('Invalid emergency report response from native core');
+}
+
+function parseVerifiedReceipt(value: unknown): VerifiedReceiptInfo | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    return invalidEmergencyReport();
+  }
+
+  const {
+    eventId,
+    revision,
+    verificationKind,
+    authorityCheckedAt,
+    status,
+    callsign,
+    note,
+    requesterDeliveryState,
+  } = value;
+
+  if (
+    typeof eventId !== 'string' ||
+    eventId.length === 0 ||
+    typeof revision !== 'number' ||
+    !Number.isSafeInteger(revision) ||
+    revision <= 0 ||
+    !VERIFIED_RECEIPT_KINDS.includes(verificationKind as never) ||
+    (authorityCheckedAt !== null &&
+      (typeof authorityCheckedAt !== 'number' ||
+        !Number.isSafeInteger(authorityCheckedAt) ||
+        authorityCheckedAt < 0)) ||
+    !VERIFIED_RESPONDER_STATUSES.includes(status as never) ||
+    typeof callsign !== 'string' ||
+    callsign.length === 0 ||
+    typeof note !== 'string' ||
+    !REQUESTER_DELIVERY_STATES.includes(requesterDeliveryState as never)
+  ) {
+    return invalidEmergencyReport();
+  }
+
+  return {
+    eventId,
+    revision,
+    verificationKind: verificationKind as VerifiedReceiptInfo['verificationKind'],
+    authorityCheckedAt,
+    status: status as VerifiedReceiptInfo['status'],
+    callsign,
+    note,
+    requesterDeliveryState:
+      requesterDeliveryState as VerifiedReceiptInfo['requesterDeliveryState'],
+  };
+}
+
 function parseSummary(value: unknown): EmergencyReportSummary {
   if (!isRecord(value)) {
     throw new Error('Invalid emergency report response from native core');
@@ -101,6 +162,7 @@ function parseSummary(value: unknown): EmergencyReportSummary {
     deliveryState,
     location,
     responderAck,
+    verifiedReceipt,
   } = value;
 
   if (
@@ -116,6 +178,7 @@ function parseSummary(value: unknown): EmergencyReportSummary {
   }
 
   const ack = parseResponderAck(responderAck);
+  const verified = parseVerifiedReceipt(verifiedReceipt);
   return {
     reportId,
     createdAt,
@@ -125,6 +188,7 @@ function parseSummary(value: unknown): EmergencyReportSummary {
     deliveryState: deliveryState as EmergencyReportSummary['deliveryState'],
     location: parseLocation(location),
     ...(ack ? {responderAck: ack} : {}),
+    ...(verified ? {verifiedReceipt: verified} : {}),
   };
 }
 
@@ -204,6 +268,17 @@ export const SurvivalCore = {
       throw new Error('Invalid emergency report response from native core');
     }
     return value.map(parseSummary);
+  },
+
+  async claimVerifiedReceiptNotification(
+    reportId: string,
+    eventId: string,
+  ): Promise<boolean> {
+    const value = await requireNativeCore().claimVerifiedReceiptNotification(
+      reportId,
+      eventId,
+    );
+    return value === true;
   },
 
   async triggerDelivery(): Promise<number> {

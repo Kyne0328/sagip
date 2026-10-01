@@ -129,7 +129,7 @@ test('renders server accepted delivery state when report is accepted', async () 
   const rendered = JSON.stringify(renderer.toJSON());
   expect(rendered).toContain('Saved on this device');
   expect(rendered).toContain('Server accepted');
-  expect(rendered).toContain('Waiting for responder acknowledgement');
+  expect(rendered).toContain('Server acceptance does not by itself prove responder acknowledgement');
   expect(rendered).not.toContain('Pending delivery');
 });
 
@@ -291,9 +291,9 @@ test('renders responder acknowledged delivery state with callsign and note', asy
 
   const rendered = JSON.stringify(renderer.toJSON());
   expect(rendered).toContain('Saved on this device');
-  expect(rendered).toContain('Responder acknowledged');
+  expect(rendered).toContain('Unverified responder update');
   expect(rendered).toContain(
-    'Responder has acknowledged your SOS · RESCUE-ALPHA-1 (Boat team deployed)',
+    'Responder has acknowledged your SOS · RESCUE-ALPHA-1 (Boat team deployed). This legacy acknowledgement is not cryptographically verified.',
   );
   expect(rendered).not.toContain('Responders report they are on the way');
 });
@@ -315,7 +315,7 @@ test('uses persisted responder status before saying responders are on the way', 
   const renderer = await renderApp();
 
   expect(JSON.stringify(renderer.toJSON())).toContain(
-    'Responders report they are on the way · RESCUE-ALPHA-1 (Boat team dispatched)',
+    'Responders report they are on the way · RESCUE-ALPHA-1 (Boat team dispatched). This legacy acknowledgement is not cryptographically verified.',
   );
 });
 

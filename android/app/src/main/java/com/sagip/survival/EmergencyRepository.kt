@@ -286,6 +286,7 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
           require(current.third != null && current.third.contentEquals(envelopeBytes)) {
             "READY envelope bytes are immutable"
           }
+          tryPersistReceiptIdentity(db, envelopeBytes, now)
           db.setTransactionSuccessful()
           return
         }
@@ -301,12 +302,26 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
           )
           check(updated == 1) { "Envelope preparation state changed concurrently" }
           insertDeliveryEvent(db, current.first, messageId, EVENT_ENVELOPE_PREPARED, now)
+          tryPersistReceiptIdentity(db, envelopeBytes, now)
           db.setTransactionSuccessful()
         }
         else -> throw IllegalStateException("Unknown envelope preparation state: ${current.second}")
       }
     } finally {
       db.endTransaction()
+    }
+  }
+
+  private fun tryPersistReceiptIdentity(
+    db: SQLiteDatabase,
+    envelopeBytes: ByteArray,
+    recordedAt: Long,
+  ) {
+    try {
+      ReceiptRepository.persistReportIdentity(db, envelopeBytes, recordedAt)
+    } catch (_: IllegalArgumentException) {
+      // Preserve the existing low-level markEnvelopeReady contract for legacy callers.
+      // Production preparation creates and verifies an SGP envelope before this path.
     }
   }
 
@@ -658,52 +673,59 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
     } catch (e: Exception) {
       return InboundPersistResult.ValidationFailed("Failed to verify envelope: ${e.message}")
     }
-
-    val messageIdStr = decoded.messageId
-    val reportIdStr = decoded.reportId
-    if (isMessageSeen(messageIdStr, decoded.payloadDigest)) {
-      return InboundPersistResult.DuplicateIgnored(messageIdStr)
+    if (isMessageSeen(decoded.messageId, decoded.payloadDigest)) {
+      return InboundPersistResult.DuplicateIgnored(decoded.messageId)
     }
 
-    val inboundId = UUID.randomUUID().toString()
     val db = database.writableDatabase
     db.beginTransaction()
     try {
-      if (isMessageSeen(db, messageIdStr, decoded.payloadDigest)) {
-        db.setTransactionSuccessful()
-        return InboundPersistResult.DuplicateIgnored(messageIdStr)
-      }
-
-      insertOrThrow(
-        db,
-        "inbound_envelopes",
-        ContentValues().apply {
-          put("inbound_id", inboundId)
-          put("message_id", messageIdStr)
-          put("report_id", reportIdStr)
-          put("envelope_bytes", envelopeBytes)
-          put("received_at", receivedAt)
-          put("origin_key_id", decoded.originKeyId)
-          put("priority", decoded.priority)
-          put("delivery_state", DELIVERY_PENDING)
-          put("next_attempt_at", receivedAt)
-          put("attempt_count", 0)
-        },
-      )
-      insertOrThrow(
-        db,
-        "seen_messages",
-        ContentValues().apply {
-          put("message_id", messageIdStr)
-          put("digest", decoded.payloadDigest)
-          put("first_seen_at", receivedAt)
-        },
-      )
+      val result = persistVerifiedInboundEnvelope(db, envelopeBytes, decoded, receivedAt)
       db.setTransactionSuccessful()
-      return InboundPersistResult.Stored(inboundId, messageIdStr)
+      return result
     } finally {
       db.endTransaction()
     }
+  }
+
+  internal fun persistVerifiedInboundEnvelope(
+    db: SQLiteDatabase,
+    envelopeBytes: ByteArray,
+    decoded: VerifiedTransportEnvelope,
+    receivedAt: Long,
+  ): InboundPersistResult {
+    if (isMessageSeen(db, decoded.messageId, decoded.payloadDigest)) {
+      return InboundPersistResult.DuplicateIgnored(decoded.messageId)
+    }
+
+    val inboundId = UUID.randomUUID().toString()
+    insertOrThrow(
+      db,
+      "inbound_envelopes",
+      ContentValues().apply {
+        put("inbound_id", inboundId)
+        put("message_id", decoded.messageId)
+        put("report_id", decoded.reportId)
+        put("envelope_bytes", envelopeBytes)
+        put("received_at", receivedAt)
+        put("origin_key_id", decoded.originKeyId)
+        put("priority", decoded.priority)
+        put("delivery_state", DELIVERY_PENDING)
+        put("next_attempt_at", receivedAt)
+        put("attempt_count", 0)
+      },
+    )
+    insertOrThrow(
+      db,
+      "seen_messages",
+      ContentValues().apply {
+        put("message_id", decoded.messageId)
+        put("digest", decoded.payloadDigest)
+        put("first_seen_at", receivedAt)
+      },
+    )
+    ReceiptRepository.persistReportIdentity(db, envelopeBytes, receivedAt)
+    return InboundPersistResult.Stored(inboundId, decoded.messageId)
   }
 
   fun recordRelayReceipt(

@@ -1,7 +1,267 @@
 package com.sagip.survival
 
 object Schema {
-  const val VERSION = 7
+  const val VERSION = 11
+
+  private val RECEIPT_CREATE_STATEMENTS = listOf(
+    """
+      CREATE TABLE receipt_report_state (
+        report_id TEXT PRIMARY KEY NOT NULL,
+        receipt_version INTEGER NOT NULL DEFAULT 0
+      )
+    """.trimIndent(),
+    """
+      CREATE TABLE receipt_report_identities (
+        report_id TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        report_protocol_version INTEGER NOT NULL,
+        payload_digest BLOB NOT NULL,
+        origin_key_id BLOB NOT NULL,
+        origin_public_key_der BLOB NOT NULL,
+        recorded_at_ms INTEGER NOT NULL,
+        PRIMARY KEY (report_id, revision)
+      )
+    """.trimIndent(),
+    """
+      CREATE TABLE receipt_sequences (
+        issuer_key_id BLOB NOT NULL,
+        grant_id TEXT NOT NULL,
+        report_id TEXT NOT NULL,
+        sequence INTEGER NOT NULL,
+        PRIMARY KEY (issuer_key_id, grant_id, report_id)
+      )
+    """.trimIndent(),
+    """
+      CREATE TABLE receipt_actions (
+        action_id TEXT PRIMARY KEY NOT NULL,
+        issuer_provider_id BLOB NOT NULL,
+        action_digest BLOB NOT NULL,
+        issuer_key_id BLOB NOT NULL,
+        grant_id TEXT NOT NULL,
+        report_id TEXT NOT NULL,
+        report_protocol_version INTEGER NOT NULL,
+        revision INTEGER NOT NULL,
+        payload_digest BLOB NOT NULL,
+        origin_key_id BLOB NOT NULL,
+        responder_id TEXT NOT NULL,
+        callsign TEXT NOT NULL,
+        observed_incident_version INTEGER NOT NULL,
+        status INTEGER NOT NULL,
+        sequence INTEGER NOT NULL,
+        issued_at_ms INTEGER NOT NULL,
+        forwarding_expires_at_ms INTEGER NOT NULL,
+        note TEXT NOT NULL,
+        proof_bytes BLOB NOT NULL,
+        allocated_at_ms INTEGER NOT NULL,
+        preparation_state TEXT NOT NULL,
+        lease_token TEXT,
+        lease_until_ms INTEGER
+      )
+    """.trimIndent(),
+    """
+      CREATE TABLE receipt_records (
+        event_id TEXT PRIMARY KEY NOT NULL,
+        object_kind TEXT NOT NULL,
+        event_digest BLOB NOT NULL UNIQUE,
+        object_bytes BLOB NOT NULL,
+        report_id TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        issuer_provider_id BLOB,
+        sequence INTEGER,
+        verification_kind TEXT NOT NULL,
+        authority_checked_at_ms INTEGER,
+        forwarding_expires_at_ms INTEGER NOT NULL,
+        received_at_ms INTEGER NOT NULL,
+        cloud_archived_at_ms INTEGER
+      )
+    """.trimIndent(),
+    """
+      CREATE TABLE receipt_projections (
+        issuer_provider_id BLOB NOT NULL,
+        report_id TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        sequence INTEGER NOT NULL,
+        verification_kind TEXT NOT NULL,
+        authority_checked_at_ms INTEGER,
+        notification_eligible INTEGER NOT NULL DEFAULT 0,
+        requester_delivery_state TEXT NOT NULL DEFAULT 'UNKNOWN',
+        updated_at_ms INTEGER NOT NULL,
+        PRIMARY KEY (issuer_provider_id, report_id)
+      )
+    """.trimIndent(),
+    """
+      CREATE TABLE requester_receipt_actions (
+        ack_event_id TEXT PRIMARY KEY NOT NULL,
+        event_id TEXT NOT NULL UNIQUE,
+        report_id TEXT NOT NULL,
+        report_protocol_version INTEGER NOT NULL,
+        revision INTEGER NOT NULL,
+        origin_key_id BLOB NOT NULL,
+        origin_public_key_der BLOB NOT NULL,
+        ack_digest BLOB NOT NULL,
+        received_at_ms INTEGER NOT NULL,
+        forwarding_expires_at_ms INTEGER NOT NULL,
+        preparation_state TEXT NOT NULL,
+        lease_token TEXT,
+        lease_until_ms INTEGER
+      )
+    """.trimIndent(),
+    """
+      CREATE TABLE receipt_quarantine (
+        object_digest BLOB PRIMARY KEY NOT NULL,
+        claimed_event_id TEXT,
+        object_bytes BLOB NOT NULL,
+        report_id TEXT,
+        revision INTEGER,
+        reason TEXT NOT NULL,
+        received_at_ms INTEGER NOT NULL
+      )
+    """.trimIndent(),
+    """
+      CREATE TABLE receipt_grants (
+        grant_id TEXT PRIMARY KEY NOT NULL,
+        issuer_provider_id BLOB NOT NULL,
+        issuer_key_id BLOB NOT NULL,
+        object_digest BLOB NOT NULL UNIQUE,
+        object_bytes BLOB NOT NULL,
+        received_at_ms INTEGER NOT NULL,
+        authority_checked_at_ms INTEGER,
+        revoked_at_ms INTEGER
+      )
+    """.trimIndent(),
+    """
+      CREATE TABLE receipt_time_challenges (
+        challenge_id TEXT PRIMARY KEY NOT NULL,
+        verifier_id BLOB NOT NULL,
+        verifier_boot_session_id TEXT NOT NULL,
+        nonce BLOB NOT NULL,
+        sent_elapsed_ms INTEGER NOT NULL,
+        high_water_earliest_ms INTEGER,
+        created_at_ms INTEGER NOT NULL,
+        consumed_at_ms INTEGER
+      )
+    """.trimIndent(),
+    """
+      CREATE TABLE receipt_time_checkpoints (
+        checkpoint_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        challenge_id TEXT NOT NULL UNIQUE,
+        verifier_id BLOB NOT NULL,
+        earliest_ms INTEGER NOT NULL,
+        latest_ms INTEGER NOT NULL,
+        boot_id TEXT NOT NULL,
+        received_elapsed_ms INTEGER NOT NULL,
+        valid_until_ms INTEGER NOT NULL,
+        proof_digest TEXT NOT NULL,
+        committed_at_ms INTEGER NOT NULL
+      )
+    """.trimIndent(),
+    """
+      CREATE TABLE receipt_time_high_water (
+        verifier_id BLOB PRIMARY KEY NOT NULL,
+        earliest_ms INTEGER NOT NULL,
+        updated_at_ms INTEGER NOT NULL
+      )
+    """.trimIndent(),
+    "CREATE INDEX idx_receipt_identities_report ON receipt_report_identities(report_id, revision DESC)",
+    "CREATE INDEX idx_receipt_actions_report ON receipt_actions(report_id, revision, sequence)",
+    "CREATE UNIQUE INDEX idx_receipt_actions_issuer_sequence ON receipt_actions(issuer_key_id, grant_id, report_id, sequence)",
+    "CREATE INDEX idx_receipt_records_report ON receipt_records(report_id, revision, received_at_ms)",
+    "CREATE INDEX idx_receipt_projections_report ON receipt_projections(report_id, revision, sequence)",
+    "CREATE INDEX idx_receipt_quarantine_received ON receipt_quarantine(received_at_ms)",
+  )
+  private val RELAY_CREATE_STATEMENTS = listOf(
+    "ALTER TABLE receipt_quarantine ADD COLUMN claimed_object_kind INTEGER",
+    """
+      CREATE TABLE relay_objects (
+        object_kind INTEGER NOT NULL,
+        object_id TEXT NOT NULL,
+        object_digest BLOB NOT NULL UNIQUE,
+        object_bytes BLOB NOT NULL,
+        report_id TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        signed_issued_at_ms INTEGER,
+        signed_expires_at_ms INTEGER,
+        custody_accepted_at_ms INTEGER NOT NULL,
+        custody_expires_at_ms INTEGER NOT NULL,
+        verification_class TEXT NOT NULL,
+        transport_state TEXT NOT NULL,
+        accounted_bytes INTEGER NOT NULL,
+        PRIMARY KEY (object_kind, object_id),
+        CHECK (object_kind IN (1, 2, 3))
+      )
+    """.trimIndent(),
+    """
+      CREATE TABLE relay_object_tombstones (
+        object_kind INTEGER NOT NULL,
+        object_id TEXT NOT NULL,
+        object_digest BLOB NOT NULL,
+        signed_expires_at_ms INTEGER,
+        protected_until_ms INTEGER NOT NULL,
+        accounted_bytes INTEGER NOT NULL,
+        PRIMARY KEY (object_kind, object_id),
+        CHECK (object_kind IN (1, 2, 3))
+      )
+    """.trimIndent(),
+    """
+      CREATE TABLE relay_time_state (
+        state_id INTEGER PRIMARY KEY NOT NULL CHECK (state_id = 1),
+        high_water_earliest_ms INTEGER NOT NULL
+      )
+    """.trimIndent(),
+    "CREATE INDEX idx_relay_objects_report ON relay_objects(report_id, revision, object_kind)",
+    "CREATE INDEX idx_relay_objects_transport ON relay_objects(transport_state, custody_expires_at_ms)",
+    "CREATE INDEX idx_relay_tombstones_protected ON relay_object_tombstones(protected_until_ms)",
+  )
+
+  private val TRANSFER_CREATE_STATEMENTS = listOf(
+    """
+      CREATE TABLE relay_peer_object_state (
+        peer_id TEXT NOT NULL,
+        object_kind INTEGER NOT NULL,
+        object_id TEXT NOT NULL,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at_ms INTEGER NOT NULL DEFAULT 0,
+        terminal_outcome TEXT,
+        updated_at_ms INTEGER NOT NULL,
+        PRIMARY KEY (peer_id, object_kind, object_id),
+        CHECK (object_kind IN (1, 2, 3))
+      )
+    """.trimIndent(),
+    """
+      CREATE TABLE relay_transfer_leases (
+        lease_id TEXT PRIMARY KEY NOT NULL,
+        object_kind INTEGER NOT NULL,
+        object_id TEXT NOT NULL,
+        object_digest BLOB NOT NULL,
+        peer_id TEXT NOT NULL,
+        lease_until_ms INTEGER NOT NULL,
+        attempt_number INTEGER NOT NULL,
+        state TEXT NOT NULL,
+        outcome TEXT,
+        created_at_ms INTEGER NOT NULL,
+        completed_at_ms INTEGER,
+        CHECK (object_kind IN (1, 2, 3)),
+        CHECK (state IN ('ACTIVE', 'COMPLETED', 'EXPIRED'))
+      )
+    """.trimIndent(),
+    "CREATE UNIQUE INDEX idx_relay_transfer_active_object ON relay_transfer_leases(object_kind, object_id) WHERE state='ACTIVE'",
+    "CREATE INDEX idx_relay_peer_due ON relay_peer_object_state(peer_id, terminal_outcome, next_attempt_at_ms)",
+    "CREATE INDEX idx_relay_transfer_peer_state ON relay_transfer_leases(peer_id, state, lease_until_ms)",
+  )
+
+  private val CONTACT_CREATE_STATEMENTS = listOf(
+    """
+      CREATE TABLE relay_peer_contacts (
+        peer_id TEXT PRIMARY KEY NOT NULL,
+        contact_started_at_ms INTEGER NOT NULL,
+        last_activity_at_ms INTEGER NOT NULL,
+        attempted_transfers INTEGER NOT NULL DEFAULT 0,
+        CHECK (attempted_transfers BETWEEN 0 AND 8)
+      )
+    """.trimIndent(),
+    "CREATE INDEX idx_relay_peer_contacts_activity ON relay_peer_contacts(last_activity_at_ms)",
+  )
 
   val CREATE_STATEMENTS = listOf(
     """
@@ -151,7 +411,7 @@ object Schema {
     "CREATE INDEX idx_relay_receipts_message ON relay_receipts(message_id)",
     "CREATE INDEX idx_responder_acks_report ON responder_acks(report_id)",
     "CREATE INDEX idx_relay_responder_acks_report ON relay_responder_acks(report_id, acknowledged_at DESC)",
-  )
+  ) + RECEIPT_CREATE_STATEMENTS + RELAY_CREATE_STATEMENTS + TRANSFER_CREATE_STATEMENTS + CONTACT_CREATE_STATEMENTS
 
   val MIGRATE_1_TO_2 = listOf(
     "ALTER TABLE outbound_envelopes ADD COLUMN envelope_bytes BLOB",
@@ -254,4 +514,9 @@ object Schema {
     """.trimIndent(),
     "CREATE INDEX idx_relay_responder_acks_report ON relay_responder_acks(report_id, acknowledged_at DESC)",
   )
+
+  val MIGRATE_7_TO_8 = RECEIPT_CREATE_STATEMENTS
+  val MIGRATE_8_TO_9 = RELAY_CREATE_STATEMENTS
+  val MIGRATE_9_TO_10 = TRANSFER_CREATE_STATEMENTS
+  val MIGRATE_10_TO_11 = CONTACT_CREATE_STATEMENTS
 }

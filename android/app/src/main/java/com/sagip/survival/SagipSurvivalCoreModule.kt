@@ -7,6 +7,7 @@ import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.bridge.ReadableMap
 import com.facebook.react.bridge.WritableMap
+import java.security.MessageDigest
 import java.util.concurrent.Executors
 import kotlinx.coroutines.runBlocking
 
@@ -16,6 +17,7 @@ class SagipSurvivalCoreModule(
   private val runtime = SurvivalCoreRuntime.get(reactContext.applicationContext)
   private val database = runtime.database
   private val repository = runtime.repository
+  private val receiptRepository = ReceiptRepository(database)
   private val locationProvider = LocationSnapshotProvider(reactContext.applicationContext)
   private val preparationService by lazy {
     EnvelopePreparationService(repository, AndroidKeystoreSigningIdentity())
@@ -145,6 +147,19 @@ class SagipSurvivalCoreModule(
   }
 
   @ReactMethod
+  fun claimVerifiedReceiptNotification(reportId: String, eventId: String, promise: Promise) {
+    executor.execute {
+      try {
+        promise.resolve(receiptRepository.claimVerifiedReceiptNotification(reportId, eventId))
+      } catch (_: IllegalArgumentException) {
+        promise.reject(ERROR_INVALID_INPUT, "Report or receipt event ID is invalid")
+      } catch (_: Exception) {
+        promise.reject(ERROR_PERSISTENCE_FAILED, "Verified receipt notification state could not be updated")
+      }
+    }
+  }
+
+  @ReactMethod
   fun listEmergencyReports(promise: Promise) {
     BestEffortPreparation.afterCommit(Unit) {
       preparationService.preparePending()
@@ -152,11 +167,57 @@ class SagipSurvivalCoreModule(
 
     try {
       val result = Arguments.createArray()
-      repository.listReports().forEach { result.pushMap(toWritableMap(it)) }
+      repository.listReports().forEach { result.pushMap(toWritableMap(withVerifiedReceipt(it))) }
       promise.resolve(result)
     } catch (_: Exception) {
       promise.reject(ERROR_PERSISTENCE_FAILED, "Saved SOS reports could not be loaded")
     }
+  }
+
+  private fun withVerifiedReceipt(summary: EmergencyReportSummary): EmergencyReportSummary {
+    val projection = receiptRepository.projection(summary.reportId) ?: return summary
+    if (projection.verificationKind !in VERIFIED_RECEIPT_KINDS) return summary
+    if (projection.requesterDeliveryState !in REQUESTER_DELIVERY_STATES) return summary
+
+    val currentRevision = database.readableDatabase.rawQuery(
+      "SELECT revision FROM outbound_envelopes WHERE report_id=? LIMIT 1",
+      arrayOf(summary.reportId),
+    ).use { cursor -> if (cursor.moveToFirst()) cursor.getInt(0) else null } ?: return summary
+    if (projection.revision != currentRevision) return summary
+
+    val bytes = receiptRepository.getReceipt(projection.eventId) ?: return summary
+    val fields = runCatching {
+      ReceiptV2Codec.decode(bytes).fields as? ReceiptFields.Responder
+    }.getOrNull() ?: return summary
+    if (
+      fields.actionId != projection.eventId ||
+      fields.reportId != summary.reportId ||
+      fields.revision != projection.revision ||
+      fields.sequence != projection.sequence ||
+      !MessageDigest.isEqual(fields.issuerProviderId, projection.issuerProviderId)
+    ) return summary
+
+    val status = when (fields.status) {
+      1 -> "ACKNOWLEDGED"
+      2 -> "EN_ROUTE"
+      3 -> "ON_SCENE"
+      4 -> "RESOLVED"
+      else -> return summary
+    }
+    if (fields.callsign.isBlank()) return summary
+
+    return summary.copy(
+      verifiedReceipt = VerifiedReceiptSummary(
+        eventId = projection.eventId,
+        revision = projection.revision,
+        verificationKind = projection.verificationKind,
+        authorityCheckedAt = projection.authorityCheckedAtMs,
+        status = status,
+        callsign = fields.callsign,
+        note = fields.note,
+        requesterDeliveryState = projection.requesterDeliveryState,
+      ),
+    )
   }
 
   internal fun parseInput(input: ReadableMap): CreateEmergencyReportInput {
@@ -203,10 +264,28 @@ class SagipSurvivalCoreModule(
           },
         )
       }
+      summary.verifiedReceipt?.let { receipt ->
+        putMap(
+          "verifiedReceipt",
+          Arguments.createMap().apply {
+            putString("eventId", receipt.eventId)
+            putInt("revision", receipt.revision)
+            putString("verificationKind", receipt.verificationKind)
+            receipt.authorityCheckedAt?.let { putDouble("authorityCheckedAt", it.toDouble()) }
+              ?: putNull("authorityCheckedAt")
+            putString("status", receipt.status)
+            putString("callsign", receipt.callsign)
+            putString("note", receipt.note)
+            putString("requesterDeliveryState", receipt.requesterDeliveryState)
+          },
+        )
+      }
     }
   }
 
   companion object {
+    private val VERIFIED_RECEIPT_KINDS = setOf("VERIFIED_CURRENT", "VERIFIED_OFFLINE_AUTHORITY")
+    private val REQUESTER_DELIVERY_STATES = setOf("UNKNOWN", "RECEIVED")
     const val NAME = "SagipSurvivalCore"
     const val ERROR_INVALID_INPUT = "INVALID_INPUT"
     const val ERROR_PERSISTENCE_FAILED = "PERSISTENCE_FAILED"

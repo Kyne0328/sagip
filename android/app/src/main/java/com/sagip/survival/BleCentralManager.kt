@@ -15,6 +15,7 @@ import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.os.ParcelUuid
+import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
@@ -25,11 +26,24 @@ import java.util.concurrent.atomic.AtomicBoolean
 class BleCentralManager(
   private val context: Context,
   private val repository: EmergencyRepository,
+  private val receiptQueue: ReceiptQueue? = null,
+  private val nowProvider: () -> Long = { System.currentTimeMillis() },
 ) : BleCentralController {
   private data class ActiveBleTransfer(
     val work: OutboundEnvelopeWork,
     val attemptId: String,
   )
+
+  private enum class ExtensionState {
+    NONE,
+    READING_CAPABILITY,
+    WRITING_INVENTORY_REQUEST,
+    READING_INVENTORY,
+    WRITING_OFFER,
+    READING_DECISION,
+    SENDING_CHUNKS,
+    READING_CUSTODY,
+  }
 
   private val bluetoothManager: BluetoothManager? =
     context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
@@ -153,7 +167,8 @@ class BleCentralManager(
       }.getOrNull()
     }
     val hasReturnAck = repository.findLatestResponderAck() != null
-    if (transfer == null && !hasReturnAck) {
+    val hasTypedRelayWork = runCatching { receiptQueue?.inventory(null, 1)?.entries?.isNotEmpty() == true }.getOrDefault(false)
+    if (transfer == null && !hasReturnAck && !hasTypedRelayWork) {
       activeConnections.remove(device.address)
       return
     }
@@ -179,11 +194,25 @@ class BleCentralManager(
   private fun createGattCallback(transfer: ActiveBleTransfer?) = object : BluetoothGattCallback() {
     private val work = transfer?.work
     private var attemptCompleted = false
-    private var negotiatedMtu = 240
+    private var negotiatedAttMtu = 23
+    private var negotiatedPayload = 20
     private var offerChar: BluetoothGattCharacteristic? = null
     private var chunkChar: BluetoothGattCharacteristic? = null
     private var ackChar: BluetoothGattCharacteristic? = null
     private var returnAckChar: BluetoothGattCharacteristic? = null
+    private var extensionCapabilityChar: BluetoothGattCharacteristic? = null
+    private var extensionControlChar: BluetoothGattCharacteristic? = null
+    private var extensionChunkChar: BluetoothGattCharacteristic? = null
+    private var extensionCustodyChar: BluetoothGattCharacteristic? = null
+    private var extensionState = ExtensionState.NONE
+    private val peerInventory = mutableListOf<InventoryEntry>()
+    private var peerInventorySnapshotId: String? = null
+    private var expectedPeerInventoryPage = 0
+    private var peerInventoryTotalCount: Int? = null
+    private var typedLeases = listOf<TransferLease>()
+    private var typedLeaseIndex = 0
+    private var typedChunks = listOf<ByteArray>()
+    private var typedChunkIndex = 0
     private var chunksToSend = listOf<ByteArray>()
     private var chunkIndex = 0
 
@@ -216,7 +245,8 @@ class BleCentralManager(
 
     override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
       if (status == BluetoothGatt.GATT_SUCCESS) {
-        negotiatedMtu = maxOf(23, mtu - 3)
+        negotiatedAttMtu = maxOf(23, mtu)
+        negotiatedPayload = maxOf(20, mtu - 3)
       }
       discoverServicesOrDisconnect(gatt)
     }
@@ -236,6 +266,10 @@ class BleCentralManager(
       chunkChar = service.getCharacteristic(BleProtocolConstants.CHARACTERISTIC_CHUNK_UUID)
       ackChar = service.getCharacteristic(BleProtocolConstants.CHARACTERISTIC_ACK_UUID)
       returnAckChar = service.getCharacteristic(BleProtocolConstants.CHARACTERISTIC_RETURN_ACK_UUID)
+      extensionCapabilityChar = service.getCharacteristic(BleProtocolConstants.CHARACTERISTIC_EXTENSION_CAPABILITY_UUID)
+      extensionControlChar = service.getCharacteristic(BleProtocolConstants.CHARACTERISTIC_EXTENSION_CONTROL_UUID)
+      extensionChunkChar = service.getCharacteristic(BleProtocolConstants.CHARACTERISTIC_EXTENSION_CHUNK_UUID)
+      extensionCustodyChar = service.getCharacteristic(BleProtocolConstants.CHARACTERISTIC_EXTENSION_CUSTODY_UUID)
 
       if (returnAckChar == null || (work != null && (offerChar == null || chunkChar == null || ackChar == null))) {
         gatt.disconnect()
@@ -250,7 +284,285 @@ class BleCentralManager(
       if (!returnAckReadStarted) continueAfterReturnAck(gatt)
     }
 
+    private fun tryStartReceiptExtension(gatt: BluetoothGatt): Boolean {
+      val queue = receiptQueue ?: return false
+      val capability = extensionCapabilityChar ?: return false
+      if (extensionControlChar == null || extensionChunkChar == null || extensionCustodyChar == null) return false
+      if (negotiatedAttMtu < BleReceiptExchangeCodec.MIN_EXTENSION_MTU) return false
+      val hasWork = runCatching { queue.inventory(null, 1).entries.isNotEmpty() }.getOrDefault(false)
+      if (!hasWork) return false
+      extensionState = ExtensionState.READING_CAPABILITY
+      return try {
+        gatt.readCharacteristic(capability).also { started -> if (!started) extensionState = ExtensionState.NONE }
+      } catch (_: SecurityException) {
+        extensionState = ExtensionState.NONE
+        false
+      }
+    }
+
+    private fun requestPeerInventory(gatt: BluetoothGatt, snapshotId: String?, pageIndex: Int): Boolean {
+      val control = extensionControlChar ?: return false
+      control.value = BleReceiptExchangeCodec.encodeInventoryRequest(BleInventoryRequest(snapshotId, pageIndex))
+      extensionState = ExtensionState.WRITING_INVENTORY_REQUEST
+      return try {
+        gatt.writeCharacteristic(control)
+      } catch (_: SecurityException) {
+        false
+      }
+    }
+
+    private fun handlePeerInventoryPage(gatt: BluetoothGatt, bytes: ByteArray) {
+      val page = try {
+        BleReceiptExchangeCodec.decodeInventory(bytes)
+      } catch (_: Exception) {
+        extensionState = ExtensionState.NONE
+        continueLegacyAfterReturnAck(gatt)
+        return
+      }
+      val snapshot = page.snapshotId ?: run {
+        extensionState = ExtensionState.NONE
+        continueLegacyAfterReturnAck(gatt)
+        return
+      }
+      if (page.pageIndex != expectedPeerInventoryPage ||
+        (peerInventorySnapshotId != null && peerInventorySnapshotId != snapshot) ||
+        (peerInventoryTotalCount != null && peerInventoryTotalCount != page.totalCount) ||
+        peerInventory.any { existing -> page.entries.any { it.objectKind == existing.objectKind && it.objectId == existing.objectId } }
+      ) {
+        gatt.disconnect()
+        return
+      }
+      peerInventorySnapshotId = snapshot
+      peerInventoryTotalCount = page.totalCount
+      peerInventory += page.entries
+      if (peerInventory.size > BleReceiptExchangeCodec.MAX_INVENTORY_ENTRIES || peerInventory.size > page.totalCount) {
+        gatt.disconnect()
+        return
+      }
+      val nextPage = page.nextPage
+      if (nextPage != null) {
+        expectedPeerInventoryPage = nextPage
+        if (!requestPeerInventory(gatt, snapshot, nextPage)) gatt.disconnect()
+        return
+      }
+      if (peerInventory.size != page.totalCount) {
+        gatt.disconnect()
+        return
+      }
+      prepareTypedLeases(gatt)
+    }
+
+    private fun prepareTypedLeases(gatt: BluetoothGatt) {
+      val queue = receiptQueue ?: run {
+        extensionState = ExtensionState.NONE
+        continueLegacyAfterReturnAck(gatt)
+        return
+      }
+      val now = nowProvider()
+      val leased = try {
+        queue.leaseContactWork(gatt.device.address, now, BleReceiptExchangeCodec.MAX_CONTACT_TRANSFERS)
+      } catch (_: Exception) {
+        gatt.disconnect()
+        return
+      }
+      val remote = peerInventory.associateBy { it.objectKind to it.objectId }
+      val remaining = mutableListOf<TransferLease>()
+      for (lease in leased) {
+        val held = remote[lease.objectKind to lease.objectId]
+        if (held != null && MessageDigest.isEqual(held.digest, lease.digest)) {
+          runCatching { queue.releaseTransferLease(lease.leaseId, nowProvider()) }
+        } else {
+          remaining += lease
+        }
+      }
+      typedLeases = remaining
+      typedLeaseIndex = 0
+      if (typedLeases.isEmpty()) {
+        extensionState = ExtensionState.NONE
+        continueLegacyAfterReturnAck(gatt)
+        return
+      }
+      sendTypedOffer(gatt)
+    }
+
+    private fun sendTypedOffer(gatt: BluetoothGatt) {
+      val queue = receiptQueue ?: run { gatt.disconnect(); return }
+      val lease = typedLeases.getOrNull(typedLeaseIndex) ?: run {
+        extensionState = ExtensionState.NONE
+        continueLegacyAfterReturnAck(gatt)
+        return
+      }
+      val entry = try {
+        queue.inventoryEntry(lease.objectId, lease.digest)
+      } catch (_: Exception) {
+        releaseTypedLease(lease)
+        gatt.disconnect()
+        return
+      } ?: run {
+        releaseTypedLease(lease)
+        typedLeaseIndex++
+        sendTypedOffer(gatt)
+        return
+      }
+      val control = extensionControlChar ?: run { gatt.disconnect(); return }
+      val contactClaimed = try {
+        queue.claimContactTransfer(gatt.device.address, nowProvider())
+      } catch (_: Exception) {
+        gatt.disconnect()
+        return
+      }
+      if (!contactClaimed) {
+        releaseRemainingTypedLeases()
+        extensionState = ExtensionState.NONE
+        continueLegacyAfterReturnAck(gatt)
+        return
+      }
+      control.value = try {
+        BleReceiptExchangeCodec.encodeOffer(entry, lease.bytes.size)
+      } catch (_: Exception) {
+        releaseTypedLease(lease)
+        typedLeaseIndex++
+        sendTypedOffer(gatt)
+        return
+      }
+      extensionState = ExtensionState.WRITING_OFFER
+      try {
+        if (!gatt.writeCharacteristic(control)) gatt.disconnect()
+      } catch (_: SecurityException) {
+        gatt.disconnect()
+      }
+    }
+
+    private fun handleTypedDecision(gatt: BluetoothGatt, bytes: ByteArray) {
+      val lease = typedLeases.getOrNull(typedLeaseIndex) ?: run { gatt.disconnect(); return }
+      val decision = try {
+        BleReceiptExchangeCodec.decodeDecision(bytes)
+      } catch (_: Exception) {
+        gatt.disconnect()
+        return
+      }
+      if (decision.objectId != lease.objectId || !MessageDigest.isEqual(decision.digest, lease.digest)) {
+        gatt.disconnect()
+        return
+      }
+      when (decision.decision) {
+        BleDecisionCode.ACCEPT_TRANSFER -> {
+          val payload = minOf(
+            BleReceiptExchangeCodec.MAX_CHUNK_DATA,
+            negotiatedPayload - BleReceiptExchangeCodec.CHUNK_OVERHEAD,
+          )
+          if (payload < 16) {
+            gatt.disconnect()
+            return
+          }
+          typedChunks = try {
+            BleReceiptExchangeCodec.encodeObjectChunks(lease.bytes, payload)
+          } catch (_: Exception) {
+            releaseTypedLease(lease)
+            advanceTypedLease(gatt)
+            return
+          }
+          typedChunkIndex = 0
+          extensionState = ExtensionState.SENDING_CHUNKS
+          sendTypedNextChunk(gatt)
+        }
+        BleDecisionCode.ALREADY_HAVE_VERIFIED -> {
+          finishTypedLease(lease, TransferOutcome.ALREADY_HAVE_VERIFIED)
+          advanceTypedLease(gatt)
+        }
+        BleDecisionCode.CAPACITY_FULL -> {
+          finishTypedLease(lease, TransferOutcome.RETRYABLE)
+          advanceTypedLease(gatt)
+        }
+        BleDecisionCode.UNVERIFIED_AUTHORITY -> {
+          finishTypedLease(lease, TransferOutcome.PENDING_VERIFICATION)
+          advanceTypedLease(gatt)
+        }
+        BleDecisionCode.UNSUPPORTED,
+        BleDecisionCode.EXPIRED,
+        BleDecisionCode.REJECTED -> {
+          finishTypedLease(lease, TransferOutcome.PERMANENT_REJECTION)
+          advanceTypedLease(gatt)
+        }
+      }
+    }
+
+    private fun sendTypedNextChunk(gatt: BluetoothGatt) {
+      val characteristic = extensionChunkChar ?: run { gatt.disconnect(); return }
+      val bytes = typedChunks.getOrNull(typedChunkIndex) ?: run { readTypedCustody(gatt); return }
+      characteristic.value = bytes
+      try {
+        if (!gatt.writeCharacteristic(characteristic)) gatt.disconnect()
+      } catch (_: SecurityException) {
+        gatt.disconnect()
+      }
+    }
+
+    private fun readTypedCustody(gatt: BluetoothGatt) {
+      val custody = extensionCustodyChar ?: run { gatt.disconnect(); return }
+      extensionState = ExtensionState.READING_CUSTODY
+      try {
+        if (!gatt.readCharacteristic(custody)) gatt.disconnect()
+      } catch (_: SecurityException) {
+        gatt.disconnect()
+      }
+    }
+
+    private fun handleTypedCustody(gatt: BluetoothGatt, bytes: ByteArray) {
+      val lease = typedLeases.getOrNull(typedLeaseIndex) ?: run { gatt.disconnect(); return }
+      val custody = try {
+        BleReceiptExchangeCodec.decodeCustody(bytes)
+      } catch (_: Exception) {
+        gatt.disconnect()
+        return
+      }
+      if (custody.objectId != lease.objectId || !MessageDigest.isEqual(custody.digest, lease.digest)) {
+        gatt.disconnect()
+        return
+      }
+      when (custody.result) {
+        BleCustodyCode.ACCEPTED_DURABLE -> finishTypedLease(lease, TransferOutcome.PEER_CUSTODY)
+        BleCustodyCode.DUPLICATE_VERIFIED -> finishTypedLease(lease, TransferOutcome.ALREADY_HAVE_VERIFIED)
+        BleCustodyCode.CAPACITY_FULL -> finishTypedLease(lease, TransferOutcome.RETRYABLE)
+        BleCustodyCode.UNVERIFIED_AUTHORITY -> finishTypedLease(lease, TransferOutcome.PENDING_VERIFICATION)
+        BleCustodyCode.EXPIRED,
+        BleCustodyCode.REJECTED -> finishTypedLease(lease, TransferOutcome.PERMANENT_REJECTION)
+      }
+      advanceTypedLease(gatt)
+    }
+
+    private fun releaseTypedLease(lease: TransferLease) {
+      runCatching { receiptQueue?.releaseTransferLease(lease.leaseId, nowProvider()) }
+    }
+
+    private fun releaseRemainingTypedLeases() {
+      typedLeases.drop(typedLeaseIndex).forEach(::releaseTypedLease)
+      typedLeaseIndex = typedLeases.size
+      typedChunks = emptyList()
+      typedChunkIndex = 0
+    }
+
+    private fun finishTypedLease(lease: TransferLease, outcome: TransferOutcome) {
+      runCatching { receiptQueue?.finishTransfer(lease.leaseId, outcome, nowProvider()) }
+    }
+
+    private fun advanceTypedLease(gatt: BluetoothGatt) {
+      typedLeaseIndex++
+      typedChunks = emptyList()
+      typedChunkIndex = 0
+      if (typedLeaseIndex < typedLeases.size) sendTypedOffer(gatt)
+      else {
+        extensionState = ExtensionState.NONE
+        continueLegacyAfterReturnAck(gatt)
+      }
+    }
+
     private fun continueAfterReturnAck(gatt: BluetoothGatt) {
+      if (tryStartReceiptExtension(gatt)) return
+      continueLegacyAfterReturnAck(gatt)
+    }
+
+    private fun continueLegacyAfterReturnAck(gatt: BluetoothGatt) {
       if (work == null) {
         syncReturnAckAndFinish(gatt)
         return
@@ -308,6 +620,38 @@ class BleCentralManager(
         return
       }
 
+      if (characteristic.uuid == BleProtocolConstants.CHARACTERISTIC_EXTENSION_CONTROL_UUID) {
+        when (extensionState) {
+          ExtensionState.WRITING_INVENTORY_REQUEST -> {
+            extensionState = ExtensionState.READING_INVENTORY
+            try {
+              if (!gatt.readCharacteristic(extensionControlChar)) gatt.disconnect()
+            } catch (_: SecurityException) {
+              gatt.disconnect()
+            }
+          }
+          ExtensionState.WRITING_OFFER -> {
+            extensionState = ExtensionState.READING_DECISION
+            try {
+              if (!gatt.readCharacteristic(extensionControlChar)) gatt.disconnect()
+            } catch (_: SecurityException) {
+              gatt.disconnect()
+            }
+          }
+          else -> gatt.disconnect()
+        }
+        return
+      }
+      if (characteristic.uuid == BleProtocolConstants.CHARACTERISTIC_EXTENSION_CHUNK_UUID) {
+        if (extensionState != ExtensionState.SENDING_CHUNKS) {
+          gatt.disconnect()
+          return
+        }
+        typedChunkIndex++
+        if (typedChunkIndex < typedChunks.size) sendTypedNextChunk(gatt) else readTypedCustody(gatt)
+        return
+      }
+
       if (characteristic.uuid == BleProtocolConstants.CHARACTERISTIC_OFFER_UUID) {
         // Read offer decision
         try {
@@ -336,6 +680,48 @@ class BleCentralManager(
       characteristic: BluetoothGattCharacteristic,
       status: Int,
     ) {
+      if (characteristic.uuid == BleProtocolConstants.CHARACTERISTIC_EXTENSION_CAPABILITY_UUID) {
+        if (extensionState != ExtensionState.READING_CAPABILITY) {
+          gatt.disconnect()
+          return
+        }
+        val supported = status == BluetoothGatt.GATT_SUCCESS && runCatching {
+          BleReceiptExchangeCodec.decodeCapability(characteristic.value ?: ByteArray(0))
+        }.isSuccess
+        if (!supported) {
+          extensionState = ExtensionState.NONE
+          continueLegacyAfterReturnAck(gatt)
+          return
+        }
+        peerInventory.clear()
+        peerInventorySnapshotId = null
+        expectedPeerInventoryPage = 0
+        peerInventoryTotalCount = null
+        if (!requestPeerInventory(gatt, null, 0)) gatt.disconnect()
+        return
+      }
+      if (characteristic.uuid == BleProtocolConstants.CHARACTERISTIC_EXTENSION_CONTROL_UUID) {
+        if (status != BluetoothGatt.GATT_SUCCESS) {
+          gatt.disconnect()
+          return
+        }
+        val bytes = characteristic.value ?: ByteArray(0)
+        when (extensionState) {
+          ExtensionState.READING_INVENTORY -> handlePeerInventoryPage(gatt, bytes)
+          ExtensionState.READING_DECISION -> handleTypedDecision(gatt, bytes)
+          else -> gatt.disconnect()
+        }
+        return
+      }
+      if (characteristic.uuid == BleProtocolConstants.CHARACTERISTIC_EXTENSION_CUSTODY_UUID) {
+        if (status != BluetoothGatt.GATT_SUCCESS || extensionState != ExtensionState.READING_CUSTODY) {
+          gatt.disconnect()
+          return
+        }
+        handleTypedCustody(gatt, characteristic.value ?: ByteArray(0))
+        return
+      }
+
       if (characteristic.uuid == BleProtocolConstants.CHARACTERISTIC_OFFER_UUID) {
         val currentWork = work ?: run {
           syncReturnAckAndFinish(gatt)
@@ -346,7 +732,7 @@ class BleCentralManager(
 
         when (decision) {
           OfferDecision.ACCEPT -> {
-            val payloadLimit = maxOf(16, negotiatedMtu - BleChunkCodec.FRAME_OVERHEAD)
+            val payloadLimit = maxOf(16, negotiatedPayload - BleChunkCodec.FRAME_OVERHEAD)
             chunksToSend = try {
               BleChunkCodec.encodeChunks(currentWork.envelopeBytes, payloadLimit)
             } catch (_: Exception) {

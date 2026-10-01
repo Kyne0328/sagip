@@ -14,11 +14,14 @@ class SurvivalCoreRuntime private constructor(context: Context) {
 
   val database = SagipDatabase(appContext)
   val repository = EmergencyRepository(database)
+  val receiptQueue = ReceiptQueue(database)
   val bleRelay = BleRelayRuntime(
     readinessProvider = { BleRelayReadinessChecker.evaluate(appContext) },
     activityTimestampProvider = { repository.newestActiveRelayTimestamp() },
-    central = BleCentralManager(appContext, repository),
-    peripheral = BlePeripheralManager(appContext, repository),
+    central = BleCentralManager(appContext, repository, receiptQueue),
+    // Receipt-v2 receive capability stays absent until a qualified runtime VerificationContext provider is wired.
+    // Legacy SOS/SGA1 characteristics remain unchanged in that state.
+    peripheral = BlePeripheralManager(appContext, repository, receiptQueue),
   )
 
   companion object {

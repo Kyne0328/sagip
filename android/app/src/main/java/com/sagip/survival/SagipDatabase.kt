@@ -72,9 +72,59 @@ class SagipDatabase(context: Context) :
       Schema.MIGRATE_6_TO_7.forEach(db::execSQL)
       currentVersion = 7
     }
+    if (currentVersion == 7 && newVersion >= 8) {
+      Schema.MIGRATE_7_TO_8.forEach(db::execSQL)
+      backfillReceiptIdentities(db)
+      currentVersion = 8
+    }
+    if (currentVersion == 8 && newVersion >= 9) {
+      Schema.MIGRATE_8_TO_9.forEach(db::execSQL)
+      currentVersion = 9
+    }
+    if (currentVersion == 9 && newVersion >= 10) {
+      Schema.MIGRATE_9_TO_10.forEach(db::execSQL)
+      currentVersion = 10
+    }
+    if (currentVersion == 10 && newVersion >= 11) {
+      Schema.MIGRATE_10_TO_11.forEach(db::execSQL)
+      currentVersion = 11
+    }
 
     if (currentVersion != newVersion) {
       throw IllegalStateException("Unsupported SAGIP database migration: $oldVersion -> $newVersion")
+    }
+  }
+
+  private fun backfillReceiptIdentities(db: SQLiteDatabase) {
+    fun tableExists(name: String): Boolean = db.rawQuery(
+      "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+      arrayOf(name),
+    ).use { cursor -> cursor.moveToFirst() }
+
+    if (tableExists("outbound_envelopes")) {
+      db.rawQuery(
+        "SELECT envelope_bytes, created_at FROM outbound_envelopes WHERE envelope_bytes IS NOT NULL AND preparation_state='READY'",
+        null,
+      ).use { cursor ->
+        while (cursor.moveToNext()) {
+          runCatching {
+            ReceiptRepository.persistReportIdentity(db, cursor.getBlob(0), cursor.getLong(1))
+          }
+        }
+      }
+    }
+
+    if (tableExists("inbound_envelopes")) {
+      db.rawQuery(
+        "SELECT envelope_bytes, received_at FROM inbound_envelopes",
+        null,
+      ).use { cursor ->
+        while (cursor.moveToNext()) {
+          runCatching {
+            ReceiptRepository.persistReportIdentity(db, cursor.getBlob(0), cursor.getLong(1))
+          }
+        }
+      }
     }
   }
 
