@@ -109,14 +109,19 @@ object SqlCipherDatabaseMigrator {
       source.absolutePath,
       ByteArray(0),
       null,
-      SQLiteDatabase.OPEN_READWRITE,
+      // ATTACH inherits creation permission from this connection; the encrypted
+      // destination is a new file even though the plaintext source already exists.
+      SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.CREATE_IF_NECESSARY,
       null,
       null,
     )
     try {
-      val escapedPath = destination.absolutePath.replace("'", "''")
-      val keyHex = key.joinToString("") { "%02x".format(it.toInt() and 0xff) }
-      sourceDb.execSQL("ATTACH DATABASE '$escapedPath' AS encrypted KEY \"x'$keyHex'\"")
+      // Bind the same password bytes used by openDatabase. The x'hex' text
+      // syntax selects raw-key semantics and cannot reopen with these bytes.
+      sourceDb.execSQL(
+        "ATTACH DATABASE ? AS encrypted KEY ?",
+        arrayOf<Any>(destination.absolutePath, key),
+      )
       try {
         sourceDb.rawQuery("SELECT sqlcipher_export('encrypted')", emptyArray()).use { cursor ->
           check(cursor.moveToFirst()) { "sqlcipher_export did not complete" }
