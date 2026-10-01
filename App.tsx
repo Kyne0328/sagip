@@ -11,6 +11,7 @@ import {
 import {SafeAreaView} from 'react-native-safe-area-context';
 
 import {SagipMark} from './src/branding/SagipMark';
+import {GatewayScreen} from './src/responder/GatewayScreen';
 import {
   EMERGENCY_TYPES,
   URGENCIES,
@@ -116,6 +117,7 @@ export default function App() {
     refresh: refreshRelay,
   } = useBleRelayStatus();
   const [showForm, setShowForm] = useState(false);
+  const [showGateway, setShowGateway] = useState(false);
   const [emergencyType, setEmergencyType] = useState<EmergencyType | null>(null);
   const [urgency, setUrgency] = useState<Urgency | null>(null);
   const latest = reports[0];
@@ -163,6 +165,10 @@ export default function App() {
     }
   };
 
+  if (showGateway) {
+    return <SafeAreaView style={styles.safeArea}><GatewayScreen onClose={() => setShowGateway(false)} /></SafeAreaView>;
+  }
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="dark-content" />
@@ -174,6 +180,10 @@ export default function App() {
             <Text style={styles.brandTagline}>Emergency communication that keeps trying</Text>
           </View>
         </View>
+        <Pressable accessibilityRole="button" accessibilityLabel="Open responder workspace"
+          style={{minHeight: 48, justifyContent: 'center'}} onPress={() => setShowGateway(true)}>
+          <Text style={{color: '#0f3d56', fontWeight: '600'}}>Responder workspace</Text>
+        </Pressable>
         <Text style={styles.eyebrow}>NEED HELP?</Text>
         <Text style={styles.title}>Create an emergency SOS</Text>
         <Text style={styles.subtitle}>

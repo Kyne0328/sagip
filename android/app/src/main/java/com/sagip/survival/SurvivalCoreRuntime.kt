@@ -15,6 +15,20 @@ class SurvivalCoreRuntime private constructor(context: Context) {
   val database = SagipDatabase(appContext)
   val repository = EmergencyRepository(database)
   val receiptQueue = ReceiptQueue(database)
+  val gatewayAccess = GatewayDeviceAccess(appContext)
+  private val gatewayIdentity by lazy { GatewaySigningIdentity() }
+  val gateway by lazy {
+    ResponderGatewayService(database, { gatewayIdentity }, emptyMap(), emptySet(),
+      gatewayAccess::isAllowed, {
+        val bootCount = android.provider.Settings.Global.getInt(appContext.contentResolver,
+          android.provider.Settings.Global.BOOT_COUNT, -1)
+        check(bootCount >= 0) { "BOOT_ID_UNAVAILABLE" }
+        MonotonicClock(java.util.UUID.nameUUIDFromBytes(gatewayIdentity.keyId +
+          bootCount.toString().toByteArray(Charsets.US_ASCII)).toString(), android.os.SystemClock.elapsedRealtime())
+      })
+    // No pilot authority is selected automatically. Operator-pinned roots/scopes must be wired
+    // before verified production issuance; test constructors supply only isolated test roots.
+  }
   val bleRelay = BleRelayRuntime(
     readinessProvider = { BleRelayReadinessChecker.evaluate(appContext) },
     activityTimestampProvider = { repository.newestActiveRelayTimestamp() },

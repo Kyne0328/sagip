@@ -7,7 +7,7 @@ import com.facebook.react.uimanager.ViewManager
 
 class SagipSurvivalCorePackage : ReactPackage {
   override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> =
-    listOf(SagipSurvivalCoreModule(reactContext))
+    listOf(SagipSurvivalCoreModule(reactContext), GatewayNativeModule(reactContext))
 
   override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> =
     emptyList()

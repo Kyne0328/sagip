@@ -1,7 +1,22 @@
 package com.sagip.survival
 
 object Schema {
-  const val VERSION = 11
+  const val VERSION = 12
+
+  private val GATEWAY_CREATE_STATEMENTS = listOf(
+    "CREATE TABLE gateway_active_grant (singleton INTEGER PRIMARY KEY CHECK(singleton=1), grant_id TEXT NOT NULL REFERENCES receipt_grants(grant_id))",
+    """
+      CREATE TABLE gateway_work (
+        action_id TEXT PRIMARY KEY NOT NULL,
+        report_id TEXT NOT NULL,
+        observed_version INTEGER NOT NULL,
+        status INTEGER NOT NULL CHECK(status BETWEEN 1 AND 4),
+        note TEXT NOT NULL,
+        saved_at_ms INTEGER NOT NULL,
+        bound_grant_id TEXT REFERENCES receipt_grants(grant_id)
+      )
+    """.trimIndent(),
+  )
 
   private val RECEIPT_CREATE_STATEMENTS = listOf(
     """
@@ -411,7 +426,7 @@ object Schema {
     "CREATE INDEX idx_relay_receipts_message ON relay_receipts(message_id)",
     "CREATE INDEX idx_responder_acks_report ON responder_acks(report_id)",
     "CREATE INDEX idx_relay_responder_acks_report ON relay_responder_acks(report_id, acknowledged_at DESC)",
-  ) + RECEIPT_CREATE_STATEMENTS + RELAY_CREATE_STATEMENTS + TRANSFER_CREATE_STATEMENTS + CONTACT_CREATE_STATEMENTS
+  ) + RECEIPT_CREATE_STATEMENTS + RELAY_CREATE_STATEMENTS + TRANSFER_CREATE_STATEMENTS + CONTACT_CREATE_STATEMENTS + GATEWAY_CREATE_STATEMENTS
 
   val MIGRATE_1_TO_2 = listOf(
     "ALTER TABLE outbound_envelopes ADD COLUMN envelope_bytes BLOB",
@@ -519,4 +534,5 @@ object Schema {
   val MIGRATE_8_TO_9 = RELAY_CREATE_STATEMENTS
   val MIGRATE_9_TO_10 = TRANSFER_CREATE_STATEMENTS
   val MIGRATE_10_TO_11 = CONTACT_CREATE_STATEMENTS
+  val MIGRATE_11_TO_12 = GATEWAY_CREATE_STATEMENTS
 }
