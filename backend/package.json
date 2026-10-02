@@ -12,14 +12,19 @@
     "migrate": "tsx src/migrate.ts",
     "provision-responder": "tsx src/provisionResponder.ts",
     "provision-gateway-authority": "tsx src/provisionGatewayAuthority.ts",
+    "build:console": "tsc -p tsconfig.browser.json && node scripts/build-responder-console.mjs",
+    "test:browser": "npm run build:console && playwright test test/browser",
     "test": "tsx --test test/**/*.test.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src test --ext .ts"
   },
   "dependencies": {
-    "pg": "^8.16.3"
+    "maplibre-gl": "6.11.2",
+    "pg": "^8.16.3",
+    "pmtiles": "4.5.0"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "@types/node": "^24.0.0",
     "@types/pg": "^8.15.5",
     "@typescript-eslint/eslint-plugin": "^8.42.0",

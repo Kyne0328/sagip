@@ -1,3 +1,5 @@
+import {consoleAssetResponse} from './consoleAssets.js';
+
 const DASHBOARD_HTML = `<!doctype html>
 <html lang="en">
 <head>
@@ -1571,7 +1573,7 @@ const DASHBOARD_JS = `(() => {
 
 const SECURITY_HEADERS: Record<string, string> = {
   'cache-control': 'no-store',
-  'content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+  'content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
   'cross-origin-opener-policy': 'same-origin',
   'cross-origin-resource-policy': 'same-origin',
   'permissions-policy': 'camera=(), geolocation=(), microphone=()',
@@ -1581,6 +1583,9 @@ const SECURITY_HEADERS: Record<string, string> = {
 };
 
 export function responderDashboardResponse(pathname: string, method: string): Response | null {
+  const mapAsset = consoleAssetResponse(pathname, method);
+  if (mapAsset) return mapAsset;
+
   const isDashboardPath =
     pathname === '/responder' ||
     pathname === '/responder/' ||

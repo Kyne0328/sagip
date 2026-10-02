@@ -73,6 +73,9 @@ yarn-error.log
 
 # testing
 /coverage
+/backend/.generated/
+/backend/test-results/
+/backend/playwright-report/
 
 # Yarn
 .yarn/*
