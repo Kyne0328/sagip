@@ -9,6 +9,7 @@ import {
   ResponderValidationError,
 } from '../responder/service.js';
 import type {ResponderIdentity, ResponderStatus} from '../responder/types.js';
+import type {IncidentSnapshotService} from '../responder/incidentSnapshot.js';
 import type {ActionCommitResult, ActionIntent, ReceiptService} from '../responder/receiptService.js';
 import type {GatewayGrantRequest, GrantProvisioningService, TimeChallenge} from '../responder/grantProvisioning.js';
 import {responderDashboardResponse} from '../responder/dashboard.js';
@@ -19,6 +20,7 @@ export interface SagipServerDependencies {
   responderService?: ResponderService;
   receiptService?: ReceiptService;
   authorityService?: GrantProvisioningService;
+  incidentSnapshotService?: IncidentSnapshotService;
   rateLimiter?: RateLimiter;
 }
 
@@ -40,6 +42,8 @@ const RECEIPT_IMPORT_PATH = '/v2/responder/receipts/import';
 const RESPONDER_ACTIONS_PATH = '/v2/responder/actions';
 const RESPONDER_ACTION_RE = new RegExp(`^/v2/responder/actions/(${UUID_SEGMENT})$`, 'u');
 const RESPONDER_ACTION_RECEIPT_RE = new RegExp(`^/v2/responder/actions/(${UUID_SEGMENT})/receipt$`, 'u');
+const RESPONDER_SNAPSHOTS_PATH = '/v2/responder/snapshots';
+const RESPONDER_SNAPSHOT_PAGE_RE = new RegExp(`^/v2/responder/snapshots/(${UUID_SEGMENT})/pages$`, 'u');
 const RECEIPT_ACCESS_CHALLENGE_RE = new RegExp(`^/v2/reports/(${UUID_SEGMENT})/receipt-access/challenges$`, 'u');
 const RECEIPT_ACCESS_RE = new RegExp(`^/v2/reports/(${UUID_SEGMENT})/receipt-access$`, 'u');
 const RECEIPT_PAGE_RE = new RegExp(`^/v2/reports/(${UUID_SEGMENT})/receipts$`, 'u');
@@ -78,6 +82,7 @@ export async function handleSagipRequest(
       pathname === RESPONDER_SESSION_PATH ||
       pathname === RECEIPT_IMPORT_PATH ||
       pathname.startsWith('/v2/responder/actions') ||
+      pathname.startsWith('/v2/responder/snapshots') ||
       pathname.startsWith('/v2/reports/') ||
       pathname.startsWith('/v2/authority/') ||
       REPORT_STATUS_RE.test(pathname) ||
@@ -313,6 +318,33 @@ export async function handleSagipRequest(
           ? jsonResponse(200, actionResultJson(result))
           : jsonResponse(404, {error: 'NOT_FOUND'});
       }
+    }
+
+    if (pathname === RESPONDER_SNAPSHOTS_PATH || RESPONDER_SNAPSHOT_PAGE_RE.test(pathname)) {
+      if (!deps.responderService || !deps.incidentSnapshotService) {
+        discardRequestBody(context);
+        return jsonResponse(501, {error: 'NOT_IMPLEMENTED'});
+      }
+      const responder = await extractAndAuthResponder(request, deps.responderService);
+      if (!responder) {
+        discardRequestBody(context);
+        return jsonResponse(401, {error: 'UNAUTHORIZED'});
+      }
+      if (pathname === RESPONDER_SNAPSHOTS_PATH) {
+        if (method !== 'POST') {
+          discardRequestBody(context);
+          return jsonResponse(405, {error: 'METHOD_NOT_ALLOWED'}, {allow: 'POST'});
+        }
+        return jsonResponse(201, await deps.incidentSnapshotService.createIncidentSnapshot(responder));
+      }
+      const match = RESPONDER_SNAPSHOT_PAGE_RE.exec(pathname);
+      if (!match || method !== 'GET') {
+        discardRequestBody(context);
+        return jsonResponse(405, {error: 'METHOD_NOT_ALLOWED'}, {allow: 'GET'});
+      }
+      const cursor = parsedUrl.searchParams.get('cursor');
+      if (!cursor || parsedUrl.searchParams.size !== 1) return jsonResponse(400, {error: 'INVALID_CURSOR'});
+      return jsonResponse(200, await deps.incidentSnapshotService.readIncidentSnapshotPage(match[1] as string, cursor, responder));
     }
 
     if (pathname === RECEIPT_IMPORT_PATH) {
@@ -551,9 +583,10 @@ export async function handleSagipRequest(
       if (code === 'INCIDENT_VERSION_CONFLICT' || code === 'EVENT_EQUIVOCATION' || code === 'REQUEST_CONFLICT' || code === 'GRANT_REVOKED' || code === 'SEQUENCE_CONFLICT' || code === 'CHALLENGE_CONSUMED') {
         return jsonResponse(409, {error: code});
       }
-      if (code === 'ACTION_NOT_FOUND' || code === 'RECEIPT_NOT_FOUND' || code === 'REPORT_NOT_FOUND' || code === 'CHALLENGE_NOT_FOUND') {
+      if (code === 'ACTION_NOT_FOUND' || code === 'RECEIPT_NOT_FOUND' || code === 'REPORT_NOT_FOUND' || code === 'CHALLENGE_NOT_FOUND' || code === 'SNAPSHOT_NOT_FOUND') {
         return jsonResponse(404, {error: code});
       }
+      if (code === 'SNAPSHOT_EXPIRED') return jsonResponse(410, {error: code});
       if (code === 'CAPACITY_FULL') return jsonResponse(429, {error: code});
       if (code === 'SIGNER_UNAVAILABLE' || code === 'TIME_UNAVAILABLE' || code === 'STORAGE_UNAVAILABLE') {
         return jsonResponse(503, {error: code});

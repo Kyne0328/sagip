@@ -8,6 +8,7 @@ const DASHBOARD_HTML = `<!doctype html>
   <meta name="theme-color" content="#0c2942">
   <title>SAGIP Responder Console</title>
   <link rel="stylesheet" href="/responder/styles.css">
+  <link rel="stylesheet" href="/responder/assets/maplibre-gl-6.11.2/maplibre-gl.css">
 </head>
 <body>
   <a class="skip-link" href="#mainContent">Skip to emergency operations</a>
@@ -37,7 +38,7 @@ const DASHBOARD_HTML = `<!doctype html>
     </div>
   </header>
 
-  <main id="mainContent">
+  <main id="mainContent" tabindex="-1">
     <h1 class="sr-only">SAGIP Responder Console</h1>
 
     <section id="authPanel" class="auth-shell" aria-labelledby="authTitle">
@@ -136,6 +137,38 @@ const DASHBOARD_HTML = `<!doctype html>
         </div>
       </section>
 
+      <section id="offlineOperations" class="offline-operations" aria-labelledby="offlineOperationsTitle">
+        <div class="offline-heading">
+          <div>
+            <p class="section-label">OUTAGE READINESS</p>
+            <h3 id="offlineOperationsTitle">Offline response workspace</h3>
+            <p class="muted">Readiness is based on prepared map data, protected incident access, a complete snapshot, and pending responder updates.</p>
+          </div>
+          <button id="offlineDiscardButton" type="button" class="danger-outline" hidden>Discard pending offline updates</button>
+        </div>
+        <div class="readiness-grid" aria-live="polite">
+          <div class="readiness-item"><span>Local map package</span><strong id="mapReadinessStatus">Checking…</strong></div>
+          <div class="readiness-item"><span>Protected incident access</span><strong id="accessReadinessStatus">Checking…</strong></div>
+          <div class="readiness-item"><span>Incident snapshot</span><strong id="snapshotReadinessStatus">Checking…</strong></div>
+          <div class="readiness-item"><span>Offline responder updates</span><strong id="outboxReadinessStatus">Checking…</strong></div>
+        </div>
+        <section id="incidentMapPanel" class="incident-map-panel" aria-labelledby="incidentMapTitle">
+          <div class="map-heading">
+            <div>
+              <p class="section-label">INCIDENT MAP</p>
+              <h4 id="incidentMapTitle">Prepared local coverage</h4>
+            </div>
+            <span id="mapCoverage" class="muted">Checking local map package…</span>
+          </div>
+          <div class="map-stage">
+            <div id="incidentMapCanvas" class="incident-map-canvas" aria-hidden="true"></div>
+            <div id="incidentMapPlaceholder" class="map-placeholder">Checking local map package…</div>
+          </div>
+          <p id="mapAnnouncement" class="sr-only" aria-live="polite"></p>
+          <p class="map-accessibility-note">The incident queue remains the primary keyboard and screen-reader workspace. The map is a supplemental spatial view.</p>
+        </section>
+      </section>
+
       <div class="workspace">
         <section class="incident-column" aria-labelledby="incidentListTitle">
           <div class="panel-header">
@@ -184,7 +217,7 @@ const DASHBOARD_HTML = `<!doctype html>
                 <span id="locationMeta" class="muted"></span>
                 <span id="locationCaptured" class="muted"></span>
               </div>
-              <a id="mapLink" class="map-link" target="_blank" rel="noopener noreferrer">Open map</a>
+              <a id="mapLink" class="map-link" href="#incidentMapPanel">Show on offline map</a>
             </div>
 
             <form id="ackForm" class="ack-form" method="post" novalidate>
@@ -239,6 +272,8 @@ const DASHBOARD_HTML = `<!doctype html>
   </main>
 
   <script src="/responder/app.js" defer></script>
+  <script type="module" src="/responder/assets/browser/consoleController.js"></script>
+  <noscript><p class="noscript-warning">JavaScript is required for responder operations. Do not rely on this browser for offline incident handling until scripting is enabled.</p></noscript>
 </body>
 </html>`;
 
@@ -576,6 +611,133 @@ main {
 .stat-label { color: var(--ink-soft); font-size: 0.75rem; font-weight: 850; text-transform: uppercase; letter-spacing: 0.05em; }
 .stat-critical { border-inline-start: 5px solid var(--red-700); }
 .stat-critical strong { color: var(--red-800); }
+
+.offline-operations {
+  display: grid;
+  gap: 0.85rem;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.9rem;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.offline-heading,
+.map-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.offline-heading h3,
+.map-heading h4 { margin: 0.15rem 0 0; }
+
+.offline-heading .muted { max-width: 68rem; margin: 0.3rem 0 0; }
+
+.readiness-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.readiness-item {
+  display: grid;
+  gap: 0.15rem;
+  min-block-size: 5.25rem;
+  align-content: center;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 0.7rem;
+  background: var(--surface-soft);
+}
+
+.readiness-item span { color: var(--ink-soft); font-size: 0.75rem; font-weight: 750; }
+.readiness-item strong { color: var(--navy-900); font-size: 0.9rem; }
+
+.incident-map-panel {
+  display: grid;
+  gap: 0.6rem;
+  padding-block-start: 0.85rem;
+  border-block-start: 1px solid var(--line);
+}
+
+.map-heading { align-items: end; }
+.map-heading > span { max-width: 55%; text-align: end; font-size: 0.75rem; }
+
+.map-stage {
+  position: relative;
+  min-block-size: 22rem;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.75rem;
+  background:
+    linear-gradient(rgba(15, 76, 129, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(15, 76, 129, 0.06) 1px, transparent 1px),
+    var(--surface-soft);
+  background-size: 2rem 2rem;
+}
+
+.incident-map-canvas { position: absolute; inset: 0; }
+
+.map-placeholder {
+  position: absolute;
+  z-index: 2;
+  inset: 50% auto auto 50%;
+  width: min(88%, 36rem);
+  transform: translate(-50%, -50%);
+  padding: 1rem 1.15rem;
+  border: 1px solid var(--line);
+  border-radius: 0.65rem;
+  background: rgba(255, 255, 255, 0.94);
+  color: var(--ink-soft);
+  text-align: center;
+  box-shadow: var(--shadow-sm);
+}
+
+.map-placeholder[hidden] { display: none; }
+.map-accessibility-note { margin: 0; color: var(--ink-soft); font-size: 0.78rem; }
+
+.map-marker {
+  display: grid;
+  place-items: center;
+  inline-size: 2.8rem;
+  block-size: 2.8rem;
+  min-block-size: 2.8rem;
+  padding: 0;
+  border: 3px solid var(--surface);
+  border-radius: 50%;
+  background: var(--navy-700);
+  color: var(--surface);
+  font-size: 1rem;
+  box-shadow: 0 2px 8px rgba(7, 27, 43, 0.28);
+}
+
+.map-marker[aria-pressed="true"] { outline: 4px solid var(--focus); outline-offset: 2px; }
+
+.danger-outline { color: var(--red-800); background: var(--surface); border: 1px solid #d4938f; }
+.danger-outline:hover { background: var(--red-100); }
+
+.noscript-warning {
+  margin: 1rem;
+  padding: 1rem;
+  border: 2px solid var(--red-700);
+  background: var(--red-100);
+  color: var(--red-800);
+  font-weight: 800;
+}
+
+@media (max-width: 68rem) {
+  .readiness-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .offline-heading,
+  .map-heading { align-items: stretch; flex-direction: column; }
+  .map-heading > span { max-width: none; text-align: start; }
+}
+
+@media (max-width: 38rem) {
+  .readiness-grid { grid-template-columns: 1fr; }
+  .map-stage { min-block-size: 18rem; }
+}
 
 .workspace {
   display: grid;
@@ -970,6 +1132,9 @@ const DASHBOARD_JS = `(() => {
   let selectedReportId = null;
   let refreshTimer = null;
   let latestIncidents = [];
+  let offlineDetails = new Map();
+  let activeOfflineSnapshot = null;
+  let dataSource = 'online';
 
   const authPanel = document.getElementById('authPanel');
   const consolePanel = document.getElementById('consolePanel');
@@ -1130,8 +1295,9 @@ const DASHBOARD_JS = `(() => {
     authPanel.classList.add('hidden');
     consolePanel.classList.remove('hidden');
     renderSessionIdentity();
-    setConnected(true);
-    startRefreshTimer();
+    setConnected(dataSource === 'online');
+    if (dataSource === 'online') startRefreshTimer();
+    else stopRefreshTimer();
   }
 
   function resetDetail() {
@@ -1145,6 +1311,9 @@ const DASHBOARD_JS = `(() => {
     currentResponder = null;
     sessionExpiresAt = null;
     latestIncidents = [];
+    offlineDetails = new Map();
+    activeOfflineSnapshot = null;
+    dataSource = 'online';
     stopRefreshTimer();
     resetDetail();
     consolePanel.classList.add('hidden');
@@ -1170,6 +1339,98 @@ const DASHBOARD_JS = `(() => {
       refreshTimer = null;
     }
   }
+
+  function publishDashboardState() {
+    const incidents = latestIncidents.map((incident) => ({
+      reportId: incident.reportId,
+      emergencyType: incident.emergencyType,
+      urgency: incident.urgency,
+      location: incident.location || null
+    }));
+    window.dispatchEvent(new CustomEvent('sagip:incidents', {
+      detail: {incidents: incidents, selectedReportId: selectedReportId}
+    }));
+  }
+
+  function selectIncident(reportId) {
+    selectedReportId = reportId;
+    Array.from(incidentList.children).forEach((item) => {
+      const selected = item.dataset.reportId === reportId;
+      item.classList.toggle('selected', selected);
+      if (selected) item.setAttribute('aria-current', 'true');
+      else item.removeAttribute('aria-current');
+    });
+    publishDashboardState();
+    void loadDetail(reportId);
+  }
+
+  function snapshotEntryToIncident(entry) {
+    return {
+      reportId: entry.reportId,
+      emergencyType: entry.emergencyType,
+      urgency: entry.urgency,
+      firstReceivedAt: new Date(entry.receivedAtMs).toISOString(),
+      createdAtMs: entry.reportCreatedAtMs,
+      latestRevision: entry.revision,
+      location: entry.location,
+      latestAck: entry.latestAck || null,
+      syncedAtMs: entry.syncedAtMs,
+      receiptEvidence: Array.isArray(entry.receiptEvidence) ? entry.receiptEvidence : [],
+      pendingActions: Array.isArray(entry.pendingActions) ? entry.pendingActions : []
+    };
+  }
+
+  function snapshotEntryToDetail(entry) {
+    return {
+      ...snapshotEntryToIncident(entry),
+      revisions: Array.isArray(entry.revisions) ? entry.revisions : [],
+      acknowledgements: Array.isArray(entry.acknowledgements) ? entry.acknowledgements : []
+    };
+  }
+
+  function renderOfflineSnapshot(snapshot) {
+    dataSource = 'offline';
+    activeOfflineSnapshot = snapshot;
+    offlineDetails = new Map(
+      snapshot.entries.map((entry) => [entry.reportId, snapshotEntryToDetail(entry)])
+    );
+    const all = snapshot.entries.map(snapshotEntryToIncident);
+    const filtered = statusFilter.value
+      ? all.filter((incident) => statusLabel(incident) === statusFilter.value)
+      : all;
+    showConsole();
+    setConnected(false);
+    connectionText.textContent = 'Offline snapshot';
+    renderSummary(snapshot.summary);
+    renderIncidents(filtered);
+    queueScope.textContent = 'Complete offline snapshot · ' + snapshot.total + ' incidents';
+    lastUpdated.textContent = 'Snapshot prepared ' + formatDate(snapshot.createdAtMs);
+    if (selectedReportId && offlineDetails.has(selectedReportId)) {
+      void loadDetail(selectedReportId);
+    } else if (selectedReportId) {
+      resetDetail();
+    }
+  }
+
+  window.SagipResponderBridge = {
+    getState: () => ({
+      incidents: latestIncidents.map((incident) => ({
+        reportId: incident.reportId,
+        emergencyType: incident.emergencyType,
+        urgency: incident.urgency,
+        location: incident.location || null
+      })),
+      selectedReportId: selectedReportId
+    }),
+    selectReport: (reportId) => {
+      if (latestIncidents.some((incident) => incident.reportId === reportId)) {
+        selectIncident(reportId);
+      }
+    },
+    useOfflineSnapshot: (snapshot) => renderOfflineSnapshot(snapshot),
+    showOperationalMessage: (message) => showError(message),
+    finishOfflineLogout: (message) => showLoggedOut(message || '')
+  };
 
   function makeIncidentCard(incident) {
     const card = document.createElement('button');
@@ -1223,14 +1484,7 @@ const DASHBOARD_JS = `(() => {
     );
 
     card.addEventListener('click', () => {
-      selectedReportId = incident.reportId;
-      void loadDetail(incident.reportId);
-      Array.from(incidentList.children).forEach((item) => {
-        item.classList.remove('selected');
-        item.removeAttribute('aria-current');
-      });
-      card.classList.add('selected');
-      card.setAttribute('aria-current', 'true');
+      selectIncident(incident.reportId);
     }, {signal: lifecycle.signal});
 
     return card;
@@ -1243,6 +1497,7 @@ const DASHBOARD_JS = `(() => {
     incidentCount.textContent = incidents.length + (incidents.length === 1 ? ' incident loaded' : ' incidents loaded');
     queueScope.textContent = incidents.length >= 100 ? 'Newest 100 shown' : 'All matching incidents shown';
     incidents.forEach((incident) => incidentList.appendChild(makeIncidentCard(incident)));
+    publishDashboardState();
   }
 
   function renderSummary(summary) {
@@ -1277,6 +1532,7 @@ const DASHBOARD_JS = `(() => {
 
     const pieces = [];
     if (location.accuracyMeters !== null) pieces.push('Accuracy ±' + Math.round(Number(location.accuracyMeters)) + ' m');
+    else pieces.push('Accuracy unknown');
     if (location.freshness) pieces.push(formatWords(location.freshness, 'UNKNOWN'));
     if (location.source) pieces.push(formatWords(location.source, 'UNKNOWN'));
     locationMeta.textContent = pieces.join(' · ');
@@ -1285,10 +1541,7 @@ const DASHBOARD_JS = `(() => {
       ? 'Captured ' + formatDate(location.capturedAtMs) + ' (' + formatRelative(location.capturedAtMs) + ')'
       : 'Capture time unavailable';
 
-    mapLink.href =
-      'https://www.openstreetmap.org/?mlat=' + encodeURIComponent(latitude) +
-      '&mlon=' + encodeURIComponent(longitude) +
-      '#map=17/' + encodeURIComponent(latitude) + '/' + encodeURIComponent(longitude);
+    mapLink.href = '#incidentMapPanel';
   }
 
   function renderAckHistory(acks) {
@@ -1364,6 +1617,16 @@ const DASHBOARD_JS = `(() => {
     addFact('Report created', formatDate(detail.createdAtMs));
     addFact('Latest revision', String(detail.latestRevision));
     addFact('Current status', formatStatus(status));
+    if (detail.syncedAtMs !== null && detail.syncedAtMs !== undefined) {
+      addFact('Offline snapshot synced', formatDate(detail.syncedAtMs) + ' · ' + formatRelative(detail.syncedAtMs));
+    }
+    if (Array.isArray(detail.receiptEvidence)) {
+      const verified = detail.receiptEvidence.filter((item) => String(item.verification || '').startsWith('VERIFIED')).length;
+      addFact('Responder evidence', verified + ' verified of ' + detail.receiptEvidence.length + ' stored receipt' + (detail.receiptEvidence.length === 1 ? '' : 's'));
+    }
+    if (Array.isArray(detail.pendingActions) && detail.pendingActions.length > 0) {
+      addFact('Pending provider updates', String(detail.pendingActions.length));
+    }
     addFact('Report ID', detail.reportId);
 
     renderLocation(detail.location);
@@ -1380,7 +1643,10 @@ const DASHBOARD_JS = `(() => {
   async function loadDetail(reportId) {
     try {
       showError('');
-      const detail = await api('/v1/incidents/' + encodeURIComponent(reportId));
+      const detail = dataSource === 'offline'
+        ? offlineDetails.get(reportId)
+        : await api('/v1/incidents/' + encodeURIComponent(reportId));
+      if (!detail) throw new Error('DETAIL_NOT_IN_SNAPSHOT');
       if (reportId !== selectedReportId) return;
       renderDetail(detail);
     } catch (error) {
@@ -1408,6 +1674,7 @@ const DASHBOARD_JS = `(() => {
       const summary = results[0];
       const incidents = results[1];
 
+      dataSource = 'online';
       showConsole();
       renderSummary(summary);
       renderIncidents(incidents);
@@ -1422,7 +1689,12 @@ const DASHBOARD_JS = `(() => {
       if (String(error && error.message) !== 'UNAUTHORIZED') {
         setConnected(false);
         lastUpdated.textContent = 'Last refresh failed';
-        showError('The responder console could not refresh. Existing incidents remain persisted on the server; retry shortly.');
+        if (activeOfflineSnapshot) {
+          renderOfflineSnapshot(activeOfflineSnapshot);
+          showError('Cloud refresh failed. Showing the last complete protected offline snapshot; pending responder updates remain in the durable browser outbox.');
+        } else {
+          showError('The responder console could not refresh. Existing incidents remain persisted on the server; retry shortly.');
+        }
       }
     }
   }
@@ -1453,7 +1725,7 @@ const DASHBOARD_JS = `(() => {
       });
 
       if (response.status === 401) {
-        showLoggedOut('');
+        if (dataSource !== 'offline') showLoggedOut('');
         return;
       }
       if (!response.ok) {
@@ -1466,7 +1738,9 @@ const DASHBOARD_JS = `(() => {
       showConsole();
       await refreshIncidents(true);
     } catch (_) {
-      showLoggedOut('Could not confirm an existing responder session. Check connectivity, then reconnect with your provisioned token.');
+      if (dataSource !== 'offline') {
+        showLoggedOut('Could not confirm an existing responder session. Check connectivity, then reconnect with your provisioned token.');
+      }
     }
   }
 
@@ -1520,11 +1794,24 @@ const DASHBOARD_JS = `(() => {
   }, {signal: lifecycle.signal});
 
   document.getElementById('logoutButton').addEventListener('click', async () => {
+    const offline = window.SagipOfflineConsole;
+    if (offline) {
+      const result = await offline.safeLogout();
+      if (result && result.kind === 'BLOCKED_PENDING_ACTIONS') {
+        showError('Disconnect blocked: ' + result.pending + ' responder update' + (result.pending === 1 ? '' : 's') + ' still need provider custody. Retry delivery or explicitly discard them.');
+        return;
+      }
+      if (result && result.kind === 'PROVIDER_REFUSED') {
+        showError('Disconnect could not be confirmed by the selected provider. Protected data and pending updates were kept.');
+        return;
+      }
+      if (result && result.kind === 'COMPLETE') {
+        showLoggedOut('');
+        return;
+      }
+    }
     try {
-      await fetch('/v1/responder/session', {
-        method: 'DELETE',
-        credentials: 'same-origin'
-      });
+      await fetch('/v1/responder/session', {method: 'DELETE', credentials: 'same-origin'});
     } finally {
       showLoggedOut('');
     }
@@ -1532,7 +1819,8 @@ const DASHBOARD_JS = `(() => {
 
   statusFilter.addEventListener('change', () => {
     resetDetail();
-    void refreshIncidents(true);
+    if (dataSource === 'offline' && activeOfflineSnapshot) renderOfflineSnapshot(activeOfflineSnapshot);
+    else void refreshIncidents(true);
   }, {signal: lifecycle.signal});
 
   ackForm.addEventListener('submit', async (event) => {
@@ -1542,6 +1830,25 @@ const DASHBOARD_JS = `(() => {
     ackButton.disabled = true;
     ackResult.textContent = 'Saving…';
     try {
+      if (dataSource === 'offline' && window.SagipOfflineConsole) {
+        const queuedResult = await window.SagipOfflineConsole.queueStatus(
+          selectedReportId,
+          ackStatus.value,
+          ackNote.value.trim()
+        );
+        if (queuedResult && queuedResult.queued && queuedResult.queued.kind === 'SAVED_LOCAL') {
+          const remaining = queuedResult.drain && Number(queuedResult.drain.remaining || 0);
+          ackResult.textContent = remaining === 0
+            ? 'Saved locally and committed to the selected provider.'
+            : 'Saved on this browser. Provider delivery is still pending.';
+          ackNote.value = '';
+        } else if (queuedResult && queuedResult.kind === 'FULL') {
+          ackResult.textContent = 'Offline update storage is full. Existing pending updates were preserved.';
+        } else {
+          ackResult.textContent = 'The offline update could not be saved. Existing incident data was preserved.';
+        }
+        return;
+      }
       const ack = await api('/v1/incidents/' + encodeURIComponent(selectedReportId) + '/ack', {
         method: 'POST',
         headers: {'content-type': 'application/json'},

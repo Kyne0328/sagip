@@ -6,6 +6,7 @@ import {
 import {PostgresSlidingWindowRateLimiter} from '../http/rateLimiter.js';
 import {IngestionService} from '../ingestion/service.js';
 import {ResponderService} from '../responder/service.js';
+import {IncidentSnapshotService} from '../responder/incidentSnapshot.js';
 
 let dependencies: SagipServerDependencies | undefined;
 
@@ -28,6 +29,7 @@ function getDependencies(): SagipServerDependencies {
   dependencies = {
     ingestEnvelope: bytes => ingestion.ingestEnvelope(bytes),
     responderService: new ResponderService(pool),
+    incidentSnapshotService: new IncidentSnapshotService(pool),
     rateLimiter: new PostgresSlidingWindowRateLimiter(pool),
   };
   return dependencies;

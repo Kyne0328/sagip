@@ -27,6 +27,8 @@ test('applies ingestion v1 migration and database identity constraints', async (
       [
         'accepted_messages',
         'incident_revisions',
+        'incident_snapshot_pages',
+        'incident_snapshots',
         'incidents',
         'origin_keys',
         'receipt_access_challenges',
@@ -52,7 +54,7 @@ test('applies ingestion v1 migration and database identity constraints', async (
     const migrations = await pool.query<{name: string; checksum_sha256: string}>(
       'SELECT name, checksum_sha256 FROM schema_migrations ORDER BY name',
     );
-    assert.equal(migrations.rowCount, 7);
+    assert.equal(migrations.rowCount, 8);
     assert.equal(migrations.rows[0]?.name, '001_ingestion_v1.sql');
     assert.match(migrations.rows[0]?.checksum_sha256 ?? '', /^[0-9a-f]{64}$/);
     assert.equal(migrations.rows[1]?.name, '002_responder_v1.sql');
@@ -67,6 +69,8 @@ test('applies ingestion v1 migration and database identity constraints', async (
     assert.match(migrations.rows[5]?.checksum_sha256 ?? '', /^[0-9a-f]{64}$/);
     assert.equal(migrations.rows[6]?.name, '007_receipt_import_v2.sql');
     assert.match(migrations.rows[6]?.checksum_sha256 ?? '', /^[0-9a-f]{64}$/);
+    assert.equal(migrations.rows[7]?.name, '008_incident_snapshots.sql');
+    assert.match(migrations.rows[7]?.checksum_sha256 ?? '', /^[0-9a-f]{64}$/);
 
     await assert.rejects(
       pool.query(

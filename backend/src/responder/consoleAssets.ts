@@ -9,9 +9,9 @@ export const RESPONDER_MAP_DEPENDENCY_VERSIONS = {
 
 const MAPLIBRE_VERSION = RESPONDER_MAP_DEPENDENCY_VERSIONS.maplibre;
 const PMTILES_VERSION = RESPONDER_MAP_DEPENDENCY_VERSIONS.pmtiles;
-
 const MAPLIBRE_ASSET_ROOT = `/responder/assets/maplibre-gl-${MAPLIBRE_VERSION}`;
 const PMTILES_ASSET_ROOT = `/responder/assets/pmtiles-${PMTILES_VERSION}`;
+const BROWSER_ASSET_ROOT = '/responder/assets/browser';
 const BACKEND_ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const GENERATED_ASSET_ROOT = join(BACKEND_ROOT, '.generated', 'responder-assets');
 const GENERATED_BROWSER_ROOT = join(BACKEND_ROOT, '.generated', 'responder-browser');
@@ -27,6 +27,17 @@ export const RESPONDER_MAP_ASSET_PATHS = {
 export const RESPONDER_BROWSER_ASSET_PATHS = {
   assetManifest: '/responder/assets/asset-manifest.json',
   offlinePackageModule: '/responder/assets/offline-package.js',
+  browserOfflinePackageModule: `${BROWSER_ASSET_ROOT}/offlinePackage.js`,
+  consoleStoreModule: `${BROWSER_ASSET_ROOT}/consoleStore.js`,
+  consoleTypesModule: `${BROWSER_ASSET_ROOT}/consoleTypes.js`,
+  offlineAccessModule: `${BROWSER_ASSET_ROOT}/offlineAccess.js`,
+  receiptVerifierModule: `${BROWSER_ASSET_ROOT}/receiptVerifier.js`,
+  gatewayClientModule: `${BROWSER_ASSET_ROOT}/gatewayClient.js`,
+  incidentSnapshotModule: `${BROWSER_ASSET_ROOT}/incidentSnapshot.js`,
+  actionCodecModule: `${BROWSER_ASSET_ROOT}/actionCodec.js`,
+  actionOutboxModule: `${BROWSER_ASSET_ROOT}/actionOutbox.js`,
+  incidentMapModule: `${BROWSER_ASSET_ROOT}/incidentMap.js`,
+  consoleControllerModule: `${BROWSER_ASSET_ROOT}/consoleController.js`,
   serviceWorker: '/responder/service-worker.js',
 } as const;
 
@@ -40,38 +51,23 @@ interface AssetDescriptor {
 const assets = new Map<string, AssetDescriptor>([
   [
     RESPONDER_MAP_ASSET_PATHS.maplibreModule,
-    {
-      contentType: 'text/javascript; charset=utf-8',
-      resolveFile: () => join(resolveMapLibreDist(), 'maplibre-gl.mjs'),
-    },
+    {contentType: 'text/javascript; charset=utf-8', resolveFile: () => join(resolveMapLibreDist(), 'maplibre-gl.mjs')},
   ],
   [
     RESPONDER_MAP_ASSET_PATHS.maplibreShared,
-    {
-      contentType: 'text/javascript; charset=utf-8',
-      resolveFile: () => join(resolveMapLibreDist(), 'maplibre-gl-shared.mjs'),
-    },
+    {contentType: 'text/javascript; charset=utf-8', resolveFile: () => join(resolveMapLibreDist(), 'maplibre-gl-shared.mjs')},
   ],
   [
     RESPONDER_MAP_ASSET_PATHS.maplibreWorker,
-    {
-      contentType: 'text/javascript; charset=utf-8',
-      resolveFile: () => join(resolveMapLibreDist(), 'maplibre-gl-worker.mjs'),
-    },
+    {contentType: 'text/javascript; charset=utf-8', resolveFile: () => join(resolveMapLibreDist(), 'maplibre-gl-worker.mjs')},
   ],
   [
     RESPONDER_MAP_ASSET_PATHS.maplibreCss,
-    {
-      contentType: 'text/css; charset=utf-8',
-      resolveFile: () => join(resolveMapLibreDist(), 'maplibre-gl.css'),
-    },
+    {contentType: 'text/css; charset=utf-8', resolveFile: () => join(resolveMapLibreDist(), 'maplibre-gl.css')},
   ],
   [
     RESPONDER_MAP_ASSET_PATHS.pmtilesScript,
-    {
-      contentType: 'text/javascript; charset=utf-8',
-      resolveFile: () => join(resolvePmtilesDist(), 'pmtiles.js'),
-    },
+    {contentType: 'text/javascript; charset=utf-8', resolveFile: () => join(resolvePmtilesDist(), 'pmtiles.js')},
   ],
   [
     RESPONDER_BROWSER_ASSET_PATHS.assetManifest,
@@ -83,11 +79,51 @@ const assets = new Map<string, AssetDescriptor>([
   ],
   [
     RESPONDER_BROWSER_ASSET_PATHS.offlinePackageModule,
-    {
-      contentType: 'text/javascript; charset=utf-8',
-      resolveFile: () => join(GENERATED_BROWSER_ROOT, 'offlinePackage.js'),
-      cacheControl: 'no-cache',
-    },
+    browserModule('offlinePackage.js'),
+  ],
+  [
+    RESPONDER_BROWSER_ASSET_PATHS.browserOfflinePackageModule,
+    browserModule('offlinePackage.js'),
+  ],
+  [
+    RESPONDER_BROWSER_ASSET_PATHS.consoleStoreModule,
+    browserModule('consoleStore.js'),
+  ],
+  [
+    RESPONDER_BROWSER_ASSET_PATHS.consoleTypesModule,
+    browserModule('consoleTypes.js'),
+  ],
+  [
+    RESPONDER_BROWSER_ASSET_PATHS.offlineAccessModule,
+    browserModule('offlineAccess.js'),
+  ],
+  [
+    RESPONDER_BROWSER_ASSET_PATHS.receiptVerifierModule,
+    browserModule('receiptVerifier.js'),
+  ],
+  [
+    RESPONDER_BROWSER_ASSET_PATHS.gatewayClientModule,
+    browserModule('gatewayClient.js'),
+  ],
+  [
+    RESPONDER_BROWSER_ASSET_PATHS.incidentSnapshotModule,
+    browserModule('incidentSnapshot.js'),
+  ],
+  [
+    RESPONDER_BROWSER_ASSET_PATHS.actionCodecModule,
+    browserModule('actionCodec.js'),
+  ],
+  [
+    RESPONDER_BROWSER_ASSET_PATHS.actionOutboxModule,
+    browserModule('actionOutbox.js'),
+  ],
+  [
+    RESPONDER_BROWSER_ASSET_PATHS.incidentMapModule,
+    browserModule('incidentMap.js'),
+  ],
+  [
+    RESPONDER_BROWSER_ASSET_PATHS.consoleControllerModule,
+    browserModule('consoleController.js'),
   ],
   [
     RESPONDER_BROWSER_ASSET_PATHS.serviceWorker,
@@ -105,7 +141,6 @@ const cachedBytes = new Map<string, Uint8Array>();
 export function consoleAssetResponse(pathname: string, method: string): Response | null {
   const asset = assets.get(pathname);
   if (!asset) return null;
-
   if (method !== 'GET') {
     return new Response(JSON.stringify({error: 'METHOD_NOT_ALLOWED'}), {
       status: 405,
@@ -118,14 +153,12 @@ export function consoleAssetResponse(pathname: string, method: string): Response
       },
     });
   }
-
   try {
     let bytes = cachedBytes.get(pathname);
     if (!bytes) {
       bytes = new Uint8Array(readFileSync(asset.resolveFile()));
       cachedBytes.set(pathname, bytes);
     }
-
     return new Response(bytes, {
       status: 200,
       headers: {
@@ -147,6 +180,14 @@ export function consoleAssetResponse(pathname: string, method: string): Response
       },
     });
   }
+}
+
+function browserModule(fileName: string): AssetDescriptor {
+  return {
+    contentType: 'text/javascript; charset=utf-8',
+    resolveFile: () => join(GENERATED_BROWSER_ROOT, fileName),
+    cacheControl: 'no-cache',
+  };
 }
 
 function resolveMapLibreDist(): string {

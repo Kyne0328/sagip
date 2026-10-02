@@ -2,6 +2,8 @@ import {createHash, randomBytes, randomUUID} from 'node:crypto';
 
 import type {Pool} from 'pg';
 
+type ResponderQueryClient = Pick<Pool, 'query'>;
+
 import type {
   IncidentDetail,
   IncidentLocation,
@@ -93,7 +95,7 @@ export class ResponderValidationError extends Error {
 }
 
 export class ResponderService {
-  constructor(private readonly pool: Pool) {}
+  constructor(private readonly pool: ResponderQueryClient) {}
 
   async authenticate(token: string): Promise<ResponderIdentity | null> {
     const trimmed = token.trim();
