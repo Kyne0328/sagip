@@ -144,7 +144,10 @@ const DASHBOARD_HTML = `<!doctype html>
             <h3 id="offlineOperationsTitle">Offline response workspace</h3>
             <p class="muted">Readiness is based on prepared map data, protected incident access, a complete snapshot, and pending responder updates.</p>
           </div>
-          <button id="offlineDiscardButton" type="button" class="danger-outline" hidden>Discard pending offline updates</button>
+          <div class="offline-actions">
+            <button id="prepareMapButton" type="button" class="secondary">Prepare Tagum offline map</button>
+            <button id="offlineDiscardButton" type="button" class="danger-outline" hidden>Discard pending offline updates</button>
+          </div>
         </div>
         <div class="readiness-grid" aria-live="polite">
           <div class="readiness-item"><span>Local map package</span><strong id="mapReadinessStatus">Checking…</strong></div>
@@ -166,6 +169,7 @@ const DASHBOARD_HTML = `<!doctype html>
           </div>
           <p id="mapAnnouncement" class="sr-only" aria-live="polite"></p>
           <p class="map-accessibility-note">The incident queue remains the primary keyboard and screen-reader workspace. The map is a supplemental spatial view.</p>
+          <p class="map-attribution">Map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap contributors</a> · package by <a href="https://protomaps.com" target="_blank" rel="noreferrer">Protomaps</a>. ODbL.</p>
         </section>
       </section>
 
@@ -634,6 +638,8 @@ main {
 .map-heading h4 { margin: 0.15rem 0 0; }
 
 .offline-heading .muted { max-width: 68rem; margin: 0.3rem 0 0; }
+.offline-actions { display: flex; flex-wrap: wrap; gap: 0.55rem; align-items: center; justify-content: flex-end; }
+.offline-actions button { min-block-size: 3rem; }
 
 .readiness-grid {
   display: grid;
@@ -696,7 +702,9 @@ main {
 }
 
 .map-placeholder[hidden] { display: none; }
-.map-accessibility-note { margin: 0; color: var(--ink-soft); font-size: 0.78rem; }
+.map-accessibility-note,
+.map-attribution { margin: 0; color: var(--ink-soft); font-size: 0.78rem; }
+.map-attribution a { color: var(--navy-800); font-weight: 750; }
 
 .map-marker {
   display: grid;
@@ -731,6 +739,7 @@ main {
   .readiness-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .offline-heading,
   .map-heading { align-items: stretch; flex-direction: column; }
+  .offline-actions { justify-content: flex-start; }
   .map-heading > span { max-width: none; text-align: start; }
 }
 
