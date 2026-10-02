@@ -18,7 +18,7 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class ResponderGatewayServiceTest {
-  private val context = ApplicationProvider.getApplicationContext<Context>()
+  private val context = IsolatedGatewayTestContext(ApplicationProvider.getApplicationContext<Context>())
   private lateinit var db: SagipDatabase
   private val root = GatewayTestIdentity()
   private val gateway = GatewaySigningIdentity("sagip.test.gateway.g01")
@@ -123,9 +123,11 @@ class ResponderGatewayServiceTest {
     db.writableDatabase.execSQL("DROP TABLE gateway_pairings")
     db.writableDatabase.execSQL("DROP TABLE gateway_browser_sessions")
     db.writableDatabase.execSQL("DROP TABLE gateway_pairing_clock")
+    db.writableDatabase.execSQL("DROP TABLE gateway_admission_global")
+    db.writableDatabase.execSQL("DROP TABLE gateway_admission_sources")
     db.writableDatabase.version = 11
     db.close(); db = SagipDatabase(context)
-    assertEquals(13, db.readableDatabase.version)
+    assertEquals(14, db.readableDatabase.version)
     assertEquals(id, service().listGatewayIncidents().single().identity.reportId)
     val s = service(); trust(s); assertEquals("ACCEPTED", s.provisionGrant(grant()).state)
     failSigning = true

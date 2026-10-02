@@ -16,7 +16,7 @@ import org.junit.runner.RunWith
 /** Policy/storage evidence only: this class does not claim browser TLS acceptance. */
 @RunWith(AndroidJUnit4::class)
 class GatewayPairingStoreTest {
-  private val context = ApplicationProvider.getApplicationContext<Context>()
+  private val context = IsolatedGatewayTestContext(ApplicationProvider.getApplicationContext<Context>())
   private lateinit var db: SagipDatabase
   private var clock = MonotonicClock(UUID.randomUUID().toString(), 1000)
   private var unlocked = true
@@ -162,16 +162,18 @@ class GatewayPairingStoreTest {
     } finally { executor.shutdownNow() }
   }
 
-  @Test fun sessions_expire_at_grant_limit_and_v13_migration_preserves_existing_work() {
+  @Test fun sessions_expire_at_grant_limit_and_v12_upgrade_preserves_existing_work() {
     val actionId = UUID.randomUUID().toString()
     db.writableDatabase.execSQL("INSERT INTO gateway_work(action_id,report_id,observed_version,status,note,saved_at_ms) VALUES(?,?,0,1,'preserve me',1000)",
       arrayOf(actionId, UUID.randomUUID().toString()))
     db.writableDatabase.execSQL("DROP TABLE gateway_pairings")
     db.writableDatabase.execSQL("DROP TABLE gateway_browser_sessions")
     db.writableDatabase.execSQL("DROP TABLE gateway_pairing_clock")
+    db.writableDatabase.execSQL("DROP TABLE gateway_admission_global")
+    db.writableDatabase.execSQL("DROP TABLE gateway_admission_sources")
     db.writableDatabase.version = 12
     db.close(); db = SagipDatabase(context)
-    assertEquals(13, db.readableDatabase.version)
+    assertEquals(14, db.readableDatabase.version)
     db.readableDatabase.rawQuery("SELECT note FROM gateway_work WHERE action_id=?", arrayOf(actionId)).use {
       assertTrue(it.moveToFirst()); assertEquals("preserve me", it.getString(0))
     }

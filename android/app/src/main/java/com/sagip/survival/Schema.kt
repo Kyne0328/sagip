@@ -1,7 +1,12 @@
 package com.sagip.survival
 
 object Schema {
-  const val VERSION = 13
+  const val VERSION = 14
+
+  private val ADMISSION_CREATE_STATEMENTS = listOf(
+    "CREATE TABLE gateway_admission_global (singleton INTEGER PRIMARY KEY CHECK(singleton=1), boot_id TEXT NOT NULL, window_elapsed_ms INTEGER NOT NULL, request_count INTEGER NOT NULL CHECK(request_count BETWEEN 0 AND 60))",
+    "CREATE TABLE gateway_admission_sources (source_hash TEXT PRIMARY KEY NOT NULL, window_elapsed_ms INTEGER NOT NULL, request_count INTEGER NOT NULL CHECK(request_count BETWEEN 0 AND 10))",
+  )
 
   private val PAIRING_CREATE_STATEMENTS = listOf(
     "CREATE TABLE gateway_pairings (pairing_id TEXT PRIMARY KEY NOT NULL, code_salt BLOB NOT NULL, code_hash BLOB NOT NULL, provider_id TEXT NOT NULL, grant_id TEXT NOT NULL, boot_id TEXT NOT NULL, expires_elapsed_ms INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts BETWEEN 0 AND 5), browser_binding TEXT, state TEXT NOT NULL CHECK(state IN ('OPEN','CONFIRMED','ISSUED')))",
@@ -432,7 +437,7 @@ object Schema {
     "CREATE INDEX idx_relay_receipts_message ON relay_receipts(message_id)",
     "CREATE INDEX idx_responder_acks_report ON responder_acks(report_id)",
     "CREATE INDEX idx_relay_responder_acks_report ON relay_responder_acks(report_id, acknowledged_at DESC)",
-  ) + RECEIPT_CREATE_STATEMENTS + RELAY_CREATE_STATEMENTS + TRANSFER_CREATE_STATEMENTS + CONTACT_CREATE_STATEMENTS + GATEWAY_CREATE_STATEMENTS + PAIRING_CREATE_STATEMENTS
+  ) + RECEIPT_CREATE_STATEMENTS + RELAY_CREATE_STATEMENTS + TRANSFER_CREATE_STATEMENTS + CONTACT_CREATE_STATEMENTS + GATEWAY_CREATE_STATEMENTS + PAIRING_CREATE_STATEMENTS + ADMISSION_CREATE_STATEMENTS
 
   val MIGRATE_1_TO_2 = listOf(
     "ALTER TABLE outbound_envelopes ADD COLUMN envelope_bytes BLOB",
@@ -542,4 +547,5 @@ object Schema {
   val MIGRATE_10_TO_11 = CONTACT_CREATE_STATEMENTS
   val MIGRATE_11_TO_12 = GATEWAY_CREATE_STATEMENTS
   val MIGRATE_12_TO_13 = PAIRING_CREATE_STATEMENTS
+  val MIGRATE_13_TO_14 = ADMISSION_CREATE_STATEMENTS
 }
