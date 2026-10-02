@@ -120,9 +120,12 @@ class ResponderGatewayServiceTest {
     val id = report()
     db.writableDatabase.execSQL("DROP TABLE gateway_active_grant")
     db.writableDatabase.execSQL("DROP TABLE gateway_work")
+    db.writableDatabase.execSQL("DROP TABLE gateway_pairings")
+    db.writableDatabase.execSQL("DROP TABLE gateway_browser_sessions")
+    db.writableDatabase.execSQL("DROP TABLE gateway_pairing_clock")
     db.writableDatabase.version = 11
     db.close(); db = SagipDatabase(context)
-    assertEquals(12, db.readableDatabase.version)
+    assertEquals(13, db.readableDatabase.version)
     assertEquals(id, service().listGatewayIncidents().single().identity.reportId)
     val s = service(); trust(s); assertEquals("ACCEPTED", s.provisionGrant(grant()).state)
     failSigning = true

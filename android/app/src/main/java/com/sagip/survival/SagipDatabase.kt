@@ -95,6 +95,11 @@ class SagipDatabase(context: Context) :
       currentVersion = 12
     }
 
+    if (currentVersion == 12 && newVersion >= 13) {
+      Schema.MIGRATE_12_TO_13.forEach(db::execSQL)
+      currentVersion = 13
+    }
+
     if (currentVersion != newVersion) {
       throw IllegalStateException("Unsupported SAGIP database migration: $oldVersion -> $newVersion")
     }

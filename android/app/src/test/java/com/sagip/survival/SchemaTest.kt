@@ -7,7 +7,7 @@ import org.junit.Test
 class SchemaTest {
   @Test
   fun `schema version is explicit and preparation state is present`() {
-    assertEquals(12, Schema.VERSION)
+    assertEquals(13, Schema.VERSION)
     val ddl = Schema.CREATE_STATEMENTS.joinToString("\n")
     listOf(
       "reports",
@@ -42,6 +42,9 @@ class SchemaTest {
       "relay_peer_contacts",
       "gateway_active_grant",
       "gateway_work",
+      "gateway_pairings",
+      "gateway_browser_sessions",
+      "gateway_pairing_clock",
     ).forEach {
       assertTrue("missing table $it", ddl.contains("CREATE TABLE $it"))
     }

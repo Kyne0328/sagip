@@ -1,7 +1,13 @@
 package com.sagip.survival
 
 object Schema {
-  const val VERSION = 12
+  const val VERSION = 13
+
+  private val PAIRING_CREATE_STATEMENTS = listOf(
+    "CREATE TABLE gateway_pairings (pairing_id TEXT PRIMARY KEY NOT NULL, code_salt BLOB NOT NULL, code_hash BLOB NOT NULL, provider_id TEXT NOT NULL, grant_id TEXT NOT NULL, boot_id TEXT NOT NULL, expires_elapsed_ms INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts BETWEEN 0 AND 5), browser_binding TEXT, state TEXT NOT NULL CHECK(state IN ('OPEN','CONFIRMED','ISSUED')))",
+    "CREATE TABLE gateway_browser_sessions (token_hash BLOB PRIMARY KEY NOT NULL, csrf_hash BLOB NOT NULL, browser_binding TEXT NOT NULL, provider_id TEXT NOT NULL, grant_id TEXT NOT NULL, boot_id TEXT NOT NULL, expires_elapsed_ms INTEGER NOT NULL, revoked INTEGER NOT NULL DEFAULT 0 CHECK(revoked IN (0,1)), window_elapsed_ms INTEGER NOT NULL, action_count INTEGER NOT NULL DEFAULT 0 CHECK(action_count BETWEEN 0 AND 60))",
+    "CREATE TABLE gateway_pairing_clock (singleton INTEGER PRIMARY KEY CHECK(singleton=1), boot_id TEXT NOT NULL, high_water_elapsed_ms INTEGER NOT NULL)",
+  )
 
   private val GATEWAY_CREATE_STATEMENTS = listOf(
     "CREATE TABLE gateway_active_grant (singleton INTEGER PRIMARY KEY CHECK(singleton=1), grant_id TEXT NOT NULL REFERENCES receipt_grants(grant_id))",
@@ -426,7 +432,7 @@ object Schema {
     "CREATE INDEX idx_relay_receipts_message ON relay_receipts(message_id)",
     "CREATE INDEX idx_responder_acks_report ON responder_acks(report_id)",
     "CREATE INDEX idx_relay_responder_acks_report ON relay_responder_acks(report_id, acknowledged_at DESC)",
-  ) + RECEIPT_CREATE_STATEMENTS + RELAY_CREATE_STATEMENTS + TRANSFER_CREATE_STATEMENTS + CONTACT_CREATE_STATEMENTS + GATEWAY_CREATE_STATEMENTS
+  ) + RECEIPT_CREATE_STATEMENTS + RELAY_CREATE_STATEMENTS + TRANSFER_CREATE_STATEMENTS + CONTACT_CREATE_STATEMENTS + GATEWAY_CREATE_STATEMENTS + PAIRING_CREATE_STATEMENTS
 
   val MIGRATE_1_TO_2 = listOf(
     "ALTER TABLE outbound_envelopes ADD COLUMN envelope_bytes BLOB",
@@ -535,4 +541,5 @@ object Schema {
   val MIGRATE_9_TO_10 = TRANSFER_CREATE_STATEMENTS
   val MIGRATE_10_TO_11 = CONTACT_CREATE_STATEMENTS
   val MIGRATE_11_TO_12 = GATEWAY_CREATE_STATEMENTS
+  val MIGRATE_12_TO_13 = PAIRING_CREATE_STATEMENTS
 }
