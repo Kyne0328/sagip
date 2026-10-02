@@ -39,7 +39,7 @@ class ReceiptRepository(
 
   fun currentReceiptVersion(reportId:String)=currentVersion(database.readableDatabase,reportId)
 
-  fun allocateAction(intent: ActionIntent): AllocatedAction {
+  fun allocateAction(intent: ActionIntent, expectedReport: ReportIdentity? = null): AllocatedAction {
     require(intent.status in 1..4) { "status out of range" }
     require(intent.note.toByteArray(Charsets.UTF_8).size <= 1024 && !intent.note.contains('\u0000')) {
       "note out of range"
@@ -67,6 +67,9 @@ class ReceiptRepository(
         "incident version conflict"
       }
       val report = latestIdentity(db, intent.reportId) ?: error("report identity unavailable")
+      check(expectedReport == null || (report.reportProtocolVersion == expectedReport.reportProtocolVersion &&
+        report.revision == expectedReport.revision && MessageDigest.isEqual(report.payloadDigest,expectedReport.payloadDigest) &&
+        MessageDigest.isEqual(report.originKeyId,expectedReport.originKeyId))) { "report binding conflict" }
       val issuedAt = now()
       val forwardingExpiry = responderForwardingExpiry(profile, issuedAt)
       val providerId = ReceiptAuthority.issuerProviderId(

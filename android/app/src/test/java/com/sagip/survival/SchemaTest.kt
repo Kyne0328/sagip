@@ -7,7 +7,7 @@ import org.junit.Test
 class SchemaTest {
   @Test
   fun `schema version is explicit and preparation state is present`() {
-    assertEquals(15, Schema.VERSION)
+    assertEquals(16, Schema.VERSION)
     val ddl = Schema.CREATE_STATEMENTS.joinToString("\n")
     listOf(
       "reports",

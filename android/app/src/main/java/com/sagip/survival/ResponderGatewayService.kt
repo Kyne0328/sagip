@@ -21,15 +21,21 @@ class ResponderGatewayService(
   private val deviceAccess: () -> Boolean,
   private val monotonicClock: () -> MonotonicClock,
   private val wallClock: () -> Long = System::currentTimeMillis,
+  private val deploymentQualified: () -> Boolean = { true },
 ) {
   private val pinnedRoots = roots.mapValues { it.value.copyOf() }
   private val allowedScopes = scopes.toSet()
   private val receipts = ReceiptRepository(database)
-  private fun access() { check(deviceAccess()) { "DEVICE_ACCESS_REQUIRED" } }
+  private fun qualified() = runCatching(deploymentQualified).getOrDefault(false)
+  private fun access() {
+    check(qualified()) { "AUTHORITY_UNAVAILABLE" }
+    check(deviceAccess()) { "DEVICE_ACCESS_REQUIRED" }
+  }
   private fun hex(b: ByteArray) = b.joinToString("") { "%02x".format(it.toInt() and 255) }
   private fun hash(b: ByteArray) = MessageDigest.getInstance("SHA-256").digest(b)
   private fun same(a: ByteArray, b: ByteArray) = MessageDigest.isEqual(a, b)
   private fun trustedTime(): TimeInterval? = runCatching {
+    check(qualified()) { "AUTHORITY_UNAVAILABLE" }
     receipts.latestTimeCheckpoint(identityProvider().keyId)?.let {
       ReceiptAuthority.advanceCheckpoint(it, monotonicClock())
     }
@@ -89,6 +95,7 @@ class ResponderGatewayService(
   }
 
   @Synchronized fun issueTimeProof(challenge: TimeChallenge): TimeProofResult {
+    if (!qualified()) return TimeProofResult("TIME_UNAVAILABLE", reason = "AUTHORITY_UNAVAILABLE")
     if (!deviceAccess()) return TimeProofResult("TIME_UNAVAILABLE", reason = "DEVICE_ACCESS_REQUIRED")
     if (challenge.verifierId.size != 32 || challenge.nonce.size != 32 ||
       runCatching { UUID.fromString(challenge.id) }.isFailure ||
@@ -171,7 +178,7 @@ class ResponderGatewayService(
       validUntilMs = validUntil,
     )
     return try {
-      val signed = receipts.encodeFresh(fields, proof, identity)
+      val signed = receipts.encodeFresh(fields, proof, qualifiedIdentity(identity))
       persistGatewayTimeProof(challenge, signed)
     } catch (_: Exception) {
       TimeProofResult("TIME_UNAVAILABLE", reason = "SIGNER_UNAVAILABLE")
@@ -266,6 +273,7 @@ class ResponderGatewayService(
   }
 
   @Synchronized fun provisionGrant(bytes: ByteArray): GrantProvisionResult {
+    if (!qualified()) return GrantProvisionResult("REJECTED", "AUTHORITY_UNAVAILABLE")
     if (!deviceAccess()) return GrantProvisionResult("REJECTED", "DEVICE_ACCESS_REQUIRED")
     val owned = bytes.copyOf()
     val grant = try {
@@ -312,6 +320,16 @@ class ResponderGatewayService(
     null,
   ).use { c -> if (!c.moveToFirst()) null else Pair(ReceiptV2Codec.decode(c.getBlob(0)).fields as ReceiptFields.Grant, if (c.isNull(1)) null else c.getLong(1)) }
 
+  fun authorizedGrant(): ReceiptFields.Grant? = if (qualified() && deviceAccess() && authorityReady()) activeGrant()?.first else null
+
+  fun sessionAuthority(): GatewaySessionAuthority? = authorizedGrant()?.let { grant ->
+    trustedTime()?.let { GatewaySessionAuthority(hex(grant.issuerProviderId), grant.grantId, grant.expiresAtMs, it) }
+  }
+
+  fun hasPendingWork(): Boolean = database.readableDatabase.rawQuery(
+    "SELECT 1 FROM gateway_work w LEFT JOIN receipt_records r ON r.event_id=w.action_id WHERE r.event_id IS NULL LIMIT 1", null,
+  ).use { it.moveToFirst() }
+
   fun listGatewayIncidents(): List<GatewayIncident> {
     access()
     val db = database.readableDatabase
@@ -340,6 +358,12 @@ class ResponderGatewayService(
   }
 
   @Synchronized fun recordGatewayAction(intent: ActionIntent): ActionCommitResult {
+    val saved = saveGatewayAction(intent)
+    return if (saved.state == ActionCommitState.PREPARING) prepareGatewayAction(intent) else saved
+  }
+
+  @Synchronized internal fun saveGatewayAction(intent: ActionIntent): ActionCommitResult {
+    if (!qualified()) return ActionCommitResult(intent.actionId, ActionCommitState.REJECTED, reason = "AUTHORITY_UNAVAILABLE")
     if (!deviceAccess()) return ActionCommitResult(intent.actionId, ActionCommitState.REJECTED, reason = "DEVICE_ACCESS_REQUIRED")
     val valid = runCatching {
       check(UUID.fromString(intent.actionId).toString() == intent.actionId && intent.actionId != NIL)
@@ -372,10 +396,12 @@ class ResponderGatewayService(
       }
       db.setTransactionSuccessful()
     } finally { db.endTransaction() }
-    return prepareSavedAction(intent)
+    return getGatewayAction(intent.actionId)
   }
 
-  private fun prepareSavedAction(intent: ActionIntent): ActionCommitResult {
+  @Synchronized internal fun prepareGatewayAction(intent: ActionIntent): ActionCommitResult {
+    if (!qualified()) return ActionCommitResult(intent.actionId, ActionCommitState.REJECTED, reason = "AUTHORITY_UNAVAILABLE")
+    if (!deviceAccess()) return ActionCommitResult(intent.actionId, ActionCommitState.REJECTED, reason = "DEVICE_ACCESS_REQUIRED")
     fun pending(reason: String) = ActionCommitResult(intent.actionId, ActionCommitState.PREPARING, reason = reason)
     receipts.getReceipt(intent.actionId)?.let { return ActionCommitResult(intent.actionId, ActionCommitState.SIGNED, it) }
     val allocated = database.readableDatabase.rawQuery("SELECT 1 FROM receipt_actions WHERE action_id=?", arrayOf(intent.actionId)).use { it.moveToFirst() }
@@ -397,7 +423,7 @@ class ResponderGatewayService(
     val root = pinnedRoots[hex(grant.rootKeyId)] ?: return pending("UNKNOWN_ROOT")
     if (!same(hash(root), grant.rootKeyId) || !ReceiptV2Codec.verifySignature(decodedGrant, root) || grant.scope !in allowedScopes || grant.purposeMask and 1 == 0) return pending("AUTHORITY_UNAVAILABLE")
     val proof = ByteBuffer.allocate(grantBytes.size + 3).put(1).putShort(grantBytes.size.toShort()).put(grantBytes).array()
-    val repo = ReceiptRepository(database, ResponderSignerProfile(identity, 2, grant.grantId, grant.responderId, grant.callsign, proof),
+    val repo = ReceiptRepository(database, ResponderSignerProfile(qualifiedIdentity(identity), 2, grant.grantId, grant.responderId, grant.callsign, proof),
       verificationContextProvider = { report, _ -> verificationContext(report) }, clock = { trustedTime()?.latestMs ?: error("TIME_UNAVAILABLE") })
     return try {
       val db = database.writableDatabase
@@ -406,7 +432,13 @@ class ResponderGatewayService(
         val freshBinding = db.rawQuery("SELECT bound_grant_id FROM gateway_work WHERE action_id=?", arrayOf(intent.actionId)).use { it.moveToFirst(); if (it.isNull(0)) null else it.getString(0) }
         check(freshBinding == null || freshBinding == grant.grantId) { "ORIGINAL_ISSUER_UNAVAILABLE" }
         db.execSQL("UPDATE gateway_work SET bound_grant_id=? WHERE action_id=? AND bound_grant_id IS NULL", arrayOf(grant.grantId, intent.actionId))
-        repo.allocateAction(intent)
+        val expected = db.rawQuery("SELECT intent_json FROM gateway_api_actions WHERE action_id=?", arrayOf(intent.actionId)).use { c ->
+          if (!c.moveToFirst()) null else org.json.JSONObject(c.getString(0)).let { j ->
+            fun bytes(name: String) = j.getString(name).let { s -> ByteArray(32) { s.substring(it*2,it*2+2).toInt(16).toByte() } }
+            ReportIdentity(j.getString("reportId"),j.getInt("reportProtocolVersion"),j.getInt("revision"),bytes("payloadDigest"),bytes("originKeyId"),ByteArray(0))
+          }
+        }
+        repo.allocateAction(intent, expected)
         db.setTransactionSuccessful()
       } finally { db.endTransaction() }
       val result = repo.prepareReceipt(intent.actionId)
@@ -415,11 +447,21 @@ class ResponderGatewayService(
   }
 
   fun getGatewayAction(actionId: String): ActionCommitResult {
+    if (!qualified()) return ActionCommitResult(actionId, ActionCommitState.REJECTED, reason = "AUTHORITY_UNAVAILABLE")
     if (!deviceAccess()) return ActionCommitResult(actionId, ActionCommitState.REJECTED, reason = "DEVICE_ACCESS_REQUIRED")
     val exists = database.readableDatabase.rawQuery("SELECT 1 FROM gateway_work WHERE action_id=?", arrayOf(actionId)).use { it.moveToFirst() }
     if (!exists) return ActionCommitResult(actionId, ActionCommitState.REJECTED, reason = "ACTION_NOT_FOUND")
     val bytes = receipts.getReceipt(actionId)
     return ActionCommitResult(actionId, if (bytes == null) ActionCommitState.PREPARING else ActionCommitState.SIGNED, bytes)
+  }
+
+  private fun qualifiedIdentity(identity: SigningIdentity) = object : SigningIdentity {
+    override val keyId get() = identity.keyId
+    override val publicKeyDer get() = identity.publicKeyDer
+    override fun sign(data: ByteArray): ByteArray {
+      access()
+      return identity.sign(data)
+    }
   }
 
   companion object {

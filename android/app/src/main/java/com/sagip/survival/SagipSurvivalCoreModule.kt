@@ -52,6 +52,7 @@ class SagipSurvivalCoreModule(
       try {
         preparationService.preparePending()
         runBlocking { deliveryWorker.runOnce() }
+        runtime.runGatewaySync()
       } catch (_: Exception) {
       }
     }
@@ -65,6 +66,7 @@ class SagipSurvivalCoreModule(
       try {
         preparationService.preparePending()
         val completed = runBlocking { deliveryWorker.runOnce() }
+        runtime.runGatewaySync()
         promise.resolve(completed)
       } catch (_: Exception) {
         promise.resolve(0)

@@ -47,6 +47,7 @@ class EmergencyDeliveryJobService : JobService() {
           preparePending = { preparationService.preparePending() },
           runDelivery = { worker.runOnce() },
         )
+        SurvivalCoreRuntime.get(applicationContext).runGatewaySync()
         jobFinished(params, false)
       } catch (e: CancellationException) {
         throw e

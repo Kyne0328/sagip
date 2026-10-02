@@ -1,7 +1,14 @@
 package com.sagip.survival
 
 object Schema {
-  const val VERSION = 15
+  const val VERSION = 16
+
+  private val ACTION_API_CREATE_STATEMENTS = listOf(
+    "CREATE TABLE gateway_api_actions (action_id TEXT PRIMARY KEY NOT NULL REFERENCES gateway_work(action_id), responder_id TEXT NOT NULL, provider_id TEXT NOT NULL, action_digest TEXT NOT NULL, intent_json TEXT NOT NULL)",
+    "CREATE TABLE gateway_snapshots (snapshot_id TEXT PRIMARY KEY NOT NULL, owner TEXT NOT NULL, responder_key TEXT NOT NULL, boot_id TEXT NOT NULL, expires_elapsed_ms INTEGER NOT NULL, metadata_json TEXT NOT NULL, byte_count INTEGER NOT NULL)",
+    "CREATE TABLE gateway_snapshot_pages (snapshot_id TEXT NOT NULL REFERENCES gateway_snapshots(snapshot_id) ON DELETE CASCADE, cursor_hash TEXT NOT NULL UNIQUE, page_json TEXT NOT NULL, PRIMARY KEY(snapshot_id,cursor_hash))",
+    "CREATE TABLE gateway_sync (event_id TEXT PRIMARY KEY NOT NULL, provider_id TEXT NOT NULL, event_digest TEXT NOT NULL, object_bytes BLOB NOT NULL, state TEXT NOT NULL CHECK(state IN ('PENDING','UNKNOWN','RETRYABLE','COMMITTED','REJECTED')), next_attempt_ms INTEGER NOT NULL DEFAULT 0, attempt_count INTEGER NOT NULL DEFAULT 0, lease_token TEXT, lease_until_ms INTEGER, clock_boot_id TEXT, last_reason TEXT)",
+  )
 
   private val TIME_PROOF_CREATE_STATEMENTS = listOf(
     "ALTER TABLE receipt_time_checkpoints ADD COLUMN proof_bytes BLOB",
@@ -452,7 +459,7 @@ object Schema {
     "CREATE INDEX idx_relay_receipts_message ON relay_receipts(message_id)",
     "CREATE INDEX idx_responder_acks_report ON responder_acks(report_id)",
     "CREATE INDEX idx_relay_responder_acks_report ON relay_responder_acks(report_id, acknowledged_at DESC)",
-  ) + RECEIPT_CREATE_STATEMENTS + RELAY_CREATE_STATEMENTS + TRANSFER_CREATE_STATEMENTS + CONTACT_CREATE_STATEMENTS + GATEWAY_CREATE_STATEMENTS + PAIRING_CREATE_STATEMENTS + ADMISSION_CREATE_STATEMENTS + TIME_PROOF_CREATE_STATEMENTS
+  ) + RECEIPT_CREATE_STATEMENTS + RELAY_CREATE_STATEMENTS + TRANSFER_CREATE_STATEMENTS + CONTACT_CREATE_STATEMENTS + GATEWAY_CREATE_STATEMENTS + PAIRING_CREATE_STATEMENTS + ADMISSION_CREATE_STATEMENTS + TIME_PROOF_CREATE_STATEMENTS + ACTION_API_CREATE_STATEMENTS
 
   val MIGRATE_1_TO_2 = listOf(
     "ALTER TABLE outbound_envelopes ADD COLUMN envelope_bytes BLOB",
@@ -564,4 +571,5 @@ object Schema {
   val MIGRATE_12_TO_13 = PAIRING_CREATE_STATEMENTS
   val MIGRATE_13_TO_14 = ADMISSION_CREATE_STATEMENTS
   val MIGRATE_14_TO_15 = TIME_PROOF_CREATE_STATEMENTS
+  val MIGRATE_15_TO_16 = ACTION_API_CREATE_STATEMENTS
 }

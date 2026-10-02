@@ -29,6 +29,7 @@ class GatewayNativeModule(private val context: ReactApplicationContext) : ReactC
     val promise = authentication ?: return
     authentication = null; cancellation = null
     if (accepted) runtime.gatewayAccess.verifiedBySystem() else runtime.gatewayAccess.lock()
+    if (accepted) runCatching { runtime.resumeGatewayServer() }
     promise.resolve(accepted && runtime.gatewayAccess.isAllowed())
   }
   @ReactMethod fun authenticate(promise: Promise) {
@@ -54,7 +55,7 @@ class GatewayNativeModule(private val context: ReactApplicationContext) : ReactC
       } catch (_: Exception) { finishAuthentication(false) }
     }
   }
-  @ReactMethod fun lock(promise: Promise) { runtime.gatewayAccess.lock(); promise.resolve(null) }
+  @ReactMethod fun lock(promise: Promise) { runtime.stopGatewayServer(); runtime.gatewayAccess.lock(); promise.resolve(null) }
   @ReactMethod fun newActionId(promise: Promise) { promise.resolve(UUID.randomUUID().toString()) }
   @ReactMethod fun exportProvisioningRequest(input: ReadableMap, promise: Promise) = operation(promise) {
     check(runtime.gatewayAccess.isAllowed())
@@ -150,9 +151,9 @@ class GatewayNativeModule(private val context: ReactApplicationContext) : ReactC
     val result = runtime.gateway.acceptAuthorityTimeProof(challengeId, signedBytes(bytesBase64))
     Arguments.createMap().apply { putString("kind", result.kind); putString("reason", result.reason) }
   }
-  override fun onHostResume() = Unit
-  override fun onHostPause() { runtime.gatewayAccess.lock() }
-  override fun onHostDestroy() { runtime.gatewayAccess.lock(); cancellation?.cancel(); finishAuthentication(false) }
+  override fun onHostResume() { runCatching { runtime.resumeGatewayServer() } }
+  override fun onHostPause() { runtime.stopGatewayServer(); runtime.gatewayAccess.lock() }
+  override fun onHostDestroy() { runtime.stopGatewayServer(); runtime.gatewayAccess.lock(); cancellation?.cancel(); finishAuthentication(false) }
   override fun invalidate() {
     runtime.gatewayAccess.lock(); cancellation?.cancel(); finishAuthentication(false)
     context.removeActivityEventListener(activityListener); context.removeLifecycleEventListener(this)

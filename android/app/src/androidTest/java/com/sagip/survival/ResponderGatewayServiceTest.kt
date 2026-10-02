@@ -173,6 +173,9 @@ class ResponderGatewayServiceTest {
 
   @Test fun additive_v12_migration_preserves_sos_and_fixed_issuer_survives_revocation() {
     val id = report()
+    listOf("gateway_snapshot_pages","gateway_snapshots","gateway_api_actions","gateway_sync").forEach {
+      db.writableDatabase.execSQL("DROP TABLE $it")
+    }
     db.writableDatabase.execSQL("DROP TABLE gateway_active_grant")
     db.writableDatabase.execSQL("DROP TABLE gateway_work")
     db.writableDatabase.execSQL("DROP TABLE gateway_pairings")
@@ -184,7 +187,7 @@ class ResponderGatewayServiceTest {
     db.writableDatabase.execSQL("ALTER TABLE receipt_time_checkpoints DROP COLUMN proof_bytes")
     db.writableDatabase.version = 11
     db.close(); db = SagipDatabase(context)
-    assertEquals(15, db.readableDatabase.version)
+    assertEquals(16, db.readableDatabase.version)
     assertEquals(id, service().listGatewayIncidents().single().identity.reportId)
     val s = service(); trust(s); assertEquals("ACCEPTED", s.provisionGrant(grant()).state)
     failSigning = true

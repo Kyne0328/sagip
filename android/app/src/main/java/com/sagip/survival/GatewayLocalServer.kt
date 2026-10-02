@@ -104,6 +104,7 @@ class GatewayLocalServer(
   private val admissionStore: GatewayAdmissionStore,
   private val sessionAuthority: () -> GatewaySessionAuthority?,
   private val timeProofIssuer: GatewayTimeProofIssuer,
+  private val actionApi: GatewayActionApi? = null,
 ) {
   private data class BrowserSession(val binding: String, val csrf: String, val nonces: LinkedHashSet<String> = LinkedHashSet())
   private data class NativeApproval(val binding: String, val secrets: GatewaySessionSecrets, val expiresAtNanos: Long)
@@ -249,6 +250,16 @@ class GatewayLocalServer(
     if (request.method == "GET" && request.path == "/gateway/v1/session") return session(request)
     if (request.method == "DELETE" && request.path == "/gateway/v1/session") return logout(request)
     if (request.method == "POST" && request.path == "/gateway/v1/time") return time(request)
+    if (request.path.startsWith("/gateway/v1/actions/") || request.path == "/gateway/v1/actions" ||
+      request.path.startsWith("/gateway/v1/snapshots") || request.path == "/gateway/v1/receipts/import" || request.path == "/gateway/v1/envelopes/import") {
+      val auth = authorize(request, csrfRequired = request.method != "GET", actionRequest = request.method == "POST" && request.path == "/gateway/v1/actions")
+        ?: return lastAuthorizationResponse.get() ?: Response(401, errorJson("SESSION_REQUIRED"))
+      val api = actionApi ?: return Response(503, errorJson("STORAGE_UNAVAILABLE"))
+      if (request.method == "POST" && request.headers["content-type"] !=
+        if (request.path.endsWith("/import")) "application/octet-stream" else "application/json") return Response(415,errorJson("UNSUPPORTED_MEDIA_TYPE"))
+      val result = api.handle(request.method, request.path, request.body, auth.second.binding)
+      return Response(result.status,result.body,result.contentType)
+    }
     return Response(404, errorJson("NOT_FOUND"))
   }
 
@@ -356,7 +367,7 @@ class GatewayLocalServer(
     else Response(503, errorJson(result.reason ?: "TIME_UNAVAILABLE"))
   }
 
-  private fun authorize(request: Request, csrfRequired: Boolean): Pair<String, BrowserSession>? {
+  private fun authorize(request: Request, csrfRequired: Boolean, actionRequest: Boolean = false): Pair<String, BrowserSession>? {
     lastAuthorizationResponse.set(null)
     val token = cookie(request.headers["cookie"], "__Host-sagip_gateway") ?: return deny(401, "SESSION_REQUIRED")
     val session = sessions[token] ?: return deny(401, "SESSION_REQUIRED")
@@ -378,7 +389,7 @@ class GatewayLocalServer(
       if (session.nonces.size >= 256) session.nonces.remove(session.nonces.first())
       session.nonces.add(nonce)
     }
-    return when (val state = pairingStore.authorize(token, session.csrf, binding, request.origin, false)) {
+    return when (val state = pairingStore.authorize(token, session.csrf, binding, request.origin, actionRequest)) {
       "AUTHORIZED" -> token to session
       "SESSION_REQUIRED" -> deny(401, state)
       "SESSION_EXPIRED" -> { sessions.remove(token); deny(401, state) }
@@ -448,13 +459,14 @@ class GatewayLocalServer(
     val host = headers["host"] ?: throw IllegalArgumentException("host")
     // Same-origin browser GET/HEAD requests commonly omit Origin. Only the read-only session GET may
     // substitute the already-configured origin; all state-changing G02 requests require the wire header.
-    val origin = headers["origin"] ?: if (first[0] == "GET" && first[1] == "/gateway/v1/session") {
+    val origin = headers["origin"] ?: if (first[0] == "GET" && first[1].startsWith("/gateway/v1/")) {
       cfg.allowedOrigin
     } else {
       throw IllegalArgumentException("origin")
     }
     val length = headers["content-length"]?.toIntOrNull() ?: if (first[0] == "POST") throw IllegalArgumentException("length") else 0
-    if (length < 0 || length > cfg.jsonBodyLimitBytes) throw BodyTooLarge()
+    val bodyLimit = if (first[1] in setOf("/gateway/v1/envelopes/import", "/gateway/v1/receipts/import")) cfg.signedBodyLimitBytes else cfg.jsonBodyLimitBytes
+    if (length < 0 || length > bodyLimit) throw BodyTooLarge()
     val body = ByteArray(length)
     var offset = 0
     while (offset < length) {
@@ -467,7 +479,8 @@ class GatewayLocalServer(
 
   private fun writeResponse(socket: SSLSocket, response: Response) {
     val reason = when (response.status) {
-      200 -> "OK"; 400 -> "Bad Request"; 401 -> "Unauthorized"; 403 -> "Forbidden"; 404 -> "Not Found"
+      200 -> "OK"; 201 -> "Created"; 400 -> "Bad Request"; 401 -> "Unauthorized"; 403 -> "Forbidden"; 404 -> "Not Found"
+      422 -> "Unprocessable Content"
       409 -> "Conflict"; 410 -> "Gone"; 413 -> "Payload Too Large"; 415 -> "Unsupported Media Type"
       429 -> "Too Many Requests"; 503 -> "Service Unavailable"; else -> "Error"
     }
