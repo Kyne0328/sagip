@@ -6,7 +6,7 @@ import {GatewayClient} from './gatewayClient.js';
 import {IncidentMapView, type IncidentMapItem} from './incidentMap.js';
 import {syncSnapshot} from './incidentSnapshot.js';
 import {createWebAuthnUserVerifier, unlockOffline} from './offlineAccess.js';
-import {inspectReadiness, type ReadinessResult} from './offlinePackage.js';
+import {inspectReadiness, preparePackage, type OfflineManifest, type ReadinessResult} from './offlinePackage.js';
 import type {BrowserVerificationContext} from './receiptVerifier.js';
 
 interface DashboardState {
@@ -40,6 +40,7 @@ declare global {
       safeLogout(): Promise<unknown>;
       discardAndLogout(reason: string): Promise<unknown>;
       refreshSnapshot(): Promise<unknown>;
+      prepareMap(): Promise<unknown>;
     };
   }
 }
@@ -53,6 +54,8 @@ const mapPlaceholder = required('incidentMapPlaceholder');
 const mapCoverage = required('mapCoverage');
 const mapAnnouncement = required('mapAnnouncement');
 const discardButton = requiredButton('offlineDiscardButton');
+const prepareMapButton = requiredButton('prepareMapButton');
+const TAGUM_MANIFEST_PATH = '/responder/map/tagum/manifest.json';
 
 let store: ConsoleStore | null = null;
 let outbox: ActionOutbox | null = null;
@@ -73,6 +76,10 @@ window.addEventListener('sagip:incidents', event => {
   const detail = (event as CustomEvent<DashboardState>).detail;
   void mapView.render(detail.incidents, detail.selectedReportId);
   mapView.select(detail.selectedReportId);
+});
+
+prepareMapButton.addEventListener('click', () => {
+  void prepareTagumMap();
 });
 
 discardButton.addEventListener('click', async () => {
@@ -101,8 +108,10 @@ async function initialize(): Promise<void> {
   mapReadiness = await inspectReadiness().catch(() => ({kind: 'INCOMPLETE', reason: 'READINESS_UNAVAILABLE'}));
   if (mapReadiness.kind === 'READY') {
     setText(mapStatus, mapReadiness.persistentStorage ? 'Ready · storage persisted' : 'Ready · storage may be evicted');
+    prepareMapButton.hidden = true;
     await mapView.setManifest(mapReadiness.manifest);
   } else {
+    prepareMapButton.hidden = false;
     setText(mapStatus, 'Not prepared');
     await mapView.setManifest(null);
   }
@@ -147,6 +156,7 @@ async function initialize(): Promise<void> {
     safeLogout: () => outbox!.safeLogout({kind: 'EXPORT_TO_GATEWAY'}),
     discardAndLogout: reason => outbox!.safeLogout({kind: 'DISCARD', confirmed: true, reason}),
     refreshSnapshot,
+    prepareMap: prepareTagumMap,
   };
 
   if (navigator.onLine || provider.providerKind === 2) {
@@ -155,6 +165,62 @@ async function initialize(): Promise<void> {
     await updateOutboxReadiness();
   }
   publishCurrentMapState();
+}
+
+async function prepareTagumMap(): Promise<unknown> {
+  if (prepareMapButton.disabled) return {kind: 'IN_PROGRESS'};
+  prepareMapButton.disabled = true;
+  const previousText = prepareMapButton.textContent;
+  prepareMapButton.textContent = 'Preparing Tagum map…';
+  setText(mapStatus, 'Preparing · downloading and verifying map package');
+  try {
+    const response = await fetch(TAGUM_MANIFEST_PATH, {
+      cache: 'no-store',
+      credentials: 'same-origin',
+    });
+    if (!response.ok) throw new Error('MAP_MANIFEST_UNAVAILABLE');
+    const manifest = await response.json() as OfflineManifest;
+    const result = await preparePackage(manifest);
+    if (result.kind === 'READY') {
+      mapReadiness = await inspectReadiness();
+      if (mapReadiness.kind !== 'READY') throw new Error('MAP_READINESS_FAILED');
+      prepareMapButton.hidden = true;
+      setText(
+        mapStatus,
+        mapReadiness.persistentStorage
+          ? 'Ready · Tagum map stored persistently'
+          : 'Ready · Tagum map stored; browser may evict it',
+      );
+      await mapView.setManifest(mapReadiness.manifest);
+      publishCurrentMapState();
+      window.SagipResponderBridge?.showOperationalMessage(
+        'Tagum offline map prepared and verified. Keep this browser profile on the responder device for outage use.',
+      );
+      return result;
+    }
+    if (result.kind === 'INSUFFICIENT_STORAGE') {
+      setText(mapStatus, `Not prepared · needs ${formatBytes(result.requiredBytes)} free`);
+      window.SagipResponderBridge?.showOperationalMessage(
+        `Tagum map was not changed. Free at least ${formatBytes(result.requiredBytes)} in this browser profile and try again.`,
+      );
+      return result;
+    }
+    setText(mapStatus, `Not prepared · ${humanize(result.reason)}`);
+    window.SagipResponderBridge?.showOperationalMessage(
+      'Tagum map preparation did not complete. Any previously prepared complete map remains active.',
+    );
+    return result;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'MAP_PREPARATION_FAILED';
+    setText(mapStatus, `Not prepared · ${humanize(reason)}`);
+    window.SagipResponderBridge?.showOperationalMessage(
+      'Tagum map preparation failed. Connect to the SAGIP responder service and try again before the outage.',
+    );
+    return {kind: 'INCOMPLETE', reason};
+  } finally {
+    prepareMapButton.disabled = false;
+    prepareMapButton.textContent = previousText;
+  }
 }
 
 async function refreshSnapshot(): Promise<unknown> {
@@ -249,6 +315,11 @@ function statusToCode(status: ResponderStatusName): 1 | 2 | 3 | 4 {
 
 function humanize(value: string): string {
   return value.toLowerCase().replaceAll('_', ' ');
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KiB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
 function setText(element: HTMLElement, value: string): void {
