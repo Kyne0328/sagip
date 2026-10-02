@@ -182,6 +182,12 @@ export class GrantProvisioningService {
     input: GatewayGrantRequest,
     operator: AuthorityOperator,
   ): Promise<Uint8Array> {
+    return (await this.issueGatewayGrantResult(input, operator)).bytes;
+  }
+  async issueGatewayGrantResult(
+    input: GatewayGrantRequest,
+    operator: AuthorityOperator,
+  ): Promise<{bytes: Uint8Array; created: boolean}> {
     const r: GatewayGrantRequest = {
       requestId: input.requestId,
       issuerKeyId: Buffer.from(input.issuerKeyId),
@@ -246,7 +252,7 @@ export class GrantProvisioningService {
         if (!equal(existing.request_digest, requestDigest))
           throw new Error('REQUEST_CONFLICT');
         if (existing.revoked_at_ms !== null) throw new Error('GRANT_REVOKED');
-        return existing.object_bytes;
+        return {bytes: existing.object_bytes, created: false};
       }
       if (
         !this.policy.approvedIssuerKeyIds.has(
@@ -314,7 +320,7 @@ export class GrantProvisioningService {
         ],
       );
       await this.audit(c, r.grantId, 'ISSUED', operator, t.timeMs, '');
-      return bytes;
+      return {bytes, created: true};
     });
   }
   async revokeGrant(

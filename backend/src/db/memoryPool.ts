@@ -28,6 +28,12 @@ export function createMemoryPostgresPool(): Pool {
     implementation: () => 1,
   });
   memory.public.registerFunction({
+    name: 'pg_advisory_xact_lock',
+    args: [DataType.bigint],
+    returns: DataType.integer,
+    implementation: () => 1,
+  });
+  memory.public.registerFunction({
     name: 'pg_advisory_unlock',
     args: [DataType.integer],
     returns: DataType.bool,

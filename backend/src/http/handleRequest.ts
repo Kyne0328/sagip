@@ -1,5 +1,6 @@
 import {IngestionConflictError, IngestionTransientError, type ServerReceipt} from '../ingestion/service.js';
 import {MAX_ENVELOPE_BYTES} from '../protocol/envelopeV1.js';
+import {MAX_RECEIPT_BYTES} from '../protocol/receiptV2.js';
 import {ProtocolValidationError} from '../protocol/errors.js';
 import {
   RESPONDER_SESSION_TTL_SECONDS,
@@ -8,12 +9,16 @@ import {
   ResponderValidationError,
 } from '../responder/service.js';
 import type {ResponderIdentity, ResponderStatus} from '../responder/types.js';
+import type {ActionCommitResult, ActionIntent, ReceiptService} from '../responder/receiptService.js';
+import type {GatewayGrantRequest, GrantProvisioningService, TimeChallenge} from '../responder/grantProvisioning.js';
 import {responderDashboardResponse} from '../responder/dashboard.js';
 import {SlidingWindowRateLimiter, type RateLimiter} from './rateLimiter.js';
 
 export interface SagipServerDependencies {
   ingestEnvelope(bytes: Buffer): Promise<ServerReceipt>;
   responderService?: ResponderService;
+  receiptService?: ReceiptService;
+  authorityService?: GrantProvisioningService;
   rateLimiter?: RateLimiter;
 }
 
@@ -31,6 +36,21 @@ const REPORT_STATUS_RE = new RegExp(`^/v1/reports/(${UUID_SEGMENT})/status$`, 'u
 const INCIDENT_ACK_RE = new RegExp(`^/v1/incidents/(${UUID_SEGMENT})/ack$`, 'u');
 const INCIDENT_DETAIL_RE = new RegExp(`^/v1/incidents/(${UUID_SEGMENT})$`, 'u');
 const RESPONDER_SESSION_PATH = '/v1/responder/session';
+const RECEIPT_IMPORT_PATH = '/v2/responder/receipts/import';
+const RESPONDER_ACTIONS_PATH = '/v2/responder/actions';
+const RESPONDER_ACTION_RE = new RegExp(`^/v2/responder/actions/(${UUID_SEGMENT})$`, 'u');
+const RESPONDER_ACTION_RECEIPT_RE = new RegExp(`^/v2/responder/actions/(${UUID_SEGMENT})/receipt$`, 'u');
+const RECEIPT_ACCESS_CHALLENGE_RE = new RegExp(`^/v2/reports/(${UUID_SEGMENT})/receipt-access/challenges$`, 'u');
+const RECEIPT_ACCESS_RE = new RegExp(`^/v2/reports/(${UUID_SEGMENT})/receipt-access$`, 'u');
+const RECEIPT_PAGE_RE = new RegExp(`^/v2/reports/(${UUID_SEGMENT})/receipts$`, 'u');
+const RECEIPT_READ_COOKIE = '__Host-sagip-receipt-read';
+const AUTHORITY_GRANTS_PATH = '/v2/authority/grants';
+const AUTHORITY_REVOKE_RE = new RegExp(`^/v2/authority/grants/(${UUID_SEGMENT})/revoke$`, 'u');
+const AUTHORITY_STATUS_PATH = '/v2/authority/status';
+const AUTHORITY_TIME_PATH = '/v2/authority/time';
+const UUID_VALUE_RE = new RegExp(`^${UUID_SEGMENT}$`, 'u');
+const NIL_UUID = '00000000-0000-0000-0000-000000000000';
+const MAX_U64 = 18446744073709551615n;
 const RESPONDER_SESSION_COOKIE = '__Host-sagip-responder';
 const RESPONDER_STATUSES = new Set(['PENDING', 'ACKNOWLEDGED', 'EN_ROUTE', 'ON_SCENE', 'RESOLVED']);
 
@@ -56,6 +76,10 @@ export async function handleSagipRequest(
     const isRateLimitedEndpoint =
       pathname === '/v1/envelopes' ||
       pathname === RESPONDER_SESSION_PATH ||
+      pathname === RECEIPT_IMPORT_PATH ||
+      pathname.startsWith('/v2/responder/actions') ||
+      pathname.startsWith('/v2/reports/') ||
+      pathname.startsWith('/v2/authority/') ||
       REPORT_STATUS_RE.test(pathname) ||
       pathname.startsWith('/v1/incidents');
     if (isRateLimitedEndpoint) {
@@ -89,6 +113,235 @@ export async function handleSagipRequest(
       return jsonResponse(200, receipt);
     }
 
+    if (pathname === AUTHORITY_GRANTS_PATH || AUTHORITY_REVOKE_RE.test(pathname) || pathname === AUTHORITY_STATUS_PATH || pathname === AUTHORITY_TIME_PATH) {
+      if (!deps.responderService || !deps.authorityService) {
+        discardRequestBody(context);
+        return jsonResponse(501, {error: 'NOT_IMPLEMENTED'});
+      }
+      const responder = await extractAndAuthResponder(request, deps.responderService);
+      if (!responder) {
+        discardRequestBody(context);
+        return jsonResponse(401, {error: 'SESSION_REQUIRED'});
+      }
+      if (pathname === AUTHORITY_GRANTS_PATH) {
+        if (method !== 'POST') {
+          discardRequestBody(context);
+          return jsonResponse(405, {error: 'METHOD_NOT_ALLOWED'}, {allow: 'POST'});
+        }
+        if (responder.role !== 'AUTHORITY_ADMIN') {
+          discardRequestBody(context);
+          return jsonResponse(403, {error: 'ROLE_REQUIRED'});
+        }
+        if ((request.headers.get('content-type') ?? '').split(';')[0]?.trim().toLowerCase() !== 'application/json') {
+          discardRequestBody(context);
+          return jsonResponse(415, {error: 'UNSUPPORTED_MEDIA_TYPE'});
+        }
+        const requestBody = parseGatewayGrantRequest(await readBoundedBody(request, 4096));
+        const result = await deps.authorityService.issueGatewayGrantResult(requestBody, responder);
+        return binaryResponse(result.created ? 201 : 200, result.bytes);
+      }
+      const revokeMatch = AUTHORITY_REVOKE_RE.exec(pathname);
+      if (revokeMatch) {
+        if (method !== 'POST') {
+          discardRequestBody(context);
+          return jsonResponse(405, {error: 'METHOD_NOT_ALLOWED'}, {allow: 'POST'});
+        }
+        if (responder.role !== 'AUTHORITY_ADMIN') {
+          discardRequestBody(context);
+          return jsonResponse(403, {error: 'ROLE_REQUIRED'});
+        }
+        if ((request.headers.get('content-type') ?? '').split(';')[0]?.trim().toLowerCase() !== 'application/json') {
+          discardRequestBody(context);
+          return jsonResponse(415, {error: 'UNSUPPORTED_MEDIA_TYPE'});
+        }
+        const reason = parseRevokeReason(await readBoundedBody(request, 4096));
+        return jsonResponse(200, await deps.authorityService.revokeGrant(revokeMatch[1] as string, responder, reason));
+      }
+      if (pathname === AUTHORITY_STATUS_PATH) {
+        if (method !== 'GET') {
+          discardRequestBody(context);
+          return jsonResponse(405, {error: 'METHOD_NOT_ALLOWED'}, {allow: 'GET'});
+        }
+        const grantId = parsedUrl.searchParams.get('grantId');
+        if (!grantId || !UUID_VALUE_RE.test(grantId) || parsedUrl.searchParams.size !== 1) {
+          return jsonResponse(400, {error: 'INVALID_FIELDS'});
+        }
+        return jsonResponse(200, await deps.authorityService.authorityStatus(grantId, responder));
+      }
+      if (pathname === AUTHORITY_TIME_PATH) {
+        if (method !== 'POST') {
+          discardRequestBody(context);
+          return jsonResponse(405, {error: 'METHOD_NOT_ALLOWED'}, {allow: 'POST'});
+        }
+        if ((request.headers.get('content-type') ?? '').split(';')[0]?.trim().toLowerCase() !== 'application/json') {
+          discardRequestBody(context);
+          return jsonResponse(415, {error: 'UNSUPPORTED_MEDIA_TYPE'});
+        }
+        const challenge = parseTimeChallenge(await readBoundedBody(request, 4096));
+        return binaryResponse(200, await deps.authorityService.issueAuthorityTimeProof(challenge, responder));
+      }
+    }
+    const receiptChallengeMatch = RECEIPT_ACCESS_CHALLENGE_RE.exec(pathname);
+    if (receiptChallengeMatch) {
+      if (method !== 'POST') {
+        discardRequestBody(context);
+        return jsonResponse(405, {error: 'METHOD_NOT_ALLOWED'}, {allow: 'POST'});
+      }
+      if (!deps.receiptService) {
+        discardRequestBody(context);
+        return jsonResponse(501, {error: 'NOT_IMPLEMENTED'});
+      }
+      const challenge = await deps.receiptService.createReceiptAccessChallenge(receiptChallengeMatch[1] as string);
+      return jsonResponse(201, {
+        ...challenge,
+        originKeyId: Buffer.from(challenge.originKeyId).toString('base64'),
+        nonce: Buffer.from(challenge.nonce).toString('base64'),
+      });
+    }
+
+    const receiptAccessMatch = RECEIPT_ACCESS_RE.exec(pathname);
+    if (receiptAccessMatch) {
+      if (method !== 'POST') {
+        discardRequestBody(context);
+        return jsonResponse(405, {error: 'METHOD_NOT_ALLOWED'}, {allow: 'POST'});
+      }
+      if (!deps.receiptService) {
+        discardRequestBody(context);
+        return jsonResponse(501, {error: 'NOT_IMPLEMENTED'});
+      }
+      if ((request.headers.get('content-type') ?? '').split(';')[0]?.trim().toLowerCase() !== 'application/json') {
+        discardRequestBody(context);
+        return jsonResponse(415, {error: 'UNSUPPORTED_MEDIA_TYPE'});
+      }
+      const body = await readBoundedBody(request, 4096);
+      let parsed: {challengeId: string; signature: Buffer};
+      try {
+        parsed = parseReceiptAccessBody(body);
+      } catch {
+        return jsonResponse(400, {error: 'INVALID_FIELDS'});
+      }
+      const session = await deps.receiptService.authorizeReceiptAccess(
+        receiptAccessMatch[1] as string,
+        parsed.challengeId,
+        parsed.signature,
+      );
+      return jsonResponse(
+        200,
+        {expiresAtMs: session.expiresAtMs},
+        {'set-cookie': createReceiptReadCookie(session.sessionToken)},
+      );
+    }
+
+    const receiptPageMatch = RECEIPT_PAGE_RE.exec(pathname);
+    if (receiptPageMatch) {
+      if (method !== 'GET') {
+        discardRequestBody(context);
+        return jsonResponse(405, {error: 'METHOD_NOT_ALLOWED'}, {allow: 'GET'});
+      }
+      if (!deps.receiptService) {
+        discardRequestBody(context);
+        return jsonResponse(501, {error: 'NOT_IMPLEMENTED'});
+      }
+      const sessionToken = extractCookieValue(request, RECEIPT_READ_COOKIE);
+      if (!sessionToken) return jsonResponse(401, {error: 'SESSION_REQUIRED'});
+      try {
+        const page = await deps.receiptService.listReportReceipts(
+          receiptPageMatch[1] as string,
+          sessionToken,
+          parsedUrl.searchParams.get('cursor'),
+        );
+        return jsonResponse(200, page);
+      } catch (error) {
+        if (error instanceof Error && error.message === 'UNAUTHORIZED') {
+          return jsonResponse(401, {error: 'SESSION_EXPIRED'}, {'set-cookie': clearReceiptReadCookie()});
+        }
+        throw error;
+      }
+    }
+    if (pathname === RESPONDER_ACTIONS_PATH || RESPONDER_ACTION_RE.test(pathname) || RESPONDER_ACTION_RECEIPT_RE.test(pathname)) {
+      if (!deps.responderService || !deps.receiptService) {
+        discardRequestBody(context);
+        return jsonResponse(501, {error: 'NOT_IMPLEMENTED'});
+      }
+      const responder = await extractAndAuthResponder(request, deps.responderService);
+      if (!responder) {
+        discardRequestBody(context);
+        return jsonResponse(401, {error: 'UNAUTHORIZED'});
+      }
+      if (pathname === RESPONDER_ACTIONS_PATH) {
+        if (method !== 'POST') {
+          discardRequestBody(context);
+          return jsonResponse(405, {error: 'METHOD_NOT_ALLOWED'}, {allow: 'POST'});
+        }
+        if ((request.headers.get('content-type') ?? '').split(';')[0]?.trim().toLowerCase() !== 'application/json') {
+          discardRequestBody(context);
+          return jsonResponse(415, {error: 'UNSUPPORTED_MEDIA_TYPE'});
+        }
+        const bodyBytes = await readBoundedBody(request, 4096);
+        let intent: ActionIntent;
+        try {
+          intent = parseActionIntent(bodyBytes);
+        } catch {
+          return jsonResponse(400, {error: 'INVALID_FIELDS'});
+        }
+        const allocation = await deps.receiptService.allocateActionResult(intent, responder);
+        const committed = await deps.receiptService.prepareReceipt(intent.actionId);
+        return jsonResponse(allocation.created ? 201 : 200, actionResultJson(committed));
+      }
+      const receiptMatch = RESPONDER_ACTION_RECEIPT_RE.exec(pathname);
+      if (receiptMatch) {
+        if (method !== 'GET') {
+          discardRequestBody(context);
+          return jsonResponse(405, {error: 'METHOD_NOT_ALLOWED'}, {allow: 'GET'});
+        }
+        const actionId = receiptMatch[1] as string;
+        const owned = await deps.receiptService.getActionResult(actionId, responder);
+        if (!owned) return jsonResponse(404, {error: 'NOT_FOUND'});
+        if (owned.state !== 'SIGNED') return jsonResponse(409, {error: 'RECEIPT_NOT_READY'});
+        const bytes = await deps.receiptService.getReceipt(actionId);
+        if (!bytes) return jsonResponse(409, {error: 'RECEIPT_NOT_READY'});
+        return binaryResponse(200, bytes);
+      }
+      const actionMatch = RESPONDER_ACTION_RE.exec(pathname);
+      if (actionMatch) {
+        if (method !== 'GET') {
+          discardRequestBody(context);
+          return jsonResponse(405, {error: 'METHOD_NOT_ALLOWED'}, {allow: 'GET'});
+        }
+        const result = await deps.receiptService.getActionResult(actionMatch[1] as string, responder);
+        return result
+          ? jsonResponse(200, actionResultJson(result))
+          : jsonResponse(404, {error: 'NOT_FOUND'});
+      }
+    }
+
+    if (pathname === RECEIPT_IMPORT_PATH) {
+      if (method !== 'POST') {
+        discardRequestBody(context);
+        return jsonResponse(405, {error: 'METHOD_NOT_ALLOWED'}, {allow: 'POST'});
+      }
+      if (!deps.responderService || !deps.receiptService) {
+        discardRequestBody(context);
+        return jsonResponse(501, {error: 'NOT_IMPLEMENTED'});
+      }
+      const responder = await extractAndAuthResponder(request, deps.responderService);
+      if (!responder) {
+        discardRequestBody(context);
+        return jsonResponse(401, {error: 'UNAUTHORIZED'});
+      }
+      if ((request.headers.get('content-type') ?? '').trim().toLowerCase() !== 'application/octet-stream') {
+        discardRequestBody(context);
+        return jsonResponse(415, {error: 'UNSUPPORTED_MEDIA_TYPE'});
+      }
+      const bytes = await readBoundedBody(request, MAX_RECEIPT_BYTES);
+      const result = await deps.receiptService.importGatewayReceipt(bytes, responder);
+      return jsonResponse(200, {
+        ...result,
+        issuerProviderId: result.issuerProviderId
+          ? Buffer.from(result.issuerProviderId).toString('base64')
+          : null,
+      });
+    }
     const reportStatusMatch = REPORT_STATUS_RE.exec(pathname);
     if (reportStatusMatch) {
       if (method !== 'GET') {
@@ -287,8 +540,200 @@ export async function handleSagipRequest(
     if (error instanceof ResponderNotFoundError) {
       return jsonResponse(404, {error: 'NOT_FOUND'});
     }
+    if (error instanceof Error) {
+      const code = error.message;
+      if (code === 'ROLE_REQUIRED' || code === 'AUTHORITY_UNAVAILABLE' || code === 'SCOPE_DENIED' || code === 'PURPOSE_DENIED' || code === 'KEY_NOT_APPROVED' || code === 'RESPONDER_NOT_APPROVED' || code === 'CIVILIAN_KEY_REUSE' || code === 'VERIFIER_NOT_APPROVED') {
+        return jsonResponse(403, {error: code});
+      }
+      if (code === 'ACTION_CONFLICT' || code === 'PROVIDER_CONFLICT' || code === 'DIGEST_CONFLICT') {
+        return jsonResponse(409, {error: 'ACTION_CONFLICT'});
+      }
+      if (code === 'INCIDENT_VERSION_CONFLICT' || code === 'EVENT_EQUIVOCATION' || code === 'REQUEST_CONFLICT' || code === 'GRANT_REVOKED' || code === 'SEQUENCE_CONFLICT' || code === 'CHALLENGE_CONSUMED') {
+        return jsonResponse(409, {error: code});
+      }
+      if (code === 'ACTION_NOT_FOUND' || code === 'RECEIPT_NOT_FOUND' || code === 'REPORT_NOT_FOUND' || code === 'CHALLENGE_NOT_FOUND') {
+        return jsonResponse(404, {error: code});
+      }
+      if (code === 'CAPACITY_FULL') return jsonResponse(429, {error: code});
+      if (code === 'SIGNER_UNAVAILABLE' || code === 'TIME_UNAVAILABLE' || code === 'STORAGE_UNAVAILABLE') {
+        return jsonResponse(503, {error: code});
+      }
+      if (code === 'INVALID_SIGNATURE' || code === 'SIGNATURE_INVALID' || code === 'GRANT_INVALID' || code === 'REPORT_BINDING_INVALID' || code === 'REPORT_IDENTITY_CONFLICT' || code === 'KEY_BINDING') {
+        return jsonResponse(422, {error: code});
+      }
+      if (code === 'UNAUTHORIZED') return jsonResponse(401, {error: 'SESSION_REQUIRED'});
+      if (code === 'CHALLENGE_EXPIRED') return jsonResponse(401, {error: 'SESSION_EXPIRED'});
+      if (code === 'INVALID_JSON' || code === 'INVALID_FIELDS' || code === 'INVALID_REVOCATION_REASON' || code === 'INVALID_CURSOR' || code === 'INVALID_TIME' || code === 'INVALID_UUID' || code === 'NOT_RECEIPT') {
+        return jsonResponse(400, {error: code === 'INVALID_REVOCATION_REASON' ? 'INVALID_FIELDS' : code});
+      }
+    }
     return jsonResponse(500, {error: 'INTERNAL_ERROR'});
   }
+}
+
+function strictJsonObject(bytes: Buffer, keys: string[]): Record<string, unknown> {
+  const text = new TextDecoder('utf-8', {fatal: true}).decode(bytes);
+  const value: unknown = JSON.parse(text);
+  if (!isRecord(value) || JSON.stringify(value) !== text.trim()) throw new Error('INVALID_JSON');
+  const actual = Object.keys(value);
+  if (actual.length !== keys.length || actual.some(key => !keys.includes(key))) throw new Error('INVALID_FIELDS');
+  return value;
+}
+
+function canonicalBase64(value: unknown, length?: number): Buffer {
+  if (typeof value !== 'string') throw new Error('INVALID_FIELDS');
+  const bytes = Buffer.from(value, 'base64');
+  if ((length !== undefined && bytes.length !== length) || bytes.toString('base64') !== value) throw new Error('INVALID_FIELDS');
+  return bytes;
+}
+
+function safeInteger(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value)) throw new Error('INVALID_FIELDS');
+  return value;
+}
+
+function requiredString(value: unknown): string {
+  if (typeof value !== 'string') throw new Error('INVALID_FIELDS');
+  return value;
+}
+
+function nonNilUuid(value: unknown): string {
+  const parsed = requiredString(value);
+  if (!UUID_VALUE_RE.test(parsed) || parsed === NIL_UUID)
+    throw new Error('INVALID_FIELDS');
+  return parsed;
+}
+
+function boundedNote(value: unknown): string {
+  if (typeof value !== 'string' || value.includes('\0') ||
+      Buffer.byteLength(value, 'utf8') > 1024 ||
+      Buffer.from(value, 'utf8').toString('utf8') !== value)
+    throw new Error('INVALID_FIELDS');
+  return value;
+}
+
+function parseGatewayGrantRequest(bytes: Buffer): GatewayGrantRequest {
+  const value = strictJsonObject(bytes, [
+    'requestId','issuerKeyId','issuerPublicKeyDer','issuerProviderId','grantId',
+    'responderId','callsign','statusMask','purposeMask','scope',
+  ]);
+  return {
+    requestId: requiredString(value.requestId),
+    issuerKeyId: canonicalBase64(value.issuerKeyId, 32),
+    issuerPublicKeyDer: canonicalBase64(value.issuerPublicKeyDer),
+    issuerProviderId: canonicalBase64(value.issuerProviderId, 32),
+    grantId: requiredString(value.grantId),
+    responderId: requiredString(value.responderId),
+    callsign: requiredString(value.callsign),
+    statusMask: safeInteger(value.statusMask),
+    purposeMask: safeInteger(value.purposeMask),
+    scope: requiredString(value.scope),
+  };
+}
+
+function parseRevokeReason(bytes: Buffer): string {
+  const value = strictJsonObject(bytes, ['reason']);
+  return requiredString(value.reason);
+}
+
+function parseTimeChallenge(bytes: Buffer): TimeChallenge {
+  const value = strictJsonObject(bytes, ['verifierId','verifierBootSessionId','nonce']);
+  const verifierBootSessionId = requiredString(value.verifierBootSessionId);
+  if (!UUID_VALUE_RE.test(verifierBootSessionId)) throw new Error('INVALID_FIELDS');
+  return {
+    verifierId: canonicalBase64(value.verifierId, 32),
+    verifierBootSessionId,
+    nonce: canonicalBase64(value.nonce, 32),
+  };
+}
+function parseReceiptAccessBody(bytes: Buffer): {challengeId: string; signature: Buffer} {
+  const text = new TextDecoder('utf-8', {fatal: true}).decode(bytes);
+  const value: unknown = JSON.parse(text);
+  if (!isRecord(value) || JSON.stringify(value) !== text.trim()) throw new Error('INVALID_JSON');
+  const keys = Object.keys(value);
+  if (keys.length !== 2 || !keys.includes('challengeId') || !keys.includes('signatureBase64')) throw new Error('INVALID_FIELDS');
+  if (typeof value.challengeId !== 'string' || typeof value.signatureBase64 !== 'string') throw new Error('INVALID_FIELDS');
+  const signature = Buffer.from(value.signatureBase64, 'base64');
+  if (signature.length !== 64 || signature.toString('base64') !== value.signatureBase64) throw new Error('INVALID_FIELDS');
+  return {challengeId: value.challengeId, signature};
+}
+
+function extractCookieValue(request: Request, name: string): string | null {
+  const raw = request.headers.get('cookie');
+  if (!raw) return null;
+  for (const part of raw.split(';')) {
+    const separator = part.indexOf('=');
+    if (separator < 0 || part.slice(0, separator).trim() !== name) continue;
+    const value = part.slice(separator + 1).trim();
+    return value && value.length <= 256 ? value : null;
+  }
+  return null;
+}
+
+function createReceiptReadCookie(sessionToken: string): string {
+  return [
+    `${RECEIPT_READ_COOKIE}=${sessionToken}`,
+    'Path=/',
+    'HttpOnly',
+    'Secure',
+    'SameSite=Strict',
+    'Max-Age=900',
+  ].join('; ');
+}
+
+function clearReceiptReadCookie(): string {
+  return [
+    `${RECEIPT_READ_COOKIE}=`,
+    'Path=/',
+    'HttpOnly',
+    'Secure',
+    'SameSite=Strict',
+    'Max-Age=0',
+    'Expires=Thu, 01 Jan 1970 00:00:00 GMT',
+  ].join('; ');
+}
+function parseActionIntent(bytes: Buffer): ActionIntent {
+  const text = new TextDecoder('utf-8', {fatal: true}).decode(bytes);
+  const parsed: unknown = JSON.parse(text);
+  if (!isRecord(parsed) || JSON.stringify(parsed) !== text.trim()) throw new Error('INVALID_JSON');
+  const keys = ['actionId','providerKind','issuerProviderId','reportId','reportProtocolVersion','revision','payloadDigest','originKeyId','responderId','observedIncidentVersion','status','note','actionDigest'];
+  if (Object.keys(parsed).length !== keys.length || Object.keys(parsed).some(k => !keys.includes(k))) throw new Error('INVALID_FIELDS');
+  const providerKind = safeInteger(parsed.providerKind);
+  const reportProtocolVersion = safeInteger(parsed.reportProtocolVersion);
+  const revision = safeInteger(parsed.revision);
+  const status = safeInteger(parsed.status);
+  if ((providerKind !== 1 && providerKind !== 2) ||
+      (reportProtocolVersion !== 1 && reportProtocolVersion !== 2) ||
+      revision < 1 || revision > 2147483647 || status < 1 || status > 4)
+    throw new Error('INVALID_FIELDS');
+  if (typeof parsed.observedIncidentVersion !== 'string' ||
+      !/^(0|[1-9][0-9]*)$/u.test(parsed.observedIncidentVersion))
+    throw new Error('INVALID_FIELDS');
+  const observedIncidentVersion = BigInt(parsed.observedIncidentVersion);
+  if (observedIncidentVersion > MAX_U64) throw new Error('INVALID_FIELDS');
+  return {
+    actionId: nonNilUuid(parsed.actionId),
+    providerKind,
+    issuerProviderId: canonicalBase64(parsed.issuerProviderId, 32),
+    reportId: nonNilUuid(parsed.reportId),
+    reportProtocolVersion,
+    revision,
+    payloadDigest: canonicalBase64(parsed.payloadDigest, 32),
+    originKeyId: canonicalBase64(parsed.originKeyId, 32),
+    responderId: nonNilUuid(parsed.responderId),
+    observedIncidentVersion,
+    status,
+    note: boundedNote(parsed.note),
+    actionDigest: canonicalBase64(parsed.actionDigest, 32),
+  };
+}
+
+function actionResultJson(result: ActionCommitResult) {
+  return {
+    ...result,
+    issuerProviderId: Buffer.from(result.issuerProviderId).toString('base64'),
+    actionDigest: Buffer.from(result.actionDigest).toString('base64'),
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -396,6 +841,19 @@ async function readBoundedBody(request: Request, maxBytes: number): Promise<Buff
 
 function discardRequestBody(context: SagipRequestContext): void {
   context.discardBody?.();
+}
+
+function binaryResponse(status: number, body: Uint8Array): Response {
+  const bytes = Buffer.from(body);
+  return new Response(bytes, {
+    status,
+    headers: {
+      'content-type': 'application/octet-stream',
+      'content-length': String(bytes.length),
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+    },
+  });
 }
 
 function emptyResponse(
