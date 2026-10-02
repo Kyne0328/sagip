@@ -798,16 +798,16 @@ class ReceiptRepositoryTest {
       sentElapsedMs = 5_000L,
       createdAtMs = 40_000L,
     )
+    val proofBytes = ByteArray(96) { (it + 1).toByte() }
     val checkpoint = TimeCheckpoint(
       earliestMs = 45_000L,
       latestMs = 45_100L,
       bootId = bootId,
       receivedElapsedMs = 5_100L,
       validUntilMs = 100_000L,
-      proofDigest = "abcd",
+      proofDigest = hex(MessageDigest.getInstance("SHA-256").digest(proofBytes)),
     )
-
-    assertTrue(repository.commitTimeCheckpoint(challengeId, verifierId, nonce, checkpoint))
+    assertTrue(repository.commitTimeCheckpoint(challengeId, verifierId, nonce, checkpoint, proofBytes))
     assertTrue(!repository.commitTimeCheckpoint(challengeId, verifierId, nonce, checkpoint))
 
     val second = UUID.randomUUID().toString()
@@ -826,6 +826,7 @@ class ReceiptRepositoryTest {
     val restored = ReceiptRepository(requireNotNull(database)).latestTimeCheckpoint(verifierId)
     assertNotNull(restored)
     assertEquals(checkpoint, restored)
+    assertArrayEquals(proofBytes, ReceiptRepository(requireNotNull(database)).latestTimeProof(verifierId))
     assertEquals(null, ReceiptAuthority.advanceCheckpoint(checkpoint, MonotonicClock(UUID.randomUUID().toString(), 5_200L)))
   }
 

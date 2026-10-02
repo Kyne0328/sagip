@@ -98,6 +98,61 @@ class ResponderGatewayServiceTest {
     assertEquals(1, count("receipt_records"))
   }
 
+  @Test fun delegated_time_proof_survives_reopen_and_stops_after_reboot() {
+    val s = service(); trust(s)
+    assertEquals("ACCEPTED", s.provisionGrant(grant()).state)
+    fun browserChallenge(seed: Int) = TimeChallenge(
+      UUID.randomUUID().toString(),
+      ByteArray(32) { seed.toByte() },
+      UUID.randomUUID().toString(),
+      ByteArray(32) { (seed + 1).toByte() },
+      elapsed,
+      null,
+      s.verificationContext(),
+      { true },
+    )
+
+    val challenge = browserChallenge(3)
+    val first = s.issueTimeProof(challenge)
+    assertEquals("AVAILABLE", first.kind)
+    val firstBytes = requireNotNull(first.bytes)
+    assertArrayEquals(firstBytes, requireNotNull(s.issueTimeProof(challenge).bytes))
+    assertEquals("CHALLENGE_CONFLICT", s.issueTimeProof(challenge.copy(nonce = ByteArray(32) { 99.toByte() })).reason)
+    val decoded = ReceiptV2Codec.decode(firstBytes)
+    val fields = decoded.fields as ReceiptFields.Time
+    assertTrue(ReceiptV2Codec.verifySignature(decoded, gateway.publicKeyDer))
+    assertArrayEquals(ByteArray(32) { 3 }, fields.verifierId)
+    assertTrue(decoded.proof.isNotEmpty())
+
+    db.close(); db = SagipDatabase(context); elapsed += 1_000L
+    assertArrayEquals(firstBytes, requireNotNull(service().issueTimeProof(challenge).bytes))
+    assertEquals("AVAILABLE", service().issueTimeProof(browserChallenge(5)).kind)
+
+    boot = UUID.randomUUID().toString()
+    assertEquals("TIME_UNAVAILABLE", service().issueTimeProof(browserChallenge(7)).kind)
+  }
+
+  @Test fun delegated_time_proof_resumes_reserved_request_after_restart() {
+    val s = service(); trust(s)
+    assertEquals("ACCEPTED", s.provisionGrant(grant()).state)
+    val challenge = TimeChallenge(
+      UUID.randomUUID().toString(),
+      ByteArray(32) { 13 },
+      UUID.randomUUID().toString(),
+      ByteArray(32) { 14 },
+      elapsed,
+      null,
+      s.verificationContext(),
+      { true },
+    )
+    db.writableDatabase.execSQL(
+      "INSERT INTO gateway_time_requests(challenge_id,verifier_id,verifier_boot_session_id,nonce,created_at_ms) VALUES(?,?,?,?,?)",
+      arrayOf<Any?>(challenge.id, challenge.verifierId, challenge.verifierBootSessionId, challenge.nonce, now),
+    )
+    db.close(); db = SagipDatabase(context); elapsed += 1_000L
+    assertEquals("AVAILABLE", service().issueTimeProof(challenge).kind)
+  }
+
   @Test fun denied_access_wrong_key_expiry_and_reboot_never_issue_verified_receipts() {
     val s = service(); val id = report(); trust(s)
     assertEquals("REJECTED", s.provisionGrant(grant(GatewayTestIdentity())).state)
@@ -125,9 +180,11 @@ class ResponderGatewayServiceTest {
     db.writableDatabase.execSQL("DROP TABLE gateway_pairing_clock")
     db.writableDatabase.execSQL("DROP TABLE gateway_admission_global")
     db.writableDatabase.execSQL("DROP TABLE gateway_admission_sources")
+    db.writableDatabase.execSQL("DROP TABLE gateway_time_requests")
+    db.writableDatabase.execSQL("ALTER TABLE receipt_time_checkpoints DROP COLUMN proof_bytes")
     db.writableDatabase.version = 11
     db.close(); db = SagipDatabase(context)
-    assertEquals(14, db.readableDatabase.version)
+    assertEquals(15, db.readableDatabase.version)
     assertEquals(id, service().listGatewayIncidents().single().identity.reportId)
     val s = service(); trust(s); assertEquals("ACCEPTED", s.provisionGrant(grant()).state)
     failSigning = true

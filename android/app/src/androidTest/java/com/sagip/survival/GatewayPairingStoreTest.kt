@@ -171,9 +171,11 @@ class GatewayPairingStoreTest {
     db.writableDatabase.execSQL("DROP TABLE gateway_pairing_clock")
     db.writableDatabase.execSQL("DROP TABLE gateway_admission_global")
     db.writableDatabase.execSQL("DROP TABLE gateway_admission_sources")
+    db.writableDatabase.execSQL("DROP TABLE gateway_time_requests")
+    db.writableDatabase.execSQL("ALTER TABLE receipt_time_checkpoints DROP COLUMN proof_bytes")
     db.writableDatabase.version = 12
     db.close(); db = SagipDatabase(context)
-    assertEquals(14, db.readableDatabase.version)
+    assertEquals(15, db.readableDatabase.version)
     db.readableDatabase.rawQuery("SELECT note FROM gateway_work WHERE action_id=?", arrayOf(actionId)).use {
       assertTrue(it.moveToFirst()); assertEquals("preserve me", it.getString(0))
     }

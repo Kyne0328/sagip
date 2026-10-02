@@ -593,7 +593,10 @@ class ReceiptRepository(
     verifierId: ByteArray,
     nonce: ByteArray,
     checkpoint: TimeCheckpoint,
+    proofBytes: ByteArray? = null,
   ): Boolean {
+    require(proofBytes == null || proofBytes.size <= ReceiptV2Codec.MAX_RECEIPT_BYTES) { "time proof size" }
+    require(proofBytes == null || hex(sha256(proofBytes)) == checkpoint.proofDigest) { "time proof digest" }
     val db = database.writableDatabase
     db.beginTransaction()
     try {
@@ -632,6 +635,7 @@ class ReceiptRepository(
         put("received_elapsed_ms", checkpoint.receivedElapsedMs)
         put("valid_until_ms", checkpoint.validUntilMs)
         put("proof_digest", checkpoint.proofDigest)
+        if (proofBytes != null) put("proof_bytes", proofBytes)
         put("committed_at_ms", now())
       })
       db.execSQL(
@@ -665,6 +669,11 @@ class ReceiptRepository(
       cursor.getString(5),
     )
   }
+
+  fun latestTimeProof(verifierId: ByteArray): ByteArray? = database.readableDatabase.rawQuery(
+    "SELECT proof_bytes FROM receipt_time_checkpoints WHERE lower(hex(verifier_id))=? AND proof_bytes IS NOT NULL ORDER BY checkpoint_id DESC LIMIT 1",
+    arrayOf(hex(verifierId)),
+  ).use { cursor -> if (cursor.moveToFirst()) cursor.getBlob(0) else null }
 
   private fun responderForwardingExpiry(profile: ResponderSignerProfile, issuedAt: Long): Long {
     val receiptExpiry = Math.addExact(issuedAt, WEEK_MS)
@@ -950,7 +959,7 @@ class ReceiptRepository(
     database.writableDatabase.execSQL("UPDATE requester_receipt_actions SET lease_token=NULL,lease_until_ms=NULL WHERE ack_event_id=? AND lease_token=?", arrayOf(ackId, token))
   }
 
-  private fun encodeFresh(fields: ReceiptFields, proof: ByteArray, identity: SigningIdentity): ByteArray {
+  internal fun encodeFresh(fields: ReceiptFields, proof: ByteArray, identity: SigningIdentity): ByteArray {
     val one = ByteArray(32).also { it[31] = 1 }
     val placeholder = one + one
     val encoded = ReceiptV2Codec.encode(fields, placeholder, proof)

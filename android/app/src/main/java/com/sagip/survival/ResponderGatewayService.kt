@@ -7,6 +7,7 @@ import java.security.SecureRandom
 import java.util.UUID
 
 data class GrantProvisionResult(val state: String, val reason: String? = null)
+data class TimeProofResult(val kind: String, val bytes: ByteArray? = null, val reason: String? = null)
 data class GatewayIncident(val identity: ReportIdentity, val observedIncidentVersion: Long,
   val emergencyType: EmergencyType, val urgency: Urgency, val location: LocationSnapshot?,
   val receiptTimeline: List<ByteArray>, val pendingActions: List<ActionIntent>)
@@ -69,21 +70,199 @@ class ResponderGatewayService(
     return loadChallenge(id) ?: error("STORAGE_UNAVAILABLE")
   }
 
-  private fun loadChallenge(id: String): TimeChallenge? = database.readableDatabase.rawQuery(
+  private fun loadChallenge(id: String, proofBytes: ByteArray? = null): TimeChallenge? = database.readableDatabase.rawQuery(
     "SELECT verifier_id,verifier_boot_session_id,nonce,sent_elapsed_ms,high_water_earliest_ms,consumed_at_ms FROM receipt_time_challenges WHERE challenge_id=?",
     arrayOf(id),
   ).use { c ->
     if (!c.moveToFirst() || !c.isNull(5)) null else {
       val verifier = c.getBlob(0); val boot = c.getString(1); val nonce = c.getBlob(2)
       TimeChallenge(id, verifier, boot, nonce, c.getLong(3), if (c.isNull(4)) null else c.getLong(4),
-        verificationContext(), { checkpoint -> receipts.commitTimeCheckpoint(id, verifier, nonce, checkpoint) })
+        verificationContext(), { checkpoint -> receipts.commitTimeCheckpoint(id, verifier, nonce, checkpoint, proofBytes) })
     }
   }
 
   fun acceptAuthorityTimeProof(challengeId: String, bytes: ByteArray): TimeAcceptance {
     access()
-    val q = loadChallenge(challengeId) ?: return TimeAcceptance("REJECTED", reason = "CHALLENGE_UNAVAILABLE")
-    return ReceiptAuthority.acceptTimeProof(bytes.copyOf(), q, monotonicClock())
+    val owned = bytes.copyOf()
+    val q = loadChallenge(challengeId, owned) ?: return TimeAcceptance("REJECTED", reason = "CHALLENGE_UNAVAILABLE")
+    return ReceiptAuthority.acceptTimeProof(owned, q, monotonicClock())
+  }
+
+  @Synchronized fun issueTimeProof(challenge: TimeChallenge): TimeProofResult {
+    if (!deviceAccess()) return TimeProofResult("TIME_UNAVAILABLE", reason = "DEVICE_ACCESS_REQUIRED")
+    if (challenge.verifierId.size != 32 || challenge.nonce.size != 32 ||
+      runCatching { UUID.fromString(challenge.id) }.isFailure ||
+      runCatching { UUID.fromString(challenge.verifierBootSessionId) }.isFailure) {
+      return TimeProofResult("TIME_UNAVAILABLE", reason = "CHALLENGE_INVALID")
+    }
+    existingGatewayTimeRequest(challenge)?.let { existing ->
+      if (!existing.matches(challenge)) return TimeProofResult("TIME_UNAVAILABLE", reason = "CHALLENGE_CONFLICT")
+      existing.bytes?.let { return TimeProofResult("AVAILABLE", it.copyOf()) }
+      // A crash can leave an exact reserved request without proof bytes. Resume the same challenge.
+    }
+    val identity = runCatching(identityProvider).getOrNull()
+      ?: return TimeProofResult("TIME_UNAVAILABLE", reason = "SIGNER_UNAVAILABLE")
+    val grant = activeGrant()?.first
+      ?: return TimeProofResult("TIME_UNAVAILABLE", reason = "AUTHORITY_UNAVAILABLE")
+    if (grant.purposeMask and 8 == 0 || !same(grant.issuerKeyId, identity.keyId)) {
+      return TimeProofResult("TIME_UNAVAILABLE", reason = "AUTHORITY_UNAVAILABLE")
+    }
+    val clock = monotonicClock()
+    val checkpoint = receipts.latestTimeCheckpoint(identity.keyId)
+      ?: return TimeProofResult("TIME_UNAVAILABLE", reason = "TIME_UNAVAILABLE")
+    if (clock.bootId != checkpoint.bootId || clock.elapsedMs < checkpoint.receivedElapsedMs) {
+      return TimeProofResult("TIME_UNAVAILABLE", reason = "TIME_UNAVAILABLE")
+    }
+    val parentBytes = receipts.latestTimeProof(identity.keyId)
+      ?: return TimeProofResult("TIME_UNAVAILABLE", reason = "TIME_UNAVAILABLE")
+    if (hex(hash(parentBytes)) != checkpoint.proofDigest) {
+      return TimeProofResult("TIME_UNAVAILABLE", reason = "TIME_PROOF_MISMATCH")
+    }
+    val parentDecoded = runCatching { ReceiptV2Codec.decode(parentBytes) }.getOrNull()
+      ?: return TimeProofResult("TIME_UNAVAILABLE", reason = "TIME_PROOF_INVALID")
+    val parent = parentDecoded.fields as? ReceiptFields.Time
+      ?: return TimeProofResult("TIME_UNAVAILABLE", reason = "TIME_PROOF_INVALID")
+    val root = pinnedRoots[hex(parent.signerKeyId)]
+      ?: return TimeProofResult("TIME_UNAVAILABLE", reason = "UNKNOWN_ROOT")
+    if (!same(hash(root), parent.signerKeyId) || !ReceiptV2Codec.verifySignature(parentDecoded, root) ||
+      parent.grantId != NIL || !same(parent.verifierId, identity.keyId) ||
+      parent.verifierBootSessionId != checkpoint.bootId || parent.elapsedSinceCheckpointMs != 0L ||
+      parent.parentCheckpointDigest.any { it != 0.toByte() }) {
+      return TimeProofResult("TIME_UNAVAILABLE", reason = "TIME_PROOF_INVALID")
+    }
+    val grantBytes = database.readableDatabase.rawQuery(
+      "SELECT object_bytes FROM receipt_grants WHERE grant_id=? AND revoked_at_ms IS NULL",
+      arrayOf(grant.grantId),
+    ).use { c -> if (c.moveToFirst()) c.getBlob(0) else null }
+      ?: return TimeProofResult("TIME_UNAVAILABLE", reason = "AUTHORITY_UNAVAILABLE")
+    val elapsed = clock.elapsedMs - checkpoint.receivedElapsedMs
+    val drift = (elapsed + 9999L) / 10000L
+    val acquisitionUncertainty = maxOf(parent.uncertaintyMs, checkpoint.latestMs - parent.signedTimeMs)
+    val uncertainty = runCatching { Math.addExact(acquisitionUncertainty, drift) }.getOrNull()
+      ?: return TimeProofResult("TIME_UNAVAILABLE", reason = "TIME_UNAVAILABLE")
+    val signedTime = runCatching { Math.addExact(parent.signedTimeMs, elapsed) }.getOrNull()
+      ?: return TimeProofResult("TIME_UNAVAILABLE", reason = "TIME_UNAVAILABLE")
+    val validUntil = minOf(grant.expiresAtMs, parent.validUntilMs, checkpoint.validUntilMs)
+    if (uncertainty !in 0..86400000L || signedTime - uncertainty < grant.notBeforeMs ||
+      signedTime + uncertainty >= validUntil) {
+      return TimeProofResult("TIME_UNAVAILABLE", reason = "TIME_UNAVAILABLE")
+    }
+    val proof = ByteBuffer.allocate(1 + 2 + grantBytes.size + 2 + parentBytes.size)
+      .put(2).putShort(grantBytes.size.toShort()).put(grantBytes)
+      .putShort(parentBytes.size.toShort()).put(parentBytes).array()
+    if (proof.size > ReceiptV2Codec.MAX_RECEIPT_BYTES) {
+      return TimeProofResult("TIME_UNAVAILABLE", reason = "PROOF_TOO_LARGE")
+    }
+    val reserve = reserveGatewayTimeRequest(challenge)
+    if (reserve != null) return reserve
+    val fields = ReceiptFields.Time(
+      proofId = challenge.id,
+      signerProviderId = grant.issuerProviderId.copyOf(),
+      signerKeyId = identity.keyId.copyOf(),
+      grantId = grant.grantId,
+      signerBootSessionId = clock.bootId,
+      verifierId = challenge.verifierId.copyOf(),
+      verifierBootSessionId = challenge.verifierBootSessionId,
+      nonce = challenge.nonce.copyOf(),
+      parentCheckpointDigest = hash(parentBytes),
+      signedTimeMs = signedTime,
+      elapsedSinceCheckpointMs = elapsed,
+      uncertaintyMs = uncertainty,
+      validUntilMs = validUntil,
+    )
+    return try {
+      val signed = receipts.encodeFresh(fields, proof, identity)
+      persistGatewayTimeProof(challenge, signed)
+    } catch (_: Exception) {
+      TimeProofResult("TIME_UNAVAILABLE", reason = "SIGNER_UNAVAILABLE")
+    }
+  }
+
+  private data class GatewayTimeRequestRow(
+    val verifierId: ByteArray, val verifierBootSessionId: String, val nonce: ByteArray, val bytes: ByteArray?,
+  ) {
+    fun matches(challenge: TimeChallenge) = MessageDigest.isEqual(verifierId, challenge.verifierId) &&
+      verifierBootSessionId == challenge.verifierBootSessionId && MessageDigest.isEqual(nonce, challenge.nonce)
+  }
+
+  private fun existingGatewayTimeRequest(challenge: TimeChallenge): GatewayTimeRequestRow? =
+    database.readableDatabase.rawQuery(
+      "SELECT verifier_id,verifier_boot_session_id,nonce,proof_bytes FROM gateway_time_requests WHERE challenge_id=?",
+      arrayOf(challenge.id),
+    ).use { c ->
+      if (!c.moveToFirst()) null else GatewayTimeRequestRow(
+        c.getBlob(0), c.getString(1), c.getBlob(2), if (c.isNull(3)) null else c.getBlob(3),
+      )
+    }
+
+  private fun reserveGatewayTimeRequest(challenge: TimeChallenge): TimeProofResult? {
+    val db = database.writableDatabase
+    db.beginTransaction()
+    try {
+      val existing = db.rawQuery(
+        "SELECT verifier_id,verifier_boot_session_id,nonce,proof_bytes FROM gateway_time_requests WHERE challenge_id=?",
+        arrayOf(challenge.id),
+      ).use { c ->
+        if (!c.moveToFirst()) null else GatewayTimeRequestRow(
+          c.getBlob(0), c.getString(1), c.getBlob(2), if (c.isNull(3)) null else c.getBlob(3),
+        )
+      }
+      if (existing != null) {
+        if (!existing.matches(challenge)) {
+          db.setTransactionSuccessful()
+          return TimeProofResult("TIME_UNAVAILABLE", reason = "CHALLENGE_CONFLICT")
+        }
+        existing.bytes?.let {
+          db.setTransactionSuccessful()
+          return TimeProofResult("AVAILABLE", it.copyOf())
+        }
+        db.setTransactionSuccessful()
+        return null
+      }
+      val count = db.rawQuery("SELECT COUNT(*) FROM gateway_time_requests", null).use { c -> c.moveToFirst(); c.getInt(0) }
+      if (count >= MAX_GATEWAY_TIME_REQUESTS) {
+        db.setTransactionSuccessful()
+        return TimeProofResult("TIME_UNAVAILABLE", reason = "CAPACITY_FULL")
+      }
+      db.insertOrThrow("gateway_time_requests", null, ContentValues().apply {
+        put("challenge_id", challenge.id)
+        put("verifier_id", challenge.verifierId)
+        put("verifier_boot_session_id", challenge.verifierBootSessionId)
+        put("nonce", challenge.nonce)
+        put("created_at_ms", wallClock())
+      })
+      db.setTransactionSuccessful()
+      return null
+    } finally { db.endTransaction() }
+  }
+
+  private fun persistGatewayTimeProof(challenge: TimeChallenge, signed: ByteArray): TimeProofResult {
+    val db = database.writableDatabase
+    db.beginTransaction()
+    try {
+      val row = db.rawQuery(
+        "SELECT verifier_id,verifier_boot_session_id,nonce,proof_bytes FROM gateway_time_requests WHERE challenge_id=?",
+        arrayOf(challenge.id),
+      ).use { c ->
+        if (!c.moveToFirst()) null else GatewayTimeRequestRow(
+          c.getBlob(0), c.getString(1), c.getBlob(2), if (c.isNull(3)) null else c.getBlob(3),
+        )
+      } ?: return TimeProofResult("TIME_UNAVAILABLE", reason = "STORAGE_UNAVAILABLE")
+      if (!row.matches(challenge)) return TimeProofResult("TIME_UNAVAILABLE", reason = "CHALLENGE_CONFLICT")
+      row.bytes?.let {
+        db.setTransactionSuccessful()
+        return TimeProofResult("AVAILABLE", it.copyOf())
+      }
+      db.execSQL(
+        "UPDATE gateway_time_requests SET proof_bytes=?,proof_digest=? WHERE challenge_id=? AND proof_bytes IS NULL",
+        arrayOf<Any?>(signed, hash(signed), challenge.id),
+      )
+      val stored = db.rawQuery("SELECT proof_bytes FROM gateway_time_requests WHERE challenge_id=?", arrayOf(challenge.id)).use { c ->
+        if (c.moveToFirst() && !c.isNull(0)) c.getBlob(0) else null
+      } ?: return TimeProofResult("TIME_UNAVAILABLE", reason = "STORAGE_UNAVAILABLE")
+      db.setTransactionSuccessful()
+      return TimeProofResult("AVAILABLE", stored.copyOf())
+    } finally { db.endTransaction() }
   }
 
   @Synchronized fun provisionGrant(bytes: ByteArray): GrantProvisionResult {
@@ -243,5 +422,8 @@ class ResponderGatewayService(
     return ActionCommitResult(actionId, if (bytes == null) ActionCommitState.PREPARING else ActionCommitState.SIGNED, bytes)
   }
 
-  companion object { private const val NIL = "00000000-0000-0000-0000-000000000000" }
+  companion object {
+    private const val NIL = "00000000-0000-0000-0000-000000000000"
+    private const val MAX_GATEWAY_TIME_REQUESTS = 10_000
+  }
 }

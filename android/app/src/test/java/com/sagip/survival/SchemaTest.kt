@@ -7,7 +7,7 @@ import org.junit.Test
 class SchemaTest {
   @Test
   fun `schema version is explicit and preparation state is present`() {
-    assertEquals(14, Schema.VERSION)
+    assertEquals(15, Schema.VERSION)
     val ddl = Schema.CREATE_STATEMENTS.joinToString("\n")
     listOf(
       "reports",
@@ -141,6 +141,13 @@ class SchemaTest {
     assertTrue(migration.contains("idx_relay_transfer_active_object"))
     assertTrue(!migration.contains("DROP TABLE"))
   }
+  @Test
+  fun `v14 to v15 migration preserves delegated time proof bytes`() {
+    val migration = Schema.MIGRATE_14_TO_15.joinToString("\n")
+    assertTrue(migration.contains("ALTER TABLE receipt_time_checkpoints ADD COLUMN proof_bytes BLOB"))
+    assertTrue(!migration.contains("DROP TABLE"))
+  }
+
   @Test
   fun `v10 to v11 migration is non destructive and adds persistent contact quota`() {
     val migration = Schema.MIGRATE_10_TO_11.joinToString("\n")

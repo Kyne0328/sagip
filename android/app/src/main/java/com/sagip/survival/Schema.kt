@@ -1,7 +1,22 @@
 package com.sagip.survival
 
 object Schema {
-  const val VERSION = 14
+  const val VERSION = 15
+
+  private val TIME_PROOF_CREATE_STATEMENTS = listOf(
+    "ALTER TABLE receipt_time_checkpoints ADD COLUMN proof_bytes BLOB",
+    """
+      CREATE TABLE gateway_time_requests (
+        challenge_id TEXT PRIMARY KEY NOT NULL,
+        verifier_id BLOB NOT NULL,
+        verifier_boot_session_id TEXT NOT NULL,
+        nonce BLOB NOT NULL,
+        proof_bytes BLOB,
+        proof_digest BLOB,
+        created_at_ms INTEGER NOT NULL
+      )
+    """.trimIndent(),
+  )
 
   private val ADMISSION_CREATE_STATEMENTS = listOf(
     "CREATE TABLE gateway_admission_global (singleton INTEGER PRIMARY KEY CHECK(singleton=1), boot_id TEXT NOT NULL, window_elapsed_ms INTEGER NOT NULL, request_count INTEGER NOT NULL CHECK(request_count BETWEEN 0 AND 60))",
@@ -437,7 +452,7 @@ object Schema {
     "CREATE INDEX idx_relay_receipts_message ON relay_receipts(message_id)",
     "CREATE INDEX idx_responder_acks_report ON responder_acks(report_id)",
     "CREATE INDEX idx_relay_responder_acks_report ON relay_responder_acks(report_id, acknowledged_at DESC)",
-  ) + RECEIPT_CREATE_STATEMENTS + RELAY_CREATE_STATEMENTS + TRANSFER_CREATE_STATEMENTS + CONTACT_CREATE_STATEMENTS + GATEWAY_CREATE_STATEMENTS + PAIRING_CREATE_STATEMENTS + ADMISSION_CREATE_STATEMENTS
+  ) + RECEIPT_CREATE_STATEMENTS + RELAY_CREATE_STATEMENTS + TRANSFER_CREATE_STATEMENTS + CONTACT_CREATE_STATEMENTS + GATEWAY_CREATE_STATEMENTS + PAIRING_CREATE_STATEMENTS + ADMISSION_CREATE_STATEMENTS + TIME_PROOF_CREATE_STATEMENTS
 
   val MIGRATE_1_TO_2 = listOf(
     "ALTER TABLE outbound_envelopes ADD COLUMN envelope_bytes BLOB",
@@ -548,4 +563,5 @@ object Schema {
   val MIGRATE_11_TO_12 = GATEWAY_CREATE_STATEMENTS
   val MIGRATE_12_TO_13 = PAIRING_CREATE_STATEMENTS
   val MIGRATE_13_TO_14 = ADMISSION_CREATE_STATEMENTS
+  val MIGRATE_14_TO_15 = TIME_PROOF_CREATE_STATEMENTS
 }
