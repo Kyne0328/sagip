@@ -1,0 +1,124 @@
+name: Backend Deploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/backend-deploy.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sagip-backend-production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Validate and deploy Neon backend
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      SAGIP_BACKEND_BASE_URL: ${{ vars.SAGIP_BACKEND_BASE_URL }}
+      NEON_PROJECT_ID: plain-butterfly-00485937
+      NEON_BRANCH: production
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Validate deployment configuration
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in NEON_API_KEY DATABASE_URL SAGIP_BACKEND_BASE_URL; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "Missing required production deployment setting: $name" >&2
+              exit 1
+            fi
+          done
+          if [[ ! "$SAGIP_BACKEND_BASE_URL" =~ ^https:// ]]; then
+            echo "SAGIP_BACKEND_BASE_URL must use HTTPS" >&2
+            exit 1
+          fi
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          npm ci
+          npm --prefix backend ci
+          npm install --global neon@6.1.0
+
+      - name: Validate responder backend and map assets
+        shell: bash
+        run: |
+          npm --prefix backend run typecheck
+          npm --prefix backend run lint
+          npm --prefix backend run build:console
+          (
+            cd backend
+            npx tsx --test test/http/mapAssets.test.ts
+          )
+
+      - name: Link and plan Neon production target
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          neon link --project-id "$NEON_PROJECT_ID" --branch "$NEON_BRANCH" -y
+          neon status
+          neon config plan
+
+      - name: Apply production database migrations
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        shell: bash
+        run: npm --prefix backend run migrate
+
+      - name: Deploy Neon Function configuration
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        shell: bash
+        run: neon deploy
+
+      - name: Verify deployed backend surface
+        shell: bash
+        run: node scripts/verify-backend.mjs "$SAGIP_BACKEND_BASE_URL" --full
+
+      - name: Verify deployed Tagum map surface
+        shell: bash
+        run: |
+          node <<'NODE'
+          const base = process.env.SAGIP_BACKEND_BASE_URL.replace(/\/+$/, '');
+          const checks = [
+            '/responder/map/tagum/manifest.json',
+            '/responder/assets/browser/incidentMap.js',
+            '/responder/assets/maplibre-gl-6.11.2/maplibre-gl.mjs',
+            '/responder/assets/pmtiles-4.5.0/pmtiles.js',
+          ];
+          for (const path of checks) {
+            const response = await fetch(base + path, {
+              redirect: 'manual',
+              signal: AbortSignal.timeout(20000),
+            });
+            if (response.status !== 200) {
+              throw new Error(`${path} returned HTTP ${response.status}; expected 200`);
+            }
+            console.log(`OK ${path}`);
+          }
+          NODE
