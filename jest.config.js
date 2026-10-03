@@ -1,4 +1,4 @@
 module.exports = {
   preset: '@react-native/jest-preset',
-  testPathIgnorePatterns: ['/node_modules/', '<rootDir>/backend/'],
+  testPathIgnorePatterns: ['/node_modules/', '[/\\\\]backend[/\\\\]'],
 };
