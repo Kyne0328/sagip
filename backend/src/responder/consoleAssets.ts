@@ -1,6 +1,9 @@
-import {existsSync, readFileSync} from 'node:fs';
+import {Buffer} from 'node:buffer';
+import {readFileSync} from 'node:fs';
 import {dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
+
+import {BUNDLED_RESPONDER_ASSETS} from './embeddedAssets.js';
 
 export const RESPONDER_MAP_DEPENDENCY_VERSIONS = {
   maplibre: '6.11.2',
@@ -12,19 +15,10 @@ const PMTILES_VERSION = RESPONDER_MAP_DEPENDENCY_VERSIONS.pmtiles;
 const MAPLIBRE_ASSET_ROOT = `/responder/assets/maplibre-gl-${MAPLIBRE_VERSION}`;
 const PMTILES_ASSET_ROOT = `/responder/assets/pmtiles-${PMTILES_VERSION}`;
 const BROWSER_ASSET_ROOT = '/responder/assets/browser';
-const MODULE_ROOT = dirname(fileURLToPath(import.meta.url));
-const DEPLOYED_ASSET_ROOT = join(MODULE_ROOT, 'responder-assets');
-const USE_DEPLOYED_ASSETS = existsSync(DEPLOYED_ASSET_ROOT);
-const BACKEND_ROOT = dirname(dirname(MODULE_ROOT));
-const GENERATED_ASSET_ROOT = USE_DEPLOYED_ASSETS
-  ? join(DEPLOYED_ASSET_ROOT, 'generated')
-  : join(BACKEND_ROOT, '.generated', 'responder-assets');
-const GENERATED_BROWSER_ROOT = USE_DEPLOYED_ASSETS
-  ? join(DEPLOYED_ASSET_ROOT, 'browser')
-  : join(BACKEND_ROOT, '.generated', 'responder-browser');
-const MAP_DATA_ROOT = USE_DEPLOYED_ASSETS
-  ? join(DEPLOYED_ASSET_ROOT, 'map-data')
-  : join(BACKEND_ROOT, 'map-data');
+const BACKEND_ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
+const GENERATED_ASSET_ROOT = join(BACKEND_ROOT, '.generated', 'responder-assets');
+const GENERATED_BROWSER_ROOT = join(BACKEND_ROOT, '.generated', 'responder-browser');
+const MAP_DATA_ROOT = join(BACKEND_ROOT, 'map-data');
 
 export const RESPONDER_MAP_ASSET_PATHS = {
   maplibreModule: `${MAPLIBRE_ASSET_ROOT}/maplibre-gl.mjs`,
@@ -195,7 +189,11 @@ export function consoleAssetResponse(pathname: string, method: string): Response
   try {
     let bytes = cachedBytes.get(pathname);
     if (!bytes) {
-      bytes = new Uint8Array(readFileSync(asset.resolveFile()));
+      const embedded = BUNDLED_RESPONDER_ASSETS[pathname];
+      bytes =
+        embedded === undefined
+          ? new Uint8Array(readFileSync(asset.resolveFile()))
+          : new Uint8Array(Buffer.from(embedded, 'base64'));
       cachedBytes.set(pathname, bytes);
     }
     return new Response(bytes, {
@@ -230,16 +228,10 @@ function browserModule(fileName: string): AssetDescriptor {
 }
 
 function resolveMapLibreDist(): string {
-  if (USE_DEPLOYED_ASSETS) {
-    return join(GENERATED_ASSET_ROOT, `maplibre-gl-${MAPLIBRE_VERSION}`);
-  }
   return dirname(fileURLToPath(import.meta.resolve('maplibre-gl')));
 }
 
 function resolvePmtilesDist(): string {
-  if (USE_DEPLOYED_ASSETS) {
-    return join(GENERATED_ASSET_ROOT, `pmtiles-${PMTILES_VERSION}`);
-  }
   const esmEntry = fileURLToPath(import.meta.resolve('pmtiles'));
   return dirname(dirname(esmEntry));
 }
