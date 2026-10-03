@@ -4,7 +4,7 @@ export default defineConfig({
   // Declare your Neon services here
   auth: false,
   functions: {
-    api: { name: "SAGIP API", source: "./backend/src/neon/api.ts" },
+    api: { name: "SAGIP API", source: "./backend/.generated/neon-api", bundler: "none" },
   },
   // Branch policy: per-branch tuning
   branch: (branch) => {
