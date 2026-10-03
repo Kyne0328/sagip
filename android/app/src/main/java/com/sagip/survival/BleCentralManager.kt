@@ -605,6 +605,10 @@ class BleCentralManager(
     }
 
     private fun continueLegacyAfterReturnAck(gatt: BluetoothGatt) {
+      if (primaryTransferFinished) {
+        readPeerReturnAckOrContinue(gatt)
+        return
+      }
       if (work == null) {
         syncReturnAckAndFinish(gatt)
         return
@@ -739,7 +743,15 @@ class BleCentralManager(
         peerInventorySnapshotId = null
         expectedPeerInventoryPage = 0
         peerInventoryTotalCount = null
-        if (!requestPeerInventory(gatt, null, 0)) gatt.disconnect()
+        val localPage = runCatching {
+          receiptQueue?.inventory(null, DIRECT_TYPED_OFFER_THRESHOLD)
+        }.getOrNull()
+        if (localPage != null && localPage.entries.isNotEmpty() && localPage.nextCursor == null) {
+          fastTypedOffer = true
+          prepareTypedLeases(gatt)
+        } else if (!requestPeerInventory(gatt, null, 0)) {
+          gatt.disconnect()
+        }
         return
       }
       if (characteristic.uuid == BleProtocolConstants.CHARACTERISTIC_EXTENSION_CONTROL_UUID) {
@@ -812,8 +824,35 @@ class BleCentralManager(
             }
           }
         }
-        continueAfterReturnAck(gatt)
+        if (primaryTransferFinished) {
+          syncReturnAckAndFinish(gatt)
+        } else {
+          continueAfterReturnAck(gatt)
+        }
       }
+    }
+
+    private fun readPeerReturnAckOrContinue(gatt: BluetoothGatt) {
+      scheduleTransferProgressTimeout(gatt)
+      val returnAck = returnAckChar
+      val started = try {
+        returnAck != null && gatt.readCharacteristic(returnAck)
+      } catch (_: SecurityException) {
+        false
+      }
+      if (!started) {
+        if (primaryTransferFinished) syncReturnAckAndFinish(gatt) else continueAfterReturnAck(gatt)
+      }
+    }
+
+    private fun scheduleTransferProgressTimeout(gatt: BluetoothGatt) {
+      scheduleConnectionTimeout(
+        gatt.device.address,
+        gatt,
+        if (attemptCompleted) null else transfer,
+        "BLE_TRANSFER_STALLED",
+        TRANSFER_PROGRESS_TIMEOUT_MS,
+      )
     }
 
     private fun syncReturnAckAndFinish(gatt: BluetoothGatt) {
@@ -895,8 +934,12 @@ class BleCentralManager(
       if (receiptStored && transfer != null) {
         completeAttempt(transfer, "SUCCESS", null, ack.third)
         attemptCompleted = true
+        primaryTransferFinished = true
       }
-      syncReturnAckAndFinish(gatt)
+      if (primaryTransferFinished && tryStartReceiptExtension(gatt)) {
+        return
+      }
+      readPeerReturnAckOrContinue(gatt)
     }
 
     private fun discoverServicesOrDisconnect(gatt: BluetoothGatt) {
