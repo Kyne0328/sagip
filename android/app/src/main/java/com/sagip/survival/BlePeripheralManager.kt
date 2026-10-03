@@ -24,6 +24,7 @@ class BlePeripheralManager(
   private val receiptQueue: ReceiptQueue? = null,
   private val verificationContextProvider: () -> VerificationContext? = { null },
   private val nowProvider: () -> Long = { System.currentTimeMillis() },
+  private val onDurableRelayReceived: () -> Unit = {},
 ) : BlePeripheralController {
   private val bluetoothManager: BluetoothManager? =
     context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
@@ -48,6 +49,7 @@ class BlePeripheralManager(
   private val extensionCustodyResponses = ConcurrentHashMap<String, ByteArray>()
   private val extensionSnapshots = ConcurrentHashMap<String, ExtensionSnapshot>()
   private val extensionPeerActivity = ConcurrentHashMap<String, Long>()
+  private val extensionContactPersistedAt = ConcurrentHashMap<String, Long>()
   private val extensionMtu = ConcurrentHashMap<String, Int>()
   private val extensionReceiver = BleReceiptExchangeReceiver(
     admit = ::admitExtensionObject,
@@ -97,6 +99,7 @@ class BlePeripheralManager(
         extensionCustodyResponses.remove(device.address)
         extensionSnapshots.remove(device.address)
         extensionPeerActivity.remove(device.address)
+        extensionContactPersistedAt.remove(device.address)
         extensionMtu.remove(device.address)
       }
     }
@@ -223,6 +226,7 @@ class BlePeripheralManager(
       .map { it.key }
     stale.forEach { stalePeer ->
       extensionPeerActivity.remove(stalePeer)
+      extensionContactPersistedAt.remove(stalePeer)
       extensionSnapshots.remove(stalePeer)
       extensionControlResponses.remove(stalePeer)
       extensionCustodyResponses.remove(stalePeer)
@@ -230,7 +234,11 @@ class BlePeripheralManager(
     }
     if (!extensionPeerActivity.containsKey(peerId) && extensionPeerActivity.size >= MAX_EXTENSION_PEERS) return false
     extensionPeerActivity[peerId] = nowMs
-    receiptQueue?.touchContact(peerId, nowMs)
+    val lastPersistedAt = extensionContactPersistedAt[peerId]
+    if (lastPersistedAt == null || nowMs < lastPersistedAt || nowMs - lastPersistedAt >= CONTACT_ACTIVITY_PERSIST_INTERVAL_MS) {
+      receiptQueue?.touchContact(peerId, nowMs)
+      extensionContactPersistedAt[peerId] = nowMs
+    }
     return true
   }
 
@@ -263,7 +271,11 @@ class BlePeripheralManager(
       ?: return CustodyResult(CustodyResultKind.PENDING_VERIFICATION, reason = "RECEIPT_EXTENSION_DISABLED")
     val context = verificationContextProvider()
       ?: return CustodyResult(CustodyResultKind.PENDING_VERIFICATION, reason = "VERIFICATION_CONTEXT_UNAVAILABLE")
-    return queue.admitObject(bytes, kind, context)
+    val result = queue.admitObject(bytes, kind, context)
+    if (result.kind == CustodyResultKind.COMMITTED || result.kind == CustodyResultKind.DUPLICATE) {
+      runCatching { onDurableRelayReceived() }
+    }
+    return result
   }
 
   private fun extensionPreflightDecision(entry: InventoryEntry): BleDecisionCode? {
@@ -642,6 +654,7 @@ class BlePeripheralManager(
         when (persistResult) {
           is InboundPersistResult.Stored -> {
             runCatching { EmergencyJobScheduler.scheduleImmediateNetworkSync(context.applicationContext) }
+            runCatching { onDurableRelayReceived() }
             sendDurableAck(device, UUID.fromString(persistResult.messageId))
             if (responseNeeded) {
               gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
@@ -649,6 +662,7 @@ class BlePeripheralManager(
           }
           is InboundPersistResult.DuplicateIgnored -> {
             runCatching { EmergencyJobScheduler.scheduleImmediateNetworkSync(context.applicationContext) }
+            runCatching { onDurableRelayReceived() }
             sendDurableAck(device, UUID.fromString(persistResult.messageId))
             if (responseNeeded) {
               gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
@@ -691,6 +705,7 @@ class BlePeripheralManager(
 
   companion object {
     private const val EXTENSION_CONTACT_TIMEOUT_MS = 60_000L
+    private const val CONTACT_ACTIVITY_PERSIST_INTERVAL_MS = 15_000L
     private const val MAX_EXTENSION_PEERS = 4
   }
 }
