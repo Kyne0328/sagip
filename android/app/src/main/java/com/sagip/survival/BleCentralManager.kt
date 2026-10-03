@@ -943,6 +943,16 @@ class BleCentralManager(
     }
 
     private fun discoverServicesOrDisconnect(gatt: BluetoothGatt) {
+      if (!serviceDiscoveryStarted.compareAndSet(false, true)) return
+      mtuFallback?.cancel(false)
+      mtuFallback = null
+      scheduleConnectionTimeout(
+        gatt.device.address,
+        gatt,
+        if (attemptCompleted) null else transfer,
+        "BLE_SERVICE_DISCOVERY_TIMEOUT",
+        SERVICE_DISCOVERY_TIMEOUT_MS,
+      )
       val started = try {
         gatt.discoverServices()
       } catch (_: SecurityException) {
@@ -974,19 +984,21 @@ class BleCentralManager(
     peerAddress: String,
     gatt: BluetoothGatt,
     transfer: ActiveBleTransfer?,
+    classification: String,
+    timeoutMs: Long,
   ) {
     connectionTimeouts.remove(peerAddress)?.cancel(false)
     connectionTimeouts[peerAddress] = timeoutExecutor.schedule(
       {
         if (!activeConnections.remove(peerAddress)) return@schedule
-        completeAttempt(transfer, "RETRYABLE_FAILURE", "BLE_CONNECTION_TIMEOUT")
+        completeAttempt(transfer, "RETRYABLE_FAILURE", classification)
         activeTransfers.remove(peerAddress)
         activeGatts.remove(peerAddress)
         connectionTimeouts.remove(peerAddress)
         runCatching { gatt.disconnect() }
         runCatching { gatt.close() }
       },
-      CONNECTION_TIMEOUT_MS,
+      timeoutMs,
       TimeUnit.MILLISECONDS,
     )
   }
@@ -1003,7 +1015,13 @@ class BleCentralManager(
   }
 
   companion object {
-    private const val PEER_RETRY_INTERVAL_MS = 30_000L
-    private const val CONNECTION_TIMEOUT_MS = 45_000L
+    private const val MAX_ACTIVE_OUTGOING_CONNECTIONS = 2
+    private const val PEER_RETRY_INTERVAL_MS = 5_000L
+    private const val CONNECT_TIMEOUT_MS = 12_000L
+    private const val SERVICE_SETUP_TIMEOUT_MS = 10_000L
+    private const val SERVICE_DISCOVERY_TIMEOUT_MS = 6_000L
+    private const val MTU_FALLBACK_MS = 1_500L
+    private const val TRANSFER_PROGRESS_TIMEOUT_MS = 10_000L
+    private const val DIRECT_TYPED_OFFER_THRESHOLD = 2
   }
 }
