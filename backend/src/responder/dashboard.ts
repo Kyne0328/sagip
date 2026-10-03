@@ -828,6 +828,10 @@ main {
 .history-item strong,
 .history-item span { display: block; }
 .history-item span { margin-block-start: 0.16rem; color: var(--ink-soft); font-size: 0.8rem; }
+.civilian-message {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 
 .sr-only {
   position: absolute;
@@ -1254,12 +1258,12 @@ const DASHBOARD_JS = `(() => {
     );
   }
 
-  function addFact(label, value) {
+  function addFact(label, value, className) {
     const wrapper = document.createElement('div');
     wrapper.className = 'fact';
     wrapper.append(
       createText('dt', '', label),
-      createText('dd', '', value)
+      createText('dd', className || '', value)
     );
     detailFacts.appendChild(wrapper);
   }
@@ -1323,6 +1327,12 @@ const DASHBOARD_JS = `(() => {
         createText('strong', '', 'Revision ' + revision.revision + ' · ' + formatEmergencyType(revision.emergencyType)),
         createText('span', '', urgency)
       );
+      if (typeof revision.message === 'string' && revision.message.length > 0) {
+        item.append(
+          createText('strong', '', 'Civilian message'),
+          createText('span', 'civilian-message', revision.message)
+        );
+      }
 
       if (revision.location && revision.location.latitude !== null && revision.location.longitude !== null) {
         const locationParts = [
@@ -1363,6 +1373,9 @@ const DASHBOARD_JS = `(() => {
     addFact('Latest revision', String(detail.latestRevision));
     addFact('Current status', formatStatus(status));
     addFact('Report ID', detail.reportId);
+    if (typeof detail.message === 'string' && detail.message.length > 0) {
+      addFact('Civilian message', detail.message, 'civilian-message');
+    }
 
     renderLocation(detail.location);
     renderAckHistory(detail.acknowledgements || []);
