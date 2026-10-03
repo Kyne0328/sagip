@@ -111,6 +111,37 @@ class BleRelayRuntimeTest {
     assertEquals(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY, peripheral.lastAdvertiseMode)
   }
 
+
+  @Test
+  fun `scan conservation never makes a helper phone undiscoverable`() {
+    var now = 1_000_000L
+    val central = FakeCentral()
+    val peripheral = FakePeripheral()
+    val runtime = BleRelayRuntime(
+      readinessProvider = { readiness(true) },
+      activityTimestampProvider = { 0L },
+      central = central,
+      peripheral = peripheral,
+      nowProvider = { now },
+    )
+
+    assertTrue(runtime.start())
+    now += 2 * 60 * 60 * 1000L
+
+    val transition = BleRelayRuntime::class.java.getDeclaredMethod(
+      "onActiveWindowEnded",
+      Long::class.javaPrimitiveType,
+    )
+    transition.isAccessible = true
+    transition.invoke(runtime, 25_000L)
+
+    assertFalse(central.scanning)
+    assertTrue(peripheral.running)
+    assertEquals(0, peripheral.pauses)
+    assertTrue(runtime.status().isDutyCyclePaused)
+    runtime.stop()
+  }
+
   @Test
   fun `permission loss stops stale radios before reporting relay unavailable`() {
     var ready = true
