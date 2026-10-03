@@ -107,6 +107,11 @@ class SagipSurvivalCoreModule(
   }
 
   @ReactMethod
+  fun primeLocation(promise: Promise) {
+    promise.resolve(locationProvider.primeBestEffortLocation())
+  }
+
+  @ReactMethod
   fun createEmergencyReport(input: ReadableMap, promise: Promise) {
     val parsed = runCatching { parseInput(input) }.getOrElse {
       promise.reject(ERROR_INVALID_INPUT, "Emergency type or urgency is invalid")

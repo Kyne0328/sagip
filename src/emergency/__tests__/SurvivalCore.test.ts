@@ -7,6 +7,7 @@ jest.mock('react-native', () => ({
     SagipSurvivalCore: {
       createEmergencyReport: jest.fn(),
       listEmergencyReports: jest.fn(),
+      primeLocation: jest.fn(),
       triggerDelivery: jest.fn(),
       getRelayStatus: jest.fn(),
       startBleRelay: jest.fn(),
@@ -18,6 +19,7 @@ jest.mock('react-native', () => ({
 const nativeCore = NativeModules.SagipSurvivalCore as {
   createEmergencyReport: jest.Mock;
   listEmergencyReports: jest.Mock;
+  primeLocation: jest.Mock;
   triggerDelivery: jest.Mock;
   getRelayStatus: jest.Mock;
   startBleRelay: jest.Mock;
@@ -120,6 +122,13 @@ describe('SurvivalCore', () => {
     await expect(SurvivalCore.listEmergencyReports()).resolves.toEqual([
       ackSummary,
     ]);
+  });
+
+  it('primes device location without changing SOS persistence semantics', async () => {
+    nativeCore.primeLocation.mockResolvedValue(true);
+
+    await expect(SurvivalCore.primeLocation()).resolves.toBe(true);
+    expect(nativeCore.primeLocation).toHaveBeenCalledTimes(1);
   });
 
   it('triggers delivery and returns processed envelope count', async () => {

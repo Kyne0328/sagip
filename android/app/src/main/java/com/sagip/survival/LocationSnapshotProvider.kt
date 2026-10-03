@@ -4,7 +4,12 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.location.Location
+import android.location.LocationListener
 import android.location.LocationManager
+import android.os.Build
+import android.os.Bundle
+import android.os.CancellationSignal
+import android.os.Looper
 import androidx.core.content.ContextCompat
 
 internal data class LocationRank(
@@ -13,21 +18,116 @@ internal data class LocationRank(
 )
 
 class LocationSnapshotProvider(private val context: Context) {
+  private val locationLock = Any()
+  private var primedLocation: Location? = null
 
   fun getBestAvailableLocation(now: Long = System.currentTimeMillis()): LocationSnapshot? {
     if (!hasLocationPermission()) return null
     val manager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return null
-    val candidates = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
-      .mapNotNull { provider ->
-        runCatching { manager.getLastKnownLocation(provider) }.getOrNull()
-      }
+    val candidates = mutableListOf<Location>()
+
+    synchronized(locationLock) {
+      primedLocation?.let { candidates += Location(it) }
+    }
+
+    availableProviders().forEach { provider ->
+      runCatching { manager.getLastKnownLocation(provider) }
+        .getOrNull()
+        ?.takeIf(::isUsable)
+        ?.let(candidates::add)
+    }
+
     val bestIndex = selectBestIndex(candidates.map { it.toRank() }, now) ?: return null
     return candidates[bestIndex].toSnapshot(now)
+  }
+
+  fun primeBestEffortLocation(): Boolean {
+    if (!hasLocationPermission()) return false
+    val manager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return false
+
+    var started = false
+    availableProviders().forEach { provider ->
+      val enabled = runCatching { manager.isProviderEnabled(provider) }.getOrDefault(false)
+      if (!enabled) return@forEach
+
+      val providerStarted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        runCatching {
+          manager.getCurrentLocation(
+            provider,
+            CancellationSignal(),
+            ContextCompat.getMainExecutor(context),
+          ) { location ->
+            location?.takeIf(::isUsable)?.let(::rememberLocation)
+          }
+        }.isSuccess
+      } else {
+        requestSingleUpdate(manager, provider)
+      }
+      started = started || providerStarted
+    }
+    return started
+  }
+
+  private fun availableProviders(): List<String> {
+    val hasFine = ContextCompat.checkSelfPermission(
+      context,
+      Manifest.permission.ACCESS_FINE_LOCATION,
+    ) == PackageManager.PERMISSION_GRANTED
+
+    return if (hasFine) {
+      listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+    } else {
+      listOf(LocationManager.NETWORK_PROVIDER)
+    }
   }
 
   private fun hasLocationPermission(): Boolean {
     return ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
       ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+  }
+
+  @Suppress("DEPRECATION")
+  private fun requestSingleUpdate(manager: LocationManager, provider: String): Boolean {
+    val listener = object : LocationListener {
+      override fun onLocationChanged(location: Location) {
+        if (isUsable(location)) rememberLocation(location)
+      }
+
+      override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) = Unit
+      override fun onProviderEnabled(provider: String) = Unit
+      override fun onProviderDisabled(provider: String) = Unit
+    }
+
+    return runCatching {
+      manager.requestSingleUpdate(provider, listener, Looper.getMainLooper())
+    }.isSuccess
+  }
+
+  private fun rememberLocation(location: Location) {
+    val candidate = Location(location)
+    val now = System.currentTimeMillis()
+    synchronized(locationLock) {
+      val existing = primedLocation
+      if (existing == null) {
+        primedLocation = candidate
+        return
+      }
+      val bestIndex = selectBestIndex(
+        listOf(existing.toRank(), candidate.toRank()),
+        now,
+      )
+      if (bestIndex == 1) {
+        primedLocation = candidate
+      }
+    }
+  }
+
+  private fun isUsable(location: Location): Boolean {
+    return location.latitude.isFinite() &&
+      location.latitude in -90.0..90.0 &&
+      location.longitude.isFinite() &&
+      location.longitude in -180.0..180.0 &&
+      location.time >= 0L
   }
 
   private fun Location.toRank(): LocationRank {

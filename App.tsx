@@ -22,6 +22,7 @@ import {
   type Urgency,
 } from './src/emergency/types';
 import {SurvivalCore} from './src/emergency/SurvivalCore';
+import {prepareSosLocation} from './src/emergency/prepareSosLocation';
 import {useBleRelayStatus} from './src/emergency/useBleRelayStatus';
 import {useEmergencyReports} from './src/emergency/useEmergencyReports';
 
@@ -129,6 +130,10 @@ export default function App() {
     : null;
 
   useEffect(() => {
+    void prepareSosLocation(false);
+  }, []);
+
+  useEffect(() => {
     if (!latestVerifiedReportId || !latestVerifiedEventId || !latestVerifiedHeadline) {
       return;
     }
@@ -192,6 +197,9 @@ export default function App() {
         <Text style={styles.deliveryHelpText}>
           If internet works, SAGIP sends directly to the server. Nearby-device relay is the offline fallback.
         </Text>
+        <Text style={styles.deliveryHelpText}>
+          Device location is attached when available. Your SOS still saves if location permission or GPS is unavailable.
+        </Text>
 
         {!showForm ? (
           <Pressable
@@ -199,7 +207,10 @@ export default function App() {
             accessibilityLabel="Create emergency SOS report"
             accessibilityHint="Opens emergency category selection to save SOS locally on this device"
             style={styles.sosButton}
-            onPress={() => setShowForm(true)}>
+            onPress={() => {
+              setShowForm(true);
+              void prepareSosLocation(true);
+            }}>
             <Text style={styles.sosButtonText}>SOS</Text>
             <Text style={styles.sosButtonSubtext}>Tap to report an emergency</Text>
           </Pressable>
@@ -341,6 +352,11 @@ export default function App() {
               )}
               <Text style={styles.statusText}>
                 {emergencyLabels[latest.emergencyType]} · {urgencyLabels[latest.urgency]}
+              </Text>
+              <Text style={styles.statusDetailText}>
+                {latest.location
+                  ? `Location attached · ${latest.location.source} · ${latest.location.freshness === 'FRESH' ? 'recent fix' : 'older fix'}${latest.location.accuracyMeters === null ? '' : ` · ±${Math.round(latest.location.accuracyMeters)} m`}`
+                  : 'No device location was attached to this SOS.'}
               </Text>
             </>
           ) : (

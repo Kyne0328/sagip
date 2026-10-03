@@ -99,6 +99,7 @@ test('real Tagum package prepares once and reopens from IndexedDB with network o
       mapContainer.id = 'real-tagum-map-canvas';
       mapContainer.style.width = '800px';
       mapContainer.style.height = '600px';
+      mapContainer.hidden = true;
       const placeholder = dom.createElement('div');
       const coverage = dom.createElement('div');
       const announcement = dom.createElement('div');
@@ -122,7 +123,16 @@ test('real Tagum package prepares once and reopens from IndexedDB with network o
       );
       if (readiness.kind !== 'READY') throw new Error('real package was not activated');
       await view.setManifest(readiness.manifest);
+      mapContainer.hidden = false;
+      const requestFrame = (globalThis as unknown as {
+        requestAnimationFrame(callback: () => void): number;
+      }).requestAnimationFrame;
+      await new Promise<void>(resolve => requestFrame(() => requestFrame(() => resolve())));
       await view.render([], null);
+      const canvas = mapContainer.querySelector('.maplibregl-canvas') as {
+        getBoundingClientRect(): {width: number; height: number};
+      } | null;
+      const canvasRect = canvas?.getBoundingClientRect();
 
       (globalThis as unknown as {
         __sagipRealMap?: {
@@ -142,9 +152,12 @@ test('real Tagum package prepares once and reopens from IndexedDB with network o
         packageId: readiness.kind === 'READY' ? readiness.packageId : null,
         totalBytes: readiness.kind === 'READY' ? readiness.manifest.totalBytes : null,
         extent: readiness.kind === 'READY' ? readiness.manifest.extent : null,
-        renderedCanvas: mapContainer.querySelector('.maplibregl-canvas') !== null,
+        renderedCanvas: canvas !== null,
+        canvasWidth: canvasRect?.width ?? 0,
+        canvasHeight: canvasRect?.height ?? 0,
         coverageText: coverage.textContent,
         placeholderHidden: placeholder.hidden,
+        placeholderText: placeholder.textContent,
       };
     },
     {
@@ -162,8 +175,11 @@ test('real Tagum package prepares once and reopens from IndexedDB with network o
   expect(prepared.totalBytes).toBe(5_630_162);
   expect(prepared.extent).toEqual([125.6886, 7.2015, 125.9326, 7.5555]);
   expect(prepared.renderedCanvas).toBe(true);
+  expect(prepared.canvasWidth).toBe(800);
+  expect(prepared.canvasHeight).toBe(600);
   expect(prepared.coverageText).toContain('OpenStreetMap contributors');
-  expect(prepared.placeholderHidden).toBe(true);
+  expect(prepared.placeholderHidden).toBe(false);
+  expect(prepared.placeholderText).toContain('no incident markers');
 
   await context.unroute(`${ORIGIN}/**`);
   await context.setOffline(true);

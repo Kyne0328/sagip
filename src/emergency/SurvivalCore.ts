@@ -21,6 +21,7 @@ interface NativeSurvivalCore {
   ): Promise<unknown>;
   listEmergencyReports(): Promise<unknown>;
   claimVerifiedReceiptNotification(reportId: string, eventId: string): Promise<unknown>;
+  primeLocation(): Promise<unknown>;
   triggerDelivery(): Promise<unknown>;
   getRelayStatus(): Promise<unknown>;
   startBleRelay(): Promise<unknown>;
@@ -278,6 +279,11 @@ export const SurvivalCore = {
       reportId,
       eventId,
     );
+    return value === true;
+  },
+
+  async primeLocation(): Promise<boolean> {
+    const value = await requireNativeCore().primeLocation();
     return value === true;
   },
 

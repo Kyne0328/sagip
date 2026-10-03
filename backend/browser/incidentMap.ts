@@ -3,6 +3,7 @@ import {readArchiveRange, type OfflineManifest} from './offlinePackage.js';
 
 interface MapLike {
   fitBounds(bounds: [[number, number], [number, number]], options: {padding: number; duration: number}): void;
+  resize(): void;
   remove(): void;
 }
 interface MarkerLike {
@@ -50,6 +51,8 @@ export class IncidentMapView {
   private markerListeners = new AbortController();
   private manifest: OfflineManifest | null = null;
   private activePackageId: string | null = null;
+  private needsInitialFit = false;
+  private readonly resizeObserver: ResizeObserver | null;
 
   constructor(
     private readonly container: HTMLElement,
@@ -57,7 +60,12 @@ export class IncidentMapView {
     private readonly coverage: HTMLElement,
     private readonly announce: HTMLElement,
     private readonly onSelect: (reportId: string) => void,
-  ) {}
+  ) {
+    this.resizeObserver = typeof ResizeObserver === 'function'
+      ? new ResizeObserver(() => this.refreshMapLayout())
+      : null;
+    this.resizeObserver?.observe(this.container);
+  }
 
   async setManifest(manifest: OfflineManifest | null): Promise<void> {
     const nextId = manifest?.packageId ?? null;
@@ -92,6 +100,13 @@ export class IncidentMapView {
 
     const located = items.filter(item => item.location !== null);
     const outOfExtent = located.filter(item => !insideExtent(item.location!, this.manifest!.extent));
+    if (located.length === 0) {
+      this.placeholder.hidden = false;
+      this.placeholder.textContent =
+        'Map ready. None of the loaded incidents include device location yet, so there are no incident markers to plot.';
+    } else {
+      this.placeholder.hidden = true;
+    }
     const maplibre = await loadMapLibre();
     for (const item of located) {
       const location = item.location!;
@@ -121,6 +136,7 @@ export class IncidentMapView {
   }
 
   destroy(): void {
+    this.resizeObserver?.disconnect();
     this.clearMarkers();
     this.destroyMap();
   }
@@ -146,7 +162,6 @@ export class IncidentMapView {
         manifest.attribution,
         pmtiles.TileType,
       );
-      const [west, south, east, north] = manifest.extent;
       this.map = new maplibre.Map({
         container: this.container,
         style,
@@ -155,7 +170,8 @@ export class IncidentMapView {
         fadeDuration: 0,
       });
       this.placeholder.hidden = true;
-      this.map.fitBounds([[west, south], [east, north]], {padding: 24, duration: 0});
+      this.needsInitialFit = true;
+      this.refreshMapLayout();
     } catch {
       this.map = null;
       this.placeholder.hidden = false;
@@ -163,6 +179,17 @@ export class IncidentMapView {
         'The prepared local basemap could not be rendered. Use the complete incident queue and location coordinates.';
       this.announce.textContent = 'Prepared local basemap unavailable; incident queue remains available.';
     }
+  }
+
+  private refreshMapLayout(): void {
+    if (!this.map || !this.manifest || this.container.clientWidth <= 0 || this.container.clientHeight <= 0) {
+      return;
+    }
+    this.map.resize();
+    if (!this.needsInitialFit) return;
+    const [west, south, east, north] = this.manifest.extent;
+    this.map.fitBounds([[west, south], [east, north]], {padding: 24, duration: 0});
+    this.needsInitialFit = false;
   }
 
   private clearMarkers(): void {
@@ -176,6 +203,7 @@ export class IncidentMapView {
     this.clearMarkers();
     this.map?.remove();
     this.map = null;
+    this.needsInitialFit = false;
     this.container.replaceChildren();
   }
 }
