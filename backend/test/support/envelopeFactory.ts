@@ -13,6 +13,8 @@ export interface EnvelopeFactoryOptions {
   emergencyType?: number;
   urgency?: number;
   identity?: TestIdentity;
+  message?: string;
+  createdAtMs?: bigint;
 }
 
 export function createTestIdentity(): TestIdentity {
@@ -31,7 +33,13 @@ export function buildSignedEnvelope(options: EnvelopeFactoryOptions = {}): Buffe
   const emergencyType = options.emergencyType ?? 1;
   const urgency = options.urgency ?? 1;
   const identity = options.identity ?? createTestIdentity();
-  const payload = Buffer.from([0x53, 0x52, 0x50, 0x31, 0x01, emergencyType, urgency, 0x00]);
+  const message = options.message === undefined ? null : Buffer.from(options.message, 'utf8');
+  const payload = message === null
+    ? Buffer.from([0x53, 0x52, 0x50, 0x31, 0x01, emergencyType, urgency, 0x00])
+    : Buffer.concat([
+      Buffer.from([0x53, 0x52, 0x50, 0x31, 0x02, emergencyType, urgency, 0x00]),
+      u16(message.length), message,
+    ]);
   const keyId = createHash('sha256').update(identity.publicKeyDer).digest();
   const payloadDigest = createHash('sha256').update(payload).digest();
   const unsigned = Buffer.concat([
@@ -40,7 +48,7 @@ export function buildSignedEnvelope(options: EnvelopeFactoryOptions = {}): Buffe
     uuidBytes(messageId),
     uuidBytes(reportId),
     u32(revision),
-    i64(1_000n),
+    i64(options.createdAtMs ?? 1_000n),
     i64(-1n),
     i32(priority),
     keyId,

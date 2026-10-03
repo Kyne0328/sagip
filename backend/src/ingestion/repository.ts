@@ -88,8 +88,8 @@ export class IngestionRepository {
       `INSERT INTO incident_revisions(
          report_id, revision, emergency_type, urgency, payload_digest,
          location_latitude_e6, location_longitude_e6, location_accuracy_cm,
-         location_captured_at_ms, location_source, location_freshness
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         location_captured_at_ms, location_source, location_freshness, message
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        ON CONFLICT (report_id, revision) DO NOTHING`,
       [
         envelope.reportId,
@@ -105,6 +105,7 @@ export class IngestionRepository {
         location === null ? null : location.capturedAtMs.toString(),
         location?.source ?? null,
         location?.freshness ?? null,
+        envelope.emergencyPayload.message,
       ],
     );
 
