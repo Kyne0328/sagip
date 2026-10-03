@@ -68,11 +68,11 @@ jobs:
           npm --prefix backend run lint
           npm --prefix backend run build:neon
           test -s backend/.generated/neon-api/index.mjs
-          test -s backend/.generated/neon-api/responder-assets/map-data/tagum-protomaps-20261002.pmtiles
           DATABASE_URL=postgresql://package-smoke:package-smoke@127.0.0.1:5432/package-smoke node --input-type=module <<'NODE'
           const api = (await import('./backend/.generated/neon-api/index.mjs')).default;
           const paths = [
             '/responder/map/tagum/manifest.json',
+            '/responder/map/tagum/tagum-protomaps-20261002.pmtiles',
             '/responder/assets/browser/incidentMap.js',
             '/responder/assets/maplibre-gl-6.11.2/maplibre-gl.mjs',
             '/responder/assets/pmtiles-4.5.0/pmtiles.js',
