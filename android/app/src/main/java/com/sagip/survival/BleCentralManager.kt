@@ -178,7 +178,12 @@ class BleCentralManager(
     }
 
     try {
-      val gatt = device.connectGatt(context, false, createGattCallback(transfer))
+      val gatt = device.connectGatt(
+        context,
+        false,
+        createGattCallback(transfer),
+        BluetoothDevice.TRANSPORT_LE,
+      )
       if (gatt == null) {
         completeAttempt(transfer, "RETRYABLE_FAILURE", "BLE_CONNECT_START_FAILED")
         activeConnections.remove(device.address)
