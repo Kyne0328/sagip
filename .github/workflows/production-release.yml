@@ -287,11 +287,10 @@ jobs:
       - name: Validate deployment secrets
         env:
           NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         shell: bash
         run: |
           set -euo pipefail
-          for name in NEON_API_KEY DATABASE_URL SAGIP_BACKEND_BASE_URL; do
+          for name in NEON_API_KEY SAGIP_BACKEND_BASE_URL; do
             if [[ -z "${!name:-}" ]]; then
               echo "Missing required production deployment setting: $name" >&2
               exit 1
@@ -315,6 +314,10 @@ jobs:
           npm --prefix backend ci
           npm install --global neon@6.1.0
 
+      - name: Build deployable Neon API package
+        shell: bash
+        run: npm --prefix backend run build:neon
+
       - name: Link and plan the intended Neon production target
         env:
           NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
@@ -324,23 +327,54 @@ jobs:
           neon link --project-id "$NEON_PROJECT_ID" --branch "$NEON_BRANCH" -y
           neon status
           neon config plan
+          test -s .env.local
 
       - name: Apply production database migrations
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         shell: bash
-        run: npm --prefix backend run migrate
+        run: |
+          set -euo pipefail
+          set -a
+          source .env.local
+          set +a
+          npm --prefix backend run migrate
 
       - name: Deploy Neon Function configuration
         env:
           NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         shell: bash
-        run: neon deploy
+        run: |
+          set -euo pipefail
+          set -a
+          source .env.local
+          set +a
+          neon deploy
 
       - name: Verify deployed backend surface
         shell: bash
         run: node scripts/verify-backend.mjs "$SAGIP_BACKEND_BASE_URL" --full
+
+      - name: Verify deployed Tagum map surface
+        shell: bash
+        run: |
+          node <<'NODE'
+          const base = process.env.SAGIP_BACKEND_BASE_URL.replace(/\/+$/, '');
+          const checks = [
+            '/responder/map/tagum/manifest.json',
+            '/responder/assets/browser/incidentMap.js',
+            '/responder/assets/maplibre-gl-6.11.2/maplibre-gl.mjs',
+            '/responder/assets/pmtiles-4.5.0/pmtiles.js',
+          ];
+          for (const path of checks) {
+            const response = await fetch(base + path, {
+              redirect: 'manual',
+              signal: AbortSignal.timeout(20000),
+            });
+            if (response.status !== 200) {
+              throw new Error(`${path} returned HTTP ${response.status}; expected 200`);
+            }
+            console.log(`OK ${path}`);
+          }
+          NODE
 
   publish-github-prerelease:
     name: Publish signed GitHub pre-release
