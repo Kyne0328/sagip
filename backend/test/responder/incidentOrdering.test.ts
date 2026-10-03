@@ -74,6 +74,9 @@ test('incident queue uses server arrival, operational status, urgency, and stabl
   );
 
   const ordered = await service.listIncidents();
+  for (const incident of ordered) {
+    assert.equal(incident.message, null);
+  }
 
   assert.deepEqual(
     ordered.map(incident => incident.reportId),
@@ -87,6 +90,67 @@ test('incident queue uses server arrival, operational status, urgency, and stabl
   );
 
   await pool.end();
+});
+
+test('latest message follows revision number with isolated history and location fallback', async () => {
+  const pool = createMemoryPostgresPool();
+  try {
+    await applyMigrations(pool, MIGRATIONS_DIR);
+    const service = new ResponderService(pool);
+    const originKeyId = Buffer.alloc(32, 51);
+    const reportId = '77777777-7777-7777-7777-777777777777';
+    const otherReportId = '88888888-8888-8888-8888-888888888888';
+    await pool.query(
+      `INSERT INTO origin_keys(origin_key_id, public_key_der, first_seen_at, last_seen_at)
+       VALUES ($1, $2, NOW(), NOW())`, [originKeyId, Buffer.from([7, 8, 9])],
+    );
+    for (const id of [reportId, otherReportId]) {
+      await pool.query(
+        `INSERT INTO incidents(report_id, origin_key_id, created_at_ms, first_received_at)
+         VALUES ($1, $2, 1000, NOW())`, [id, originKeyId],
+      );
+    }
+    // The newest revision arrives first and has no location.
+    await pool.query(
+      `INSERT INTO incident_revisions(report_id, revision, emergency_type, urgency, payload_digest, message)
+       VALUES ($1, 3, 6, 1, $2, $3)`, [reportId, Buffer.alloc(32, 53), 'Need help 🆘'],
+    );
+    await pool.query(
+      `INSERT INTO incident_revisions(report_id, revision, emergency_type, urgency, payload_digest, message, location_latitude_e6, location_longitude_e6)
+       VALUES ($1, 2, 1, 2, $2, $3, 14599512, 120984222)`,
+      [reportId, Buffer.alloc(32, 52), 'Earlier details'],
+    );
+    await pool.query(
+      `INSERT INTO incident_revisions(report_id, revision, emergency_type, urgency, payload_digest)
+       VALUES ($1, 1, 6, 1, $2)`, [reportId, Buffer.alloc(32, 51)],
+    );
+    await pool.query(
+      `INSERT INTO incident_revisions(report_id, revision, emergency_type, urgency, payload_digest, message)
+       VALUES ($1, 9, 6, 1, $2, $3)`, [otherReportId, Buffer.alloc(32, 59), 'Other report'],
+    );
+    const list = await service.listIncidents('PENDING');
+    assert.equal(list.find(row => row.reportId === reportId)?.message, 'Need help 🆘');
+    assert.equal(list.find(row => row.reportId === otherReportId)?.message, 'Other report');
+    const detail = await service.getIncidentDetail(reportId);
+    assert.equal(detail?.message, 'Need help 🆘');
+    assert.equal(detail?.latestRevision, 3);
+    assert.equal(detail?.location?.latitude, 14.599512);
+    assert.equal(list.find(row => row.reportId === reportId)?.location?.latitude, 14.599512);
+    assert.deepEqual(detail?.revisions.map(row => [row.revision, row.message]), [
+      [1, null], [2, 'Earlier details'], [3, 'Need help 🆘'],
+    ]);
+    const otherDetail = await service.getIncidentDetail(otherReportId);
+    assert.deepEqual(otherDetail?.revisions.map(row => row.message), ['Other report']);
+    // Null on the highest revision must not fall back to an earlier message.
+    await pool.query(
+      `INSERT INTO incident_revisions(report_id, revision, emergency_type, urgency, payload_digest)
+       VALUES ($1, 4, 6, 1, $2)`, [reportId, Buffer.alloc(32, 54)],
+    );
+    assert.equal((await service.getIncidentDetail(reportId))?.message, null);
+    assert.equal((await service.listIncidents()).find(row => row.reportId === reportId)?.message, null);
+  } finally {
+    await pool.end();
+  }
 });
 
 test('canonical incident status cannot regress because a lower-stage acknowledgement arrived later', async () => {

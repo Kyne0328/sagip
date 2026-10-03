@@ -33,6 +33,7 @@ export interface IncidentSummary {
   latestRevision: number;
   emergencyType: string;
   urgency: string;
+  message: string | null;
   location: IncidentLocation | null;
   latestAck: ResponderAck | null;
 }
@@ -52,6 +53,7 @@ export interface IncidentDetail extends IncidentSummary {
     revision: number;
     emergencyType: string;
     urgency: string;
+    message: string | null;
     location: IncidentLocation | null;
   }>;
   acknowledgements: ResponderAck[];
