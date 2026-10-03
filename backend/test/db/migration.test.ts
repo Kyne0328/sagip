@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {mkdtemp, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
@@ -104,6 +105,31 @@ test('holds a PostgreSQL advisory lock for the migration session', async () => {
     assert.match(queries[0] ?? '', /pg_advisory_lock/iu);
     assert.match(queries.at(-1) ?? '', /pg_advisory_unlock/iu);
   } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('accepts a legacy CRLF checksum for unchanged migration SQL', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'sagip-migrations-'));
+  const pool = createMemoryPostgresPool();
+  try {
+    const migration = path.join(directory, '001_test.sql');
+    const lfSql = 'CREATE TABLE example (id INTEGER PRIMARY KEY);\n';
+    const crlfSql = lfSql.replace(/\n/gu, '\r\n');
+    const legacyCrlfChecksum = createHash('sha256')
+      .update(crlfSql, 'utf8')
+      .digest('hex');
+
+    await writeFile(migration, lfSql, 'utf8');
+    await applyMigrations(pool, directory);
+    await pool.query(
+      'UPDATE schema_migrations SET checksum_sha256 = $1 WHERE name = $2',
+      [legacyCrlfChecksum, '001_test.sql'],
+    );
+
+    await applyMigrations(pool, directory);
+  } finally {
+    await pool.end();
     await rm(directory, {recursive: true, force: true});
   }
 });
