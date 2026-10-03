@@ -1,6 +1,14 @@
 package com.sagip.survival
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Process-level Survival Core dependencies.
@@ -15,6 +23,8 @@ class SurvivalCoreRuntime private constructor(context: Context) {
   val database = SagipDatabase(appContext)
   val repository = EmergencyRepository(database)
   val receiptQueue = ReceiptQueue(database)
+  private val deliveryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+  private val deliveryMutex = Mutex()
   val gatewayAccess = GatewayDeviceAccess(appContext)
   @Volatile private var deployment: GatewayDeploymentConfig? = null
   private var gatewayService: ResponderGatewayService? = null
@@ -71,13 +81,50 @@ class SurvivalCoreRuntime private constructor(context: Context) {
   }
   fun runGatewaySync(nowMs: Long = System.currentTimeMillis()): SyncBatchResult =
     runCatching { gatewaySyncWorker.runOnce(nowMs) }.getOrElse { SyncBatchResult(retryable=1) }
+  private fun hasValidatedInternet(): Boolean {
+    val connectivity = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return false
+    val network = connectivity.activeNetwork ?: return false
+    val capabilities = connectivity.getNetworkCapabilities(network) ?: return false
+    return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+      capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+  }
+
+  fun triggerImmediateDeliveryIfConnected() {
+    if (!hasValidatedInternet()) return
+    deliveryScope.launch {
+      runCatching { runDeliveryPass() }
+    }
+  }
+
+  suspend fun runDeliveryPass(nowMs: Long = System.currentTimeMillis()): Int = deliveryMutex.withLock {
+    val sender = HttpEnvelopeSender(BackendEndpointConfig.envelopeUrl())
+    val worker = DeliveryWorker(
+      repository = repository,
+      sender = sender,
+      relayStore = repository,
+      ackStore = repository,
+    )
+    EnvelopePreparationService(
+      repository = repository,
+      identity = AndroidKeystoreSigningIdentity(),
+    ).preparePending()
+    val completed = worker.runOnce(nowMs)
+    runGatewaySync(nowMs)
+    completed
+  }
+
   val bleRelay = BleRelayRuntime(
     readinessProvider = { BleRelayReadinessChecker.evaluate(appContext) },
     activityTimestampProvider = { repository.newestActiveRelayTimestamp() },
     central = BleCentralManager(appContext, repository, receiptQueue),
     // Receipt-v2 receive capability stays absent until a qualified runtime VerificationContext provider is wired.
     // Legacy SOS/SGA1 characteristics remain unchanged in that state.
-    peripheral = BlePeripheralManager(appContext, repository, receiptQueue),
+    peripheral = BlePeripheralManager(
+      appContext,
+      repository,
+      receiptQueue,
+      onDurableRelayReceived = ::triggerImmediateDeliveryIfConnected,
+    ),
   )
 
   companion object {
