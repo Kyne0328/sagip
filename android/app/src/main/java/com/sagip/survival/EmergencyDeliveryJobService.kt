@@ -31,23 +31,10 @@ class EmergencyDeliveryJobService : JobService() {
   override fun onStartJob(params: JobParameters?): Boolean {
     runningJob = scope.launch {
       try {
-        val repository = SurvivalCoreRuntime.get(applicationContext).repository
-        val sender = HttpEnvelopeSender(BackendEndpointConfig.envelopeUrl())
-        val worker = DeliveryWorker(
-          repository = repository,
-          sender = sender,
-          relayStore = repository,
-          ackStore = repository,
-        )
-        val preparationService = EnvelopePreparationService(
-          repository = repository,
-          identity = AndroidKeystoreSigningIdentity(),
-        )
-        prepareThenRunDelivery(
-          preparePending = { preparationService.preparePending() },
-          runDelivery = { worker.runOnce() },
-        )
-        SurvivalCoreRuntime.get(applicationContext).runGatewaySync()
+        // Share the same process-wide mutex as the immediate relay handoff.
+        // JobScheduler remains the durable fallback, but it cannot race a
+        // just-received relay into duplicate local delivery work.
+        SurvivalCoreRuntime.get(applicationContext).runDeliveryPass()
         jobFinished(params, false)
       } catch (e: CancellationException) {
         throw e
