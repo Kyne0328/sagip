@@ -68,6 +68,14 @@ class HttpEnvelopeSenderTest {
   }
 
   @Test
+  fun `parses Retry-After seconds for temporary throttling`() {
+    assertEquals(60_000L, HttpEnvelopeSender.parseRetryAfterMillis("60"))
+    assertEquals(300_000L, HttpEnvelopeSender.parseRetryAfterMillis("999"))
+    assertEquals(null, HttpEnvelopeSender.parseRetryAfterMillis(null))
+    assertEquals(null, HttpEnvelopeSender.parseRetryAfterMillis("not-a-number"))
+  }
+
+  @Test
   fun `OutboundEnvelope supports content equality and hashCode`() {
     val env1 = OutboundEnvelope("msg-1", byteArrayOf(1, 2, 3))
     val env2 = OutboundEnvelope("msg-1", byteArrayOf(1, 2, 3))
