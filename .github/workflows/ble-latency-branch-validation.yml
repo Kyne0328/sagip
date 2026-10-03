@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ble-latency-branch-validation
+  cancel-in-progress: true
+
 jobs:
   android:
     runs-on: ubuntu-latest
