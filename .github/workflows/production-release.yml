@@ -152,6 +152,12 @@ jobs:
           npm ci
           npm --prefix backend ci
 
+      - name: Install responder browser test runtime
+        shell: bash
+        run: |
+          cd backend
+          npx playwright install --with-deps chromium
+
       - name: Start isolated PostgreSQL test database
         run: bash scripts/start-test-postgres.sh
 
@@ -163,6 +169,7 @@ jobs:
           npx tsc --noEmit
           npm run lint
           npm --prefix backend test
+          npm --prefix backend run test:browser
           npm --prefix backend run typecheck
           npm --prefix backend run lint
 
