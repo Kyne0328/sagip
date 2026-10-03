@@ -10,7 +10,7 @@ const modules = new Map(
   ]),
 );
 const golden = JSON.parse(
-  readFileSync(new URL('../../../sagip-docs/fixtures/receipts-v2/golden.json', import.meta.url), 'utf8'),
+  readFileSync(new URL('../../../fixtures/receipts-v2/golden.json', import.meta.url), 'utf8'),
 );
 
 test.beforeEach(async ({page}) => {
