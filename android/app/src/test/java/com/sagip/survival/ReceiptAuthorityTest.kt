@@ -5,7 +5,7 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ReceiptAuthorityTest {
-  private val fixture = listOf(File("../sagip-docs/fixtures/receipts-v2/golden.json"), File("../../sagip-docs/fixtures/receipts-v2/golden.json")).first { it.isFile }.readText()
+  private val fixture = listOf(File("../fixtures/receipts-v2/golden.json"), File("../../fixtures/receipts-v2/golden.json")).first { it.isFile }.readText()
   private val t = 1790812800000L
   private fun hex(s: String) = s.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
   private fun value(name: String) = Regex("\\\"$name\\\": \\\"([0-9a-f-]+)\\\"").find(fixture)!!.groupValues[1]
