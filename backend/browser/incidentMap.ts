@@ -42,6 +42,7 @@ export interface IncidentMapItem {
 
 let registeredProtocol: PmtilesProtocol | null = null;
 let registeredMapLibre: MapLibreLike | null = null;
+let pmtilesLoadPromise: Promise<PmtilesModule> | null = null;
 
 export class IncidentMapView {
   private map: MapLike | null = null;
@@ -294,8 +295,30 @@ async function loadMapLibre(): Promise<MapLibreLike> {
 }
 
 async function loadPmtiles(): Promise<PmtilesModule> {
-  const path = '/responder/assets/pmtiles-4.5.0/pmtiles.js';
-  return await import(path) as unknown as PmtilesModule;
+  const existing = (globalThis as unknown as {pmtiles?: PmtilesModule}).pmtiles;
+  if (existing?.PMTiles && existing.Protocol && existing.TileType) return existing;
+  if (pmtilesLoadPromise) return await pmtilesLoadPromise;
+
+  pmtilesLoadPromise = new Promise<PmtilesModule>((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = '/responder/assets/pmtiles-4.5.0/pmtiles.js';
+    script.async = true;
+    script.addEventListener('load', () => {
+      const loaded = (globalThis as unknown as {pmtiles?: PmtilesModule}).pmtiles;
+      if (!loaded?.PMTiles || !loaded.Protocol || !loaded.TileType) {
+        pmtilesLoadPromise = null;
+        reject(new Error('PMTILES_RUNTIME_INVALID'));
+        return;
+      }
+      resolve(loaded);
+    }, {once: true});
+    script.addEventListener('error', () => {
+      pmtilesLoadPromise = null;
+      reject(new Error('PMTILES_RUNTIME_UNAVAILABLE'));
+    }, {once: true});
+    document.head.append(script);
+  });
+  return await pmtilesLoadPromise;
 }
 
 function insideExtent(

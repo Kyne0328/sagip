@@ -15,6 +15,7 @@ const BROWSER_ASSET_ROOT = '/responder/assets/browser';
 const BACKEND_ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const GENERATED_ASSET_ROOT = join(BACKEND_ROOT, '.generated', 'responder-assets');
 const GENERATED_BROWSER_ROOT = join(BACKEND_ROOT, '.generated', 'responder-browser');
+const MAP_DATA_ROOT = join(BACKEND_ROOT, 'map-data');
 
 export const RESPONDER_MAP_ASSET_PATHS = {
   maplibreModule: `${MAPLIBRE_ASSET_ROOT}/maplibre-gl.mjs`,
@@ -22,6 +23,12 @@ export const RESPONDER_MAP_ASSET_PATHS = {
   maplibreWorker: `${MAPLIBRE_ASSET_ROOT}/maplibre-gl-worker.mjs`,
   maplibreCss: `${MAPLIBRE_ASSET_ROOT}/maplibre-gl.css`,
   pmtilesScript: `${PMTILES_ASSET_ROOT}/pmtiles.js`,
+} as const;
+
+export const RESPONDER_TAGUM_MAP_PATHS = {
+  manifest: '/responder/map/tagum/manifest.json',
+  archive: '/responder/map/tagum/tagum-protomaps-20261002.pmtiles',
+  notice: '/responder/map/tagum/NOTICE.txt',
 } as const;
 
 export const RESPONDER_BROWSER_ASSET_PATHS = {
@@ -68,6 +75,29 @@ const assets = new Map<string, AssetDescriptor>([
   [
     RESPONDER_MAP_ASSET_PATHS.pmtilesScript,
     {contentType: 'text/javascript; charset=utf-8', resolveFile: () => join(resolvePmtilesDist(), 'pmtiles.js')},
+  ],
+  [
+    RESPONDER_TAGUM_MAP_PATHS.manifest,
+    {
+      contentType: 'application/json; charset=utf-8',
+      resolveFile: () => join(MAP_DATA_ROOT, 'tagum-manifest.json'),
+      cacheControl: 'no-cache',
+    },
+  ],
+  [
+    RESPONDER_TAGUM_MAP_PATHS.archive,
+    {
+      contentType: 'application/octet-stream',
+      resolveFile: () => join(MAP_DATA_ROOT, 'tagum-protomaps-20261002.pmtiles'),
+    },
+  ],
+  [
+    RESPONDER_TAGUM_MAP_PATHS.notice,
+    {
+      contentType: 'text/plain; charset=utf-8',
+      resolveFile: () => join(MAP_DATA_ROOT, 'NOTICE.md'),
+      cacheControl: 'no-cache',
+    },
   ],
   [
     RESPONDER_BROWSER_ASSET_PATHS.assetManifest,

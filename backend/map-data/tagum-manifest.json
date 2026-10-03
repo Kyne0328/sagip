@@ -1,0 +1,21 @@
+{
+  "packageId": "tagum-protomaps-20261002-z15",
+  "version": "2026.10.02-1",
+  "sourceDate": "2026-10-02T04:00:00Z",
+  "rights": "Protomaps Basemap extract derived from OpenStreetMap and Natural Earth. Distributed as an ODbL 1.0 Produced Work; OpenStreetMap attribution is required.",
+  "attribution": "© OpenStreetMap contributors · Protomaps",
+  "appShellVersion": "tagum-console-v1",
+  "extent": [125.6886, 7.2015, 125.9326, 7.5555],
+  "bufferMeters": 5000,
+  "minZoom": 0,
+  "maxZoom": 15,
+  "totalBytes": 5630162,
+  "resources": [
+    {
+      "path": "/responder/map/tagum/tagum-protomaps-20261002.pmtiles",
+      "sha256": "443884615d37bb15e789dd7b665b1016084cd3b9582db00ae2492f593b5daf70",
+      "bytes": 5630162,
+      "kind": "archive"
+    }
+  ]
+}
