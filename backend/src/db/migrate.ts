@@ -33,13 +33,15 @@ export async function applyMigrations(
 
     for (const name of migrationNames) {
       const sql = await readFile(path.join(migrationsDir, name), 'utf8');
-      const checksum = createHash('sha256').update(sql, 'utf8').digest('hex');
+      const checksum = canonicalMigrationChecksum(sql);
+      const acceptedChecksums = compatibleMigrationChecksums(sql);
       const existing = await client.query<{checksum_sha256: string}>(
         'SELECT checksum_sha256 FROM schema_migrations WHERE name = $1',
         [name],
       );
       if ((existing.rowCount ?? 0) > 0) {
-        if (existing.rows[0]?.checksum_sha256 !== checksum) {
+        const recordedChecksum = existing.rows[0]?.checksum_sha256;
+        if (recordedChecksum === undefined || !acceptedChecksums.has(recordedChecksum)) {
           throw new MigrationIntegrityError(
             `Applied migration ${name} does not match its recorded checksum`,
           );
@@ -85,6 +87,27 @@ export async function applyMigrations(
 
   if (hasPrimaryError) throw primaryError;
   if (hasUnlockError) throw unlockError;
+}
+
+function canonicalMigrationChecksum(sql: string): string {
+  return sha256(normalizeLineEndings(sql));
+}
+
+function compatibleMigrationChecksums(sql: string): Set<string> {
+  const normalized = normalizeLineEndings(sql);
+  return new Set([
+    sha256(normalized),
+    sha256(normalized.replace(/\n/gu, '\r\n')),
+    sha256(normalized.replace(/\n/gu, '\r')),
+  ]);
+}
+
+function normalizeLineEndings(sql: string): string {
+  return sql.replace(/\r\n?|\n/gu, '\n');
+}
+
+function sha256(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
 async function ensureMigrationTable(client: PoolClient): Promise<void> {
