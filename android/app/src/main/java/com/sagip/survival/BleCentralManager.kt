@@ -69,6 +69,7 @@ class BleCentralManager(
       val now = System.currentTimeMillis()
       val previousAttemptAt = lastAttemptAt[device.address]
       if (previousAttemptAt != null && now - previousAttemptAt < PEER_RETRY_INTERVAL_MS) return
+      if (activeConnections.size >= MAX_ACTIVE_OUTGOING_CONNECTIONS) return
       if (!activeConnections.add(device.address)) return
 
       lastAttemptAt[device.address] = now
@@ -183,7 +184,13 @@ class BleCentralManager(
         activeConnections.remove(device.address)
       } else {
         activeGatts[device.address] = gatt
-        scheduleConnectionTimeout(device.address, gatt, transfer)
+        scheduleConnectionTimeout(
+          device.address,
+          gatt,
+          transfer,
+          "BLE_CONNECT_TIMEOUT",
+          CONNECT_TIMEOUT_MS,
+        )
       }
     } catch (_: SecurityException) {
       completeAttempt(transfer, "RETRYABLE_FAILURE", "BLE_PERMISSION_LOST")
@@ -205,6 +212,14 @@ class BleCentralManager(
     private var extensionChunkChar: BluetoothGattCharacteristic? = null
     private var extensionCustodyChar: BluetoothGattCharacteristic? = null
     private var extensionState = ExtensionState.NONE
+    private var primaryTransferFinished = false
+    private val serviceDiscoveryStarted = AtomicBoolean(false)
+    private var mtuFallback: ScheduledFuture<*>? = null
+    private var legacyChunkPacer: ScheduledFuture<*>? = null
+    private var typedChunkPacer: ScheduledFuture<*>? = null
+    private var legacyChunkRetryCount = 0
+    private var typedChunkRetryCount = 0
+    private var fastTypedOffer = false
     private val peerInventory = mutableListOf<InventoryEntry>()
     private var peerInventorySnapshotId: String? = null
     private var expectedPeerInventoryPage = 0
@@ -226,15 +241,33 @@ class BleCentralManager(
         return
       }
       if (newState == BluetoothProfile.STATE_CONNECTED) {
+        runCatching { gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH) }
+        scheduleConnectionTimeout(
+          gatt.device.address,
+          gatt,
+          transfer,
+          "BLE_SERVICE_SETUP_TIMEOUT",
+          SERVICE_SETUP_TIMEOUT_MS,
+        )
         val mtuRequested = try {
           gatt.requestMtu(512)
         } catch (_: SecurityException) {
           false
         }
-        if (!mtuRequested) {
+        if (mtuRequested) {
+          mtuFallback?.cancel(false)
+          mtuFallback = timeoutExecutor.schedule(
+            { discoverServicesOrDisconnect(gatt) },
+            MTU_FALLBACK_MS,
+            TimeUnit.MILLISECONDS,
+          )
+        } else {
           discoverServicesOrDisconnect(gatt)
         }
       } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+        mtuFallback?.cancel(false)
+        legacyChunkPacer?.cancel(false)
+        typedChunkPacer?.cancel(false)
         if (!attemptCompleted && transfer != null) {
           completeAttempt(transfer, "RETRYABLE_FAILURE", "BLE_DISCONNECTED")
           attemptCompleted = true
@@ -244,6 +277,8 @@ class BleCentralManager(
     }
 
     override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+      mtuFallback?.cancel(false)
+      mtuFallback = null
       if (status == BluetoothGatt.GATT_SUCCESS) {
         negotiatedAttMtu = maxOf(23, mtu)
         negotiatedPayload = maxOf(20, mtu - 3)
@@ -276,12 +311,14 @@ class BleCentralManager(
         return
       }
 
-      val returnAckReadStarted = try {
-        gatt.readCharacteristic(returnAckChar)
-      } catch (_: SecurityException) {
-        false
+      scheduleTransferProgressTimeout(gatt)
+      if (work != null) {
+        // Fresh SOS propagation owns the critical path. Return acknowledgements
+        // and receipt-v2 inventory can use the same connection after custody.
+        continueLegacyAfterReturnAck(gatt)
+      } else {
+        readPeerReturnAckOrContinue(gatt)
       }
-      if (!returnAckReadStarted) continueAfterReturnAck(gatt)
     }
 
     private fun tryStartReceiptExtension(gatt: BluetoothGatt): Boolean {
@@ -291,6 +328,7 @@ class BleCentralManager(
       if (negotiatedAttMtu < BleReceiptExchangeCodec.MIN_EXTENSION_MTU) return false
       val hasWork = runCatching { queue.inventory(null, 1).entries.isNotEmpty() }.getOrDefault(false)
       if (!hasWork) return false
+      fastTypedOffer = false
       extensionState = ExtensionState.READING_CAPABILITY
       return try {
         gatt.readCharacteristic(capability).also { started -> if (!started) extensionState = ExtensionState.NONE }
@@ -360,7 +398,11 @@ class BleCentralManager(
       }
       val now = nowProvider()
       val leased = try {
-        queue.leaseContactWork(gatt.device.address, now, BleReceiptExchangeCodec.MAX_CONTACT_TRANSFERS)
+        queue.leaseContactWork(
+          gatt.device.address,
+          now,
+          if (fastTypedOffer) DIRECT_TYPED_OFFER_THRESHOLD else BleReceiptExchangeCodec.MAX_CONTACT_TRANSFERS,
+        )
       } catch (_: Exception) {
         gatt.disconnect()
         return
