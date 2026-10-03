@@ -57,7 +57,10 @@ class BleRelayRuntime internal constructor(
       return false
     }
     if (requested) {
-      if (dutyCyclePaused || (central.isScanning() && peripheral.isRunning())) {
+      if (dutyCyclePaused && peripheral.isRunning()) {
+        return true
+      }
+      if (!dutyCyclePaused && central.isScanning() && peripheral.isRunning()) {
         return true
       }
       scheduledTransition?.cancel(false)
@@ -160,8 +163,10 @@ class BleRelayRuntime internal constructor(
       return
     }
 
+    // Preserve discoverability even while this phone is conserving scan power.
+    // A nearby device with a fresh SOS must not wait through a 25s/115s
+    // advertising blackout before it can find this relay.
     runCatching { central.pauseScanning() }
-    runCatching { peripheral.pauseAdvertising() }
     dutyCyclePaused = true
     scheduledTransition = scheduler.schedule(
       { resumeAfterPause() },
