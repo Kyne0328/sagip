@@ -10,7 +10,7 @@ import {ReceiptService, type AuthoritySigner} from '../../src/responder/receiptS
 
 const golden = JSON.parse(
   readFileSync(
-    new URL('../../../sagip-docs/fixtures/receipts-v2/golden.json', import.meta.url),
+    new URL('../../../fixtures/receipts-v2/golden.json', import.meta.url),
     'utf8',
   ),
 ) as {
