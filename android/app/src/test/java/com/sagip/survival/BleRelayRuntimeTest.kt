@@ -130,7 +130,7 @@ class BleRelayRuntimeTest {
 
     val transition = BleRelayRuntime::class.java.getDeclaredMethod(
       "onActiveWindowEnded",
-      Long::class.javaPrimitiveType,
+      java.lang.Long.TYPE,
     )
     transition.isAccessible = true
     transition.invoke(runtime, 25_000L)
