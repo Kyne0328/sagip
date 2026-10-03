@@ -8,7 +8,7 @@ class ReceiptV2CodecTest {
   private data class Vector(val name: String, val bytes: ByteArray, val key: ByteArray, val accepts: Boolean, val signatureValid: Boolean)
   private fun hex(s: String) = s.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
   private fun vectors(): List<Vector> {
-    val file = listOf(File("../sagip-docs/fixtures/receipts-v2/golden.json"), File("../../sagip-docs/fixtures/receipts-v2/golden.json")).first { it.isFile }
+    val file = listOf(File("../fixtures/receipts-v2/golden.json"), File("../../fixtures/receipts-v2/golden.json")).first { it.isFile }
     val text = file.readText()
     // Narrow fixture extraction; no Android JSON runtime is available in JVM tests.
     val matches = Regex("\\\"name\\\": \\\"([^\\\"]+)\\\",\\s*\\\"hex\\\": \\\"([0-9a-f]+)\\\"").findAll(text).toList()
