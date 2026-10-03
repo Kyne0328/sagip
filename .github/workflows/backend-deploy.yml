@@ -82,6 +82,12 @@ jobs:
             if (response.status !== 200) {
               throw new Error(`Packaged ${path} returned HTTP ${response.status}`);
             }
+            if (path.endsWith('.pmtiles')) {
+              const bytes = await response.arrayBuffer();
+              if (bytes.byteLength !== 5630162) {
+                throw new Error(`Packaged Tagum archive had ${bytes.byteLength} bytes`);
+              }
+            }
           }
           NODE
           (
