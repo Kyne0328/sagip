@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash, randomUUID, sign } from 'node:crypto';
 import test from 'node:test';
 import { mkdtemp, copyFile, rm } from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -704,14 +704,17 @@ test('migration ledger stays isolated when a public ledger already exists', asyn
       );
       const isolated = await createIsolatedPostgres(url.toString());
       try {
-        await applyMigrations(
-          isolated.pool,
-          fileURLToPath(new URL('../../migrations/', import.meta.url)),
+        const migrationsDirectory = fileURLToPath(
+          new URL('../../migrations/', import.meta.url),
         );
+        const expectedMigrationCount = readdirSync(migrationsDirectory).filter(
+          name => name.endsWith('.sql'),
+        ).length;
+        await applyMigrations(isolated.pool, migrationsDirectory);
         assert.equal(
           (await isolated.pool.query('SELECT * FROM schema_migrations'))
             .rowCount,
-          6,
+          expectedMigrationCount,
         );
         assert.deepEqual(
           (
