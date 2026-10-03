@@ -23,12 +23,6 @@ class SagipSurvivalCoreModule(
     EnvelopePreparationService(repository, AndroidKeystoreSigningIdentity())
   }
   private val executor = Executors.newSingleThreadExecutor()
-  private val sender by lazy {
-    HttpEnvelopeSender(BackendEndpointConfig.envelopeUrl())
-  }
-  private val deliveryWorker by lazy {
-    DeliveryWorker(repository, sender)
-  }
   private val connectivityMonitor by lazy {
     NetworkConnectivityMonitor(reactContext.applicationContext) {
       triggerBackgroundDelivery()
@@ -49,12 +43,7 @@ class SagipSurvivalCoreModule(
 
   private fun triggerBackgroundDelivery() {
     executor.execute {
-      try {
-        preparationService.preparePending()
-        runBlocking { deliveryWorker.runOnce() }
-        runtime.runGatewaySync()
-      } catch (_: Exception) {
-      }
+      runCatching { runBlocking { runtime.runDeliveryPass() } }
     }
   }
 
@@ -64,10 +53,7 @@ class SagipSurvivalCoreModule(
   fun triggerDelivery(promise: Promise) {
     executor.execute {
       try {
-        preparationService.preparePending()
-        val completed = runBlocking { deliveryWorker.runOnce() }
-        runtime.runGatewaySync()
-        promise.resolve(completed)
+        promise.resolve(runBlocking { runtime.runDeliveryPass() })
       } catch (_: Exception) {
         promise.resolve(0)
       }
