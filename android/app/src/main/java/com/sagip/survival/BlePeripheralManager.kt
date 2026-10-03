@@ -235,7 +235,7 @@ class BlePeripheralManager(
     if (!extensionPeerActivity.containsKey(peerId) && extensionPeerActivity.size >= MAX_EXTENSION_PEERS) return false
     extensionPeerActivity[peerId] = nowMs
     val lastPersistedAt = extensionContactPersistedAt[peerId]
-    if (lastPersistedAt == null || nowMs < lastPersistedAt || nowMs - lastPersistedAt >= CONTACT_ACTIVITY_PERSIST_INTERVAL_MS) {
+    if (BleRelayLatencyPolicy.shouldPersistContactActivity(lastPersistedAt, nowMs)) {
       receiptQueue?.touchContact(peerId, nowMs)
       extensionContactPersistedAt[peerId] = nowMs
     }
@@ -705,7 +705,6 @@ class BlePeripheralManager(
 
   companion object {
     private const val EXTENSION_CONTACT_TIMEOUT_MS = 60_000L
-    private const val CONTACT_ACTIVITY_PERSIST_INTERVAL_MS = 15_000L
     private const val MAX_EXTENSION_PEERS = 4
   }
 }
