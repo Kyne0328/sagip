@@ -19,6 +19,21 @@ data class CreateEmergencyReportInput(
   val urgency: Urgency,
 )
 
+data class AppendEmergencyDetailsInput(
+  val reportId: String,
+  val expectedRevision: Int,
+  val operationId: String,
+  val emergencyType: EmergencyType? = null,
+  // Null means absent/retain; an explicit empty string clears the message.
+  val message: String? = null,
+)
+
+data class RevisionDeliverySummary(
+  val revision: Int,
+  val messageId: String,
+  val deliveryState: String,
+)
+
 data class LocationSnapshot(
   val latitude: Double,
   val longitude: Double,
@@ -37,6 +52,10 @@ data class EmergencyReportSummary(
   val deliveryState: String,
   val location: LocationSnapshot?,
   val responderAck: ResponderAck? = null,
+  val latestRevision: Int = 1,
+  val message: String? = null,
+  val originalDelivery: RevisionDeliverySummary? = null,
+  val latestDelivery: RevisionDeliverySummary? = null,
 )
 
 data class RelayCustodyStatus(
