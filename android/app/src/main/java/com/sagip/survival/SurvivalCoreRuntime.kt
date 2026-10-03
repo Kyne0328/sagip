@@ -104,12 +104,18 @@ class SurvivalCoreRuntime private constructor(context: Context) {
       relayStore = repository,
       ackStore = repository,
     )
-    EnvelopePreparationService(
-      repository = repository,
-      identity = AndroidKeystoreSigningIdentity(),
-    ).preparePending()
+    val preparation = runCatching {
+      EnvelopePreparationService(
+        repository = repository,
+        identity = AndroidKeystoreSigningIdentity(),
+      ).preparePending()
+    }
     val completed = worker.runOnce(nowMs)
     runGatewaySync(nowMs)
+    // Do not let a local signing/preparation failure block an already-durable
+    // relayed envelope from reaching the server. Scheduled delivery still
+    // receives the failure so Android can retry the pending local preparation.
+    preparation.getOrThrow()
     completed
   }
 
