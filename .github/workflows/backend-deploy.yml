@@ -66,7 +66,7 @@ jobs:
         run: |
           npm --prefix backend run typecheck
           npm --prefix backend run lint
-          npm --prefix backend run build:console
+          npm --prefix backend run build:neon
           (
             cd backend
             npx tsx --test test/db/migration.test.ts test/http/mapAssets.test.ts
