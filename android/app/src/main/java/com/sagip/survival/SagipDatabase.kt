@@ -73,6 +73,15 @@ class SagipDatabase(context: Context) :
       currentVersion = 7
     }
 
+    if (currentVersion == 7 && newVersion >= 8) {
+      check(db.inTransaction()) { "SAGIP revision migration requires an atomic upgrade transaction" }
+      Schema.MIGRATE_7_TO_8.forEach(db::execSQL)
+      db.rawQuery("PRAGMA foreign_key_check", emptyArray()).use { cursor ->
+        check(!cursor.moveToFirst()) { "SAGIP revision migration violated foreign-key integrity" }
+      }
+      currentVersion = 8
+    }
+
     if (currentVersion != newVersion) {
       throw IllegalStateException("Unsupported SAGIP database migration: $oldVersion -> $newVersion")
     }
