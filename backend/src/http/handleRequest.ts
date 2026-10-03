@@ -13,7 +13,11 @@ import type {IncidentSnapshotService} from '../responder/incidentSnapshot.js';
 import type {ActionCommitResult, ActionIntent, ReceiptService} from '../responder/receiptService.js';
 import type {GatewayGrantRequest, GrantProvisioningService, TimeChallenge} from '../responder/grantProvisioning.js';
 import {responderDashboardResponse} from '../responder/dashboard.js';
-import {SlidingWindowRateLimiter, type RateLimiter} from './rateLimiter.js';
+import {
+  createLocalSagipRateLimiters,
+  type RateLimiter,
+  type SagipRateLimiters,
+} from './rateLimiter.js';
 
 export interface SagipServerDependencies {
   ingestEnvelope(bytes: Buffer): Promise<ServerReceipt>;
@@ -22,6 +26,7 @@ export interface SagipServerDependencies {
   authorityService?: GrantProvisioningService;
   incidentSnapshotService?: IncidentSnapshotService;
   rateLimiter?: RateLimiter;
+  rateLimiters?: SagipRateLimiters;
 }
 
 export interface SagipRequestContext {
@@ -29,7 +34,7 @@ export interface SagipRequestContext {
   discardBody?: () => void;
 }
 
-const defaultRateLimiter = new SlidingWindowRateLimiter();
+const defaultRateLimiters = createLocalSagipRateLimiters();
 
 class RequestBodyTooLargeError extends Error {}
 
@@ -77,22 +82,14 @@ export async function handleSagipRequest(
       return jsonResponse(200, {status: 'ok'});
     }
 
-    const isRateLimitedEndpoint =
-      pathname === '/v1/envelopes' ||
-      pathname === RESPONDER_SESSION_PATH ||
-      pathname === RECEIPT_IMPORT_PATH ||
-      pathname.startsWith('/v2/responder/actions') ||
-      pathname.startsWith('/v2/responder/snapshots') ||
-      pathname.startsWith('/v2/reports/') ||
-      pathname.startsWith('/v2/authority/') ||
-      REPORT_STATUS_RE.test(pathname) ||
-      pathname.startsWith('/v1/incidents');
-    if (isRateLimitedEndpoint) {
+    const rateLimitSelection = selectRateLimiter(pathname, deps);
+    if (rateLimitSelection) {
       const clientIp = context.clientIp ?? '127.0.0.1';
-      const limiter = deps.rateLimiter ?? defaultRateLimiter;
       let allowed: boolean;
       try {
-        allowed = await limiter.isAllowed(clientIp);
+        allowed = await rateLimitSelection.limiter.isAllowed(
+          `${rateLimitSelection.bucket}:${clientIp}`,
+        );
       } catch {
         discardRequestBody(context);
         return jsonResponse(503, {error: 'SERVICE_UNAVAILABLE'});
@@ -602,6 +599,40 @@ export async function handleSagipRequest(
     }
     return jsonResponse(500, {error: 'INTERNAL_ERROR'});
   }
+}
+
+function isRateLimitedEndpointPath(pathname: string): boolean {
+  return (
+    pathname === '/v1/envelopes' ||
+    pathname === RESPONDER_SESSION_PATH ||
+    pathname === RECEIPT_IMPORT_PATH ||
+    pathname.startsWith('/v2/responder/actions') ||
+    pathname.startsWith('/v2/responder/snapshots') ||
+    pathname.startsWith('/v2/reports/') ||
+    pathname.startsWith('/v2/authority/') ||
+    REPORT_STATUS_RE.test(pathname) ||
+    pathname.startsWith('/v1/incidents')
+  );
+}
+
+function selectRateLimiter(
+  pathname: string,
+  deps: SagipServerDependencies,
+): {bucket: string; limiter: RateLimiter} | null {
+  if (!isRateLimitedEndpointPath(pathname)) return null;
+  if (deps.rateLimiter) return {bucket: 'legacy', limiter: deps.rateLimiter};
+
+  const limiters = deps.rateLimiters ?? defaultRateLimiters;
+  if (pathname === '/v1/envelopes') {
+    return {bucket: 'envelope-ingest', limiter: limiters.envelopeIngest};
+  }
+  if (REPORT_STATUS_RE.test(pathname)) {
+    return {bucket: 'report-status', limiter: limiters.reportStatus};
+  }
+  if (pathname === RESPONDER_SESSION_PATH) {
+    return {bucket: 'responder-session', limiter: limiters.responderSession};
+  }
+  return {bucket: 'responder-api', limiter: limiters.responderApi};
 }
 
 function strictJsonObject(bytes: Buffer, keys: string[]): Record<string, unknown> {
