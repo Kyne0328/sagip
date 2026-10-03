@@ -15,6 +15,7 @@ class DeliveryWorkerTest {
     val completedAttempts = mutableListOf<Pair<String, String>>()
     val acceptedReceipts = mutableListOf<ServerReceipt>()
     val retriedMessages = mutableListOf<String>()
+    val retryMinimumDelays = mutableListOf<Long?>()
     val failedMessages = mutableListOf<Pair<String, String?>>()
 
     override fun listDueOutbound(now: Long, limit: Int): List<OutboundEnvelopeWork> = dueList.toList()
@@ -43,10 +44,16 @@ class DeliveryWorkerTest {
       dueList.removeAll { it.messageId == receipt.messageId }
     }
 
-    override fun scheduleRetry(messageId: String, now: Long, jitterUnit: Double): Long {
+    override fun scheduleRetry(
+      messageId: String,
+      now: Long,
+      jitterUnit: Double,
+      minimumDelayMs: Long?,
+    ): Long {
       retriedMessages += messageId
+      retryMinimumDelays += minimumDelayMs
       dueList.removeAll { it.messageId == messageId }
-      return now + 5000L
+      return now + maxOf(5000L, minimumDelayMs ?: 0L)
     }
 
     override fun markDeliveryFailed(messageId: String, reason: String?, now: Long) {
@@ -131,6 +138,21 @@ class DeliveryWorkerTest {
   }
 
   @Test
+  fun `runOnce keeps rate limiting retryable and respects server minimum delay`() = runBlocking {
+    val store = FakeOutboundDeliveryStore(mutableListOf(sampleEnvelope))
+    val sender = FakeEnvelopeSender(
+      DeliveryTransportResult.RetryableFailure("HTTP_429", minimumRetryDelayMs = 60_000L),
+    )
+
+    val count = DeliveryWorker(store, sender).runOnce(now = 2_000L)
+
+    assertEquals(0, count)
+    assertEquals(listOf("msg-1"), store.retriedMessages)
+    assertEquals(listOf(60_000L), store.retryMinimumDelays)
+    assertTrue(store.failedMessages.isEmpty())
+  }
+
+  @Test
   fun `runOnce marks permanent failure on permanent failure`() = runBlocking {
     val store = FakeOutboundDeliveryStore(mutableListOf(sampleEnvelope))
     val sender = FakeEnvelopeSender(DeliveryTransportResult.PermanentFailure("HTTP_400"))
@@ -155,6 +177,7 @@ class DeliveryWorkerTest {
     val acceptedInbound = mutableListOf<String>()
     val failedInbound = mutableListOf<String>()
     val retriedInbound = mutableListOf<String>()
+    val inboundRetryMinimumDelays = mutableListOf<Long?>()
     val reportsAwaitingAck = mutableListOf<String>()
     val recordedAcks = mutableListOf<ResponderAck>()
     val scheduledAckPolls = mutableListOf<Pair<String, Long>>()
@@ -171,10 +194,16 @@ class DeliveryWorkerTest {
       inboundList.removeAll { it.messageId == messageId }
     }
 
-    override fun scheduleInboundRetry(messageId: String, now: Long, jitterUnit: Double): Long {
+    override fun scheduleInboundRetry(
+      messageId: String,
+      now: Long,
+      jitterUnit: Double,
+      minimumDelayMs: Long?,
+    ): Long {
       retriedInbound += messageId
+      inboundRetryMinimumDelays += minimumDelayMs
       inboundList.removeAll { it.messageId == messageId }
-      return now + 5000L
+      return now + maxOf(5000L, minimumDelayMs ?: 0L)
     }
 
     override fun listInboundReportsAwaitingAck(now: Long, limit: Int): List<String> =
