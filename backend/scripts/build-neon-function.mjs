@@ -67,7 +67,7 @@ const result = await build({
     {
       name: 'sagip-embedded-responder-assets',
       setup(buildContext) {
-        buildContext.onLoad({filter: /embeddedAssets\.ts$/u}, args => {
+        buildContext.onLoad({filter: /embeddedAssets\.ts$/}, args => {
           if (resolve(args.path) !== embeddedModule) return null;
           return {
             contents:
