@@ -37,13 +37,14 @@ function i64(value: bigint): Buffer {
   return bytes;
 }
 
-function buildSignedEnvelope(overrides?: {messageId?: string; reportId?: string}): Buffer {
+function buildSignedEnvelope(overrides?: {messageId?: string; reportId?: string; payload?: Buffer}): Buffer {
   const messageId = overrides?.messageId ?? '11111111-1111-1111-1111-111111111111';
   const reportId = overrides?.reportId ?? '22222222-2222-2222-2222-222222222222';
   const {privateKey, publicKey} = generateKeyPairSync('ec', {namedCurve: 'prime256v1'});
   const publicKeyDer = publicKey.export({type: 'spki', format: 'der'});
   const keyId = createHash('sha256').update(publicKeyDer).digest();
-  const payloadDigest = createHash('sha256').update(PAYLOAD).digest();
+  const payload = overrides?.payload ?? PAYLOAD;
+  const payloadDigest = createHash('sha256').update(payload).digest();
 
   const unsigned = Buffer.concat([
     Buffer.from('SGP1', 'ascii'),
@@ -58,8 +59,8 @@ function buildSignedEnvelope(overrides?: {messageId?: string; reportId?: string}
     u16(publicKeyDer.length),
     publicKeyDer,
     payloadDigest,
-    u32(PAYLOAD.length),
-    PAYLOAD,
+    u32(payload.length),
+    payload,
   ]);
   const signature = sign('sha256', unsigned, privateKey);
   return Buffer.concat([unsigned, u16(signature.length), signature]);
@@ -103,6 +104,7 @@ test('verifies a valid P-256 envelope and decodes its SRP1 payload', () => {
     emergencyType: 1,
     urgency: 1,
     location: null,
+    message: null,
   });
 });
 
@@ -134,4 +136,22 @@ test('rejects signature corruption and trailing bytes', () => {
 
 test('rejects envelopes larger than the protocol maximum', () => {
   assert.throws(() => decodeEnvelopeV1(Buffer.alloc(8193)), /too large/i);
+});
+
+test('verifies signed v2 SOS details without altering payload bytes', () => {
+  const payload = Buffer.from('5352503102060100000448656c70', 'hex');
+  const verified = verifyEnvelopeV1(buildSignedEnvelope({payload}));
+  assert.equal(verified.emergencyPayload.message, 'Help');
+  assert.deepEqual(verified.payload, payload);
+});
+
+test('verifies a maximum 532-byte v2 payload within unchanged SGP1 bounds', () => {
+  const payload = Buffer.concat([
+    Buffer.from('535250310206010100dec54c073612880000032000000000000004b0010101f4', 'hex'),
+    Buffer.from('a'.repeat(500)),
+  ]);
+  assert.equal(payload.length, 532);
+  const envelope = buildSignedEnvelope({payload});
+  assert.ok(envelope.length <= 8192);
+  assert.equal(verifyEnvelopeV1(envelope).emergencyPayload.message, 'a'.repeat(500));
 });

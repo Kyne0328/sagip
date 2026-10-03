@@ -5,7 +5,7 @@ import {
   verify as verifySignature,
 } from 'node:crypto';
 
-import {decodeEmergencyPayloadV1, type DecodedEmergencyPayloadV1} from './emergencyPayloadV1.js';
+import {decodeEmergencyPayload, type DecodedEmergencyPayload} from './emergencyPayload.js';
 import {protocolFailure, ProtocolValidationError} from './errors.js';
 
 export const MAX_ENVELOPE_BYTES = 8192;
@@ -31,7 +31,7 @@ export interface DecodedEnvelopeV1 {
 }
 
 export interface VerifiedEnvelopeV1 extends DecodedEnvelopeV1 {
-  emergencyPayload: DecodedEmergencyPayloadV1;
+  emergencyPayload: DecodedEmergencyPayload;
 }
 
 class BufferCursor {
@@ -191,9 +191,9 @@ export function verifyEnvelopeV1(bytes: Buffer): VerifiedEnvelopeV1 {
     throw protocolFailure('INVALID_SIGNATURE', 'Origin signature verification failed');
   }
 
-  let emergencyPayload: DecodedEmergencyPayloadV1;
+  let emergencyPayload: DecodedEmergencyPayload;
   try {
-    emergencyPayload = decodeEmergencyPayloadV1(decoded.payload);
+    emergencyPayload = decodeEmergencyPayload(decoded.payload);
   } catch (error) {
     if (error instanceof ProtocolValidationError) {
       throw error;
