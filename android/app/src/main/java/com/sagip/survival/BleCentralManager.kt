@@ -215,10 +215,6 @@ class BleCentralManager(
     private var primaryTransferFinished = false
     private val serviceDiscoveryStarted = AtomicBoolean(false)
     private var mtuFallback: ScheduledFuture<*>? = null
-    private var legacyChunkPacer: ScheduledFuture<*>? = null
-    private var typedChunkPacer: ScheduledFuture<*>? = null
-    private var legacyChunkRetryCount = 0
-    private var typedChunkRetryCount = 0
     private var fastTypedOffer = false
     private val peerInventory = mutableListOf<InventoryEntry>()
     private var peerInventorySnapshotId: String? = null
@@ -266,8 +262,6 @@ class BleCentralManager(
         }
       } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
         mtuFallback?.cancel(false)
-        legacyChunkPacer?.cancel(false)
-        typedChunkPacer?.cancel(false)
         if (!attemptCompleted && transfer != null) {
           completeAttempt(transfer, "RETRYABLE_FAILURE", "BLE_DISCONNECTED")
           attemptCompleted = true
@@ -532,7 +526,9 @@ class BleCentralManager(
     private fun sendTypedNextChunk(gatt: BluetoothGatt) {
       val characteristic = extensionChunkChar ?: run { gatt.disconnect(); return }
       val bytes = typedChunks.getOrNull(typedChunkIndex) ?: run { readTypedCustody(gatt); return }
+      characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
       characteristic.value = bytes
+      scheduleTransferProgressTimeout(gatt)
       try {
         if (!gatt.writeCharacteristic(characteristic)) gatt.disconnect()
       } catch (_: SecurityException) {
@@ -632,7 +628,12 @@ class BleCentralManager(
     }
 
     override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
-      if (status == BluetoothGatt.GATT_SUCCESS) sendOffer(gatt) else gatt.disconnect()
+      if (status == BluetoothGatt.GATT_SUCCESS) {
+        scheduleTransferProgressTimeout(gatt)
+        sendOffer(gatt)
+      } else {
+        gatt.disconnect()
+      }
     }
 
     private fun sendOffer(gatt: BluetoothGatt) {
@@ -665,6 +666,7 @@ class BleCentralManager(
         gatt.disconnect()
         return
       }
+      scheduleTransferProgressTimeout(gatt)
 
       if (characteristic.uuid == BleProtocolConstants.CHARACTERISTIC_EXTENSION_CONTROL_UUID) {
         when (extensionState) {
@@ -726,6 +728,7 @@ class BleCentralManager(
       characteristic: BluetoothGattCharacteristic,
       status: Int,
     ) {
+      scheduleTransferProgressTimeout(gatt)
       if (characteristic.uuid == BleProtocolConstants.CHARACTERISTIC_EXTENSION_CAPABILITY_UUID) {
         if (extensionState != ExtensionState.READING_CAPABILITY) {
           gatt.disconnect()
@@ -875,7 +878,9 @@ class BleCentralManager(
         gatt.disconnect()
         return
       }
+      characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
       characteristic.value = chunkBytes
+      scheduleTransferProgressTimeout(gatt)
       try {
         if (!gatt.writeCharacteristic(characteristic)) gatt.disconnect()
       } catch (_: SecurityException) {
