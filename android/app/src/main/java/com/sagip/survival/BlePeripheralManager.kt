@@ -545,11 +545,16 @@ class BlePeripheralManager(
       null
     } ?: return
 
+    val txPower = when (advertiseMode) {
+      AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY -> AdvertiseSettings.ADVERTISE_TX_POWER_HIGH
+      AdvertiseSettings.ADVERTISE_MODE_BALANCED -> AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM
+      else -> AdvertiseSettings.ADVERTISE_TX_POWER_LOW
+    }
     val settings = AdvertiseSettings.Builder()
       .setAdvertiseMode(advertiseMode)
       .setConnectable(true)
       .setTimeout(0)
-      .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
+      .setTxPowerLevel(txPower)
       .build()
 
     val data = AdvertiseData.Builder()
