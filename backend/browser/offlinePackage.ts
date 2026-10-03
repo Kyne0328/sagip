@@ -4,6 +4,7 @@ const PACKAGE_STORE = 'packages';
 const RESOURCE_STORE = 'resources';
 const STATE_STORE = 'state';
 const ACTIVE_PACKAGE_KEY = 'activePackageId';
+const DATABASE_OPEN_TIMEOUT_MS = 4_000;
 
 export type OfflineResourceKind =
   | 'archive'
@@ -315,8 +316,25 @@ async function inspectStorage(
 
 async function openDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
+    let settled = false;
     const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
-    request.onerror = () => reject(request.error ?? new Error('Unable to open offline map store'));
+    const timeout = window.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error('OFFLINE_MAP_STORE_TIMEOUT'));
+    }, DATABASE_OPEN_TIMEOUT_MS);
+
+    const rejectOnce = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      reject(error);
+    };
+
+    request.onerror = () =>
+      rejectOnce(request.error ?? new Error('Unable to open offline map store'));
+    request.onblocked = () =>
+      rejectOnce(new Error('OFFLINE_MAP_STORE_BLOCKED'));
     request.onupgradeneeded = () => {
       const database = request.result;
       if (!database.objectStoreNames.contains(PACKAGE_STORE)) {
@@ -330,7 +348,15 @@ async function openDatabase(): Promise<IDBDatabase> {
         database.createObjectStore(STATE_STORE, {keyPath: 'key'});
       }
     };
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      if (settled) {
+        request.result.close();
+        return;
+      }
+      settled = true;
+      window.clearTimeout(timeout);
+      resolve(request.result);
+    };
   });
 }
 
