@@ -68,8 +68,8 @@ class BleCentralManager(
       discoveredPeers[device.address] = device
       val now = System.currentTimeMillis()
       val previousAttemptAt = lastAttemptAt[device.address]
-      if (previousAttemptAt != null && now - previousAttemptAt < PEER_RETRY_INTERVAL_MS) return
-      if (activeConnections.size >= MAX_ACTIVE_OUTGOING_CONNECTIONS) return
+      if (previousAttemptAt != null && now - previousAttemptAt < BleRelayLatencyPolicy.PEER_RETRY_INTERVAL_MS) return
+      if (activeConnections.size >= BleRelayLatencyPolicy.MAX_ACTIVE_OUTGOING_CONNECTIONS) return
       if (!activeConnections.add(device.address)) return
 
       lastAttemptAt[device.address] = now
@@ -189,7 +189,7 @@ class BleCentralManager(
           gatt,
           transfer,
           "BLE_CONNECT_TIMEOUT",
-          CONNECT_TIMEOUT_MS,
+          BleRelayLatencyPolicy.CONNECT_TIMEOUT_MS,
         )
       }
     } catch (_: SecurityException) {
@@ -243,7 +243,7 @@ class BleCentralManager(
           gatt,
           transfer,
           "BLE_SERVICE_SETUP_TIMEOUT",
-          SERVICE_SETUP_TIMEOUT_MS,
+          BleRelayLatencyPolicy.SERVICE_SETUP_TIMEOUT_MS,
         )
         val mtuRequested = try {
           gatt.requestMtu(512)
@@ -254,7 +254,7 @@ class BleCentralManager(
           mtuFallback?.cancel(false)
           mtuFallback = timeoutExecutor.schedule(
             { discoverServicesOrDisconnect(gatt) },
-            MTU_FALLBACK_MS,
+            BleRelayLatencyPolicy.MTU_FALLBACK_MS,
             TimeUnit.MILLISECONDS,
           )
         } else {
@@ -395,7 +395,7 @@ class BleCentralManager(
         queue.leaseContactWork(
           gatt.device.address,
           now,
-          if (fastTypedOffer) DIRECT_TYPED_OFFER_THRESHOLD else BleReceiptExchangeCodec.MAX_CONTACT_TRANSFERS,
+          if (fastTypedOffer) BleRelayLatencyPolicy.DIRECT_TYPED_OFFER_THRESHOLD else BleReceiptExchangeCodec.MAX_CONTACT_TRANSFERS,
         )
       } catch (_: Exception) {
         gatt.disconnect()
@@ -747,9 +747,9 @@ class BleCentralManager(
         expectedPeerInventoryPage = 0
         peerInventoryTotalCount = null
         val localPage = runCatching {
-          receiptQueue?.inventory(null, DIRECT_TYPED_OFFER_THRESHOLD)
+          receiptQueue?.inventory(null, BleRelayLatencyPolicy.DIRECT_TYPED_OFFER_THRESHOLD)
         }.getOrNull()
-        if (localPage != null && localPage.entries.isNotEmpty() && localPage.nextCursor == null) {
+        if (BleRelayLatencyPolicy.shouldDirectOffer(localPage)) {
           fastTypedOffer = true
           prepareTypedLeases(gatt)
         } else if (!requestPeerInventory(gatt, null, 0)) {
@@ -854,7 +854,7 @@ class BleCentralManager(
         gatt,
         if (attemptCompleted) null else transfer,
         "BLE_TRANSFER_STALLED",
-        TRANSFER_PROGRESS_TIMEOUT_MS,
+        BleRelayLatencyPolicy.TRANSFER_PROGRESS_TIMEOUT_MS,
       )
     }
 
@@ -956,7 +956,7 @@ class BleCentralManager(
         gatt,
         if (attemptCompleted) null else transfer,
         "BLE_SERVICE_DISCOVERY_TIMEOUT",
-        SERVICE_DISCOVERY_TIMEOUT_MS,
+        BleRelayLatencyPolicy.SERVICE_DISCOVERY_TIMEOUT_MS,
       )
       val started = try {
         gatt.discoverServices()
@@ -1019,14 +1019,5 @@ class BleCentralManager(
     runCatching { gatt.close() }
   }
 
-  companion object {
-    private const val MAX_ACTIVE_OUTGOING_CONNECTIONS = 2
-    private const val PEER_RETRY_INTERVAL_MS = 5_000L
-    private const val CONNECT_TIMEOUT_MS = 12_000L
-    private const val SERVICE_SETUP_TIMEOUT_MS = 10_000L
-    private const val SERVICE_DISCOVERY_TIMEOUT_MS = 6_000L
-    private const val MTU_FALLBACK_MS = 1_500L
-    private const val TRANSFER_PROGRESS_TIMEOUT_MS = 10_000L
-    private const val DIRECT_TYPED_OFFER_THRESHOLD = 2
-  }
+
 }
