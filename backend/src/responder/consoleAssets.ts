@@ -15,7 +15,7 @@ const BROWSER_ASSET_ROOT = '/responder/assets/browser';
 const MODULE_ROOT = dirname(fileURLToPath(import.meta.url));
 const DEPLOYED_ASSET_ROOT = join(MODULE_ROOT, 'responder-assets');
 const USE_DEPLOYED_ASSETS = existsSync(DEPLOYED_ASSET_ROOT);
-const BACKEND_ROOT = dirname(dirname(dirname(MODULE_ROOT)));
+const BACKEND_ROOT = dirname(dirname(MODULE_ROOT));
 const GENERATED_ASSET_ROOT = USE_DEPLOYED_ASSETS
   ? join(DEPLOYED_ASSET_ROOT, 'generated')
   : join(BACKEND_ROOT, '.generated', 'responder-assets');
