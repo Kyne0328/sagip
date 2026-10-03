@@ -69,7 +69,7 @@ jobs:
           npm --prefix backend run build:console
           (
             cd backend
-            npx tsx --test test/http/mapAssets.test.ts
+            npx tsx --test test/db/migration.test.ts test/http/mapAssets.test.ts
           )
 
       - name: Link and plan Neon production target
