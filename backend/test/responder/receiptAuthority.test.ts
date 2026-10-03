@@ -11,7 +11,7 @@ import {
 const f = JSON.parse(
   readFileSync(
     new URL(
-      '../../../sagip-docs/fixtures/receipts-v2/golden.json',
+      '../../../fixtures/receipts-v2/golden.json',
       import.meta.url,
     ),
     'utf8',
