@@ -16,7 +16,8 @@
     "test:browser": "npm run build:console && playwright test test/browser",
     "test": "tsx --test test/**/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src test --ext .ts"
+    "lint": "eslint src test --ext .ts",
+    "build:neon": "npm run build:console && node scripts/build-neon-function.mjs"
   },
   "dependencies": {
     "maplibre-gl": "6.11.2",
@@ -32,6 +33,7 @@
     "eslint": "^8.57.1",
     "pg-mem": "^3.0.5",
     "tsx": "^4.20.5",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "esbuild": "0.28.2"
   }
 }
