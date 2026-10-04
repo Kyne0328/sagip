@@ -179,6 +179,7 @@ export class IncidentMapView {
     }
 
     this.select(reportId);
+    this.map.resize();
     const latitudePadding = 0.003;
     const longitudePadding = 0.003;
     this.map.fitBounds(
@@ -191,6 +192,10 @@ export class IncidentMapView {
     this.hasFittedIncidentBounds = true;
     this.announce.textContent = 'Offline map centered on the selected incident location.';
     return 'FOCUSED';
+  }
+
+  refreshLayout(): void {
+    this.refreshMapLayout();
   }
 
   destroy(): void {

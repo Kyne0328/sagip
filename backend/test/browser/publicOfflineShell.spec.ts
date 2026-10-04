@@ -17,6 +17,7 @@ test('public responder shell and map runtime remain available offline without ca
   page,
   context,
 }) => {
+  let appScriptVersion = 'initial-shell';
   await context.route(`${ORIGIN}/**`, async route => {
     const request = route.request();
     const url = new URL(request.url());
@@ -26,6 +27,14 @@ test('public responder shell and map runtime remain available offline without ca
         status: 200,
         contentType: 'text/html; charset=utf-8',
         body: '<!doctype html><title>SAGIP offline shell fixture</title>',
+      });
+      return;
+    }
+    if (url.pathname === '/responder/app.js') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/javascript; charset=utf-8',
+        body: `globalThis.__sagipShellVersion = ${JSON.stringify(appScriptVersion)};`,
       });
       return;
     }
@@ -83,6 +92,10 @@ test('public responder shell and map runtime remain available offline without ca
     )
     .toBe(true);
 
+  appScriptVersion = 'updated-shell';
+  const onlineShell = await page.evaluate(async () => await (await fetch('/responder/app.js')).text());
+  expect(onlineShell).toContain('updated-shell');
+
   await context.unroute(`${ORIGIN}/**`);
   await context.setOffline(true);
 
@@ -90,6 +103,7 @@ test('public responder shell and map runtime remain available offline without ca
     const mapModule = await fetch(mapModulePath);
     const mapBytes = (await mapModule.arrayBuffer()).byteLength;
     const appScript = await fetch('/responder/app.js');
+    const appText = await appScript.text();
 
     let uncachedProtectedRoute = 'unexpected-response';
     try {
@@ -102,6 +116,7 @@ test('public responder shell and map runtime remain available offline without ca
       mapStatus: mapModule.status,
       mapBytes,
       appStatus: appScript.status,
+      appText,
       uncachedProtectedRoute,
     };
   }, RESPONDER_MAP_ASSET_PATHS.maplibreModule);
@@ -109,5 +124,6 @@ test('public responder shell and map runtime remain available offline without ca
   expect(result.mapStatus).toBe(200);
   expect(result.mapBytes).toBeGreaterThan(0);
   expect(result.appStatus).toBe(200);
+  expect(result.appText).toContain('updated-shell');
   expect(result.uncachedProtectedRoute).toBe('network-failed');
 });

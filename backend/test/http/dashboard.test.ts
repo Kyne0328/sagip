@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {handleSagipRequest} from '../../src/http/handleRequest.js';
+import {RESPONDER_BROWSER_ASSET_PATHS} from '../../src/responder/consoleAssets.js';
 
 const deps = {
   ingestEnvelope: async () => {
@@ -52,12 +53,20 @@ test('responder dashboard assets are served with strict browser security headers
   const javascript = await js.text();
   assert.match(javascript, /\/v1\/responder\/session/u);
   assert.match(javascript, /It may have been saved/u);
-  assert.match(javascript, /sagip:focus-map/u);
-  assert.match(javascript, /cancelable: true/u);
-  assert.match(javascript, /map-focus-mode/u);
-  assert.match(javascript, /scrollIntoView/u);
   assert.doesNotMatch(javascript, /sessionStorage/u);
   assert.doesNotMatch(javascript, /authorization.*Bearer/iu);
+
+  const controller = await handleSagipRequest(
+    new Request('http://localhost' + RESPONDER_BROWSER_ASSET_PATHS.consoleControllerModule),
+    deps,
+  );
+  assert.equal(controller.status, 200);
+  const controllerJavascript = await controller.text();
+  assert.match(controllerJavascript, /showSelectedIncidentOnMap/u);
+  assert.match(controllerJavascript, /prepareTagumMap/u);
+  assert.match(controllerJavascript, /map-focus-mode/u);
+  assert.match(controllerJavascript, /scrollIntoView/u);
+  assert.match(controllerJavascript, /mapLink\.addEventListener/u);
 });
 
 test('backend root leads responders to the console and health endpoint stays lightweight', async () => {

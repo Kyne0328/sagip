@@ -167,7 +167,12 @@ const DASHBOARD_HTML = `<!doctype html>
           <div class="map-stage">
             <div id="incidentMapCanvas" class="incident-map-canvas" aria-hidden="true"></div>
             <div id="incidentMapPlaceholder" class="map-placeholder">Checking local map package…</div>
-          <button id="exitMapFocusButton" type="button" class="map-focus-exit" hidden>Back to incident details</button>
+            <div id="mapFocusStatus" class="map-focus-status" hidden>
+              <span>Viewing incident location</span>
+              <strong id="mapFocusTitle">Emergency incident</strong>
+              <span id="mapFocusLocation">Location unavailable</span>
+            </div>
+            <button id="exitMapFocusButton" type="button" class="map-focus-exit" hidden>Back to incident details</button>
           </div>
           <p id="mapAnnouncement" class="sr-only" aria-live="polite"></p>
           <p class="map-accessibility-note">The incident queue remains the primary keyboard and screen-reader workspace. The map is a supplemental spatial view.</p>
@@ -1381,19 +1386,44 @@ main {
     width: min(80%, 30rem);
   }
 
+  .map-focus-status,
   .map-focus-exit {
     position: absolute;
     z-index: 26;
     inset-block-start: 1rem;
-    inset-inline-end: 1rem;
-    min-block-size: 3rem;
-    padding-inline: 1rem;
     border: 1px solid rgba(8, 48, 78, 0.25);
     border-radius: 0.7rem;
     background: rgba(255, 255, 255, 0.97);
     color: var(--navy-900);
-    font-weight: 800;
     box-shadow: 0 10px 26px rgba(6, 29, 48, 0.16);
+  }
+
+  .map-focus-status {
+    inset-inline-start: 1rem;
+    display: grid;
+    gap: 0.08rem;
+    max-inline-size: min(24rem, calc(100% - 13rem));
+    padding: 0.65rem 0.8rem;
+  }
+
+  .map-focus-status[hidden] { display: none; }
+
+  .map-focus-status > span:first-child {
+    color: var(--navy-700);
+    font-size: 0.67rem;
+    font-weight: 850;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .map-focus-status strong { font-size: 0.92rem; }
+  .map-focus-status > span:last-child { color: var(--ink-soft); font-size: 0.72rem; }
+
+  .map-focus-exit {
+    inset-inline-end: 1rem;
+    min-block-size: 3rem;
+    padding-inline: 1rem;
+    font-weight: 800;
   }
 
   .console.map-focus-mode .stats-grid,
@@ -1813,8 +1843,6 @@ const DASHBOARD_JS = `(() => {
   const locationText = document.getElementById('locationText');
   const locationMeta = document.getElementById('locationMeta');
   const locationCaptured = document.getElementById('locationCaptured');
-  const mapLink = document.getElementById('mapLink');
-  const exitMapFocusButton = document.getElementById('exitMapFocusButton');
   const revisionHistory = document.getElementById('revisionHistory');
   const ackHistory = document.getElementById('ackHistory');
   const ackForm = document.getElementById('ackForm');
@@ -2474,39 +2502,6 @@ const DASHBOARD_JS = `(() => {
     resetDetail();
     if (dataSource === 'offline' && activeOfflineSnapshot) renderOfflineSnapshot(activeOfflineSnapshot);
     else void refreshIncidents(true);
-  }, {signal: lifecycle.signal});
-
-  function exitMapFocus() {
-    consolePanel.classList.remove('map-focus-mode');
-    exitMapFocusButton.hidden = true;
-    if (!mapLink.classList.contains('hidden')) mapLink.focus({preventScroll: true});
-  }
-
-  mapLink.addEventListener('click', () => {
-    if (!selectedReportId) return;
-    const mapPanel = document.getElementById('incidentMapPanel');
-    const focused = window.dispatchEvent(new CustomEvent('sagip:focus-map', {
-      cancelable: true,
-      detail: {reportId: selectedReportId}
-    }));
-    if (!focused || !mapPanel) return;
-
-    consolePanel.classList.add('map-focus-mode');
-    exitMapFocusButton.hidden = false;
-    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    mapPanel.scrollIntoView({
-      behavior: reducedMotion ? 'auto' : 'smooth',
-      block: 'start',
-      inline: 'nearest'
-    });
-    mapPanel.focus({preventScroll: true});
-  }, {signal: lifecycle.signal});
-
-  exitMapFocusButton.addEventListener('click', exitMapFocus, {signal: lifecycle.signal});
-  document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && consolePanel.classList.contains('map-focus-mode')) {
-      exitMapFocus();
-    }
   }, {signal: lifecycle.signal});
 
   ackForm.addEventListener('submit', async (event) => {

@@ -28,7 +28,10 @@ interface AssetManifest {
 const serviceWorker = globalThis as unknown as ServiceWorkerGlobalScope;
 
 serviceWorker.addEventListener('install', event => {
-  event.waitUntil(installPublicCache());
+  event.waitUntil((async () => {
+    await installPublicCache();
+    await serviceWorker.skipWaiting();
+  })());
 });
 
 serviceWorker.addEventListener('activate', event => {
@@ -50,7 +53,11 @@ serviceWorker.addEventListener('fetch', event => {
   if (request.method !== 'GET') return;
   const url = new URL(request.url);
   if (url.origin !== serviceWorker.location.origin || !isPublicResponderAsset(url.pathname)) return;
-  event.respondWith(cacheFirst(request));
+  event.respondWith(
+    isImmutableRuntimeAsset(url.pathname)
+      ? cacheFirst(request)
+      : networkFirst(request),
+  );
 });
 
 async function installPublicCache(): Promise<void> {
@@ -74,11 +81,28 @@ async function cacheFirst(request: Request): Promise<Response> {
   const cached = await caches.match(request);
   if (cached) return cached;
   const response = await fetch(request);
-  if (response.ok) {
-    const cache = await caches.open(CACHE_NAME);
-    await cache.put(request, response.clone());
-  }
+  if (response.ok) await updatePublicCache(request, response);
   return response;
+}
+
+async function networkFirst(request: Request): Promise<Response> {
+  try {
+    const response = await fetch(request, {cache: 'no-store'});
+    if (response.ok) {
+      await updatePublicCache(request, response);
+      return response;
+    }
+    return (await caches.match(request)) ?? response;
+  } catch (error) {
+    const cached = await caches.match(request);
+    if (cached) return cached;
+    throw error;
+  }
+}
+
+async function updatePublicCache(request: Request, response: Response): Promise<void> {
+  const cache = await caches.open(CACHE_NAME);
+  await cache.put(request, response.clone());
 }
 
 function parseAssetManifest(value: unknown): string[] {
@@ -103,6 +127,12 @@ function parseAssetManifest(value: unknown): string[] {
 function isPublicResponderAsset(pathname: string): boolean {
   return (
     PUBLIC_SHELL_PATHS.includes(pathname as (typeof PUBLIC_SHELL_PATHS)[number]) ||
+    isImmutableRuntimeAsset(pathname)
+  );
+}
+
+function isImmutableRuntimeAsset(pathname: string): boolean {
+  return (
     pathname.startsWith('/responder/assets/maplibre-gl-') ||
     pathname.startsWith('/responder/assets/pmtiles-')
   );

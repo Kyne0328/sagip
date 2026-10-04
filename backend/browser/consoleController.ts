@@ -55,6 +55,16 @@ const mapCoverage = required('mapCoverage');
 const mapAnnouncement = required('mapAnnouncement');
 const discardButton = requiredButton('offlineDiscardButton');
 const prepareMapButton = requiredButton('prepareMapButton');
+const mapLink = requiredButton('mapLink');
+const exitMapFocusButton = requiredButton('exitMapFocusButton');
+const mapPanel = required('incidentMapPanel');
+const mapFocusStatus = required('mapFocusStatus');
+const mapFocusTitle = required('mapFocusTitle');
+const mapFocusLocation = required('mapFocusLocation');
+const consolePanel = required('consolePanel');
+const mapFocusInertTargets = Array.from(document.querySelectorAll<HTMLElement>(
+  '.stats-grid, .offline-heading, .readiness-grid, .incident-column, .detail-panel',
+));
 const TAGUM_MANIFEST_PATH = '/responder/map/tagum/manifest.json';
 
 let store: ConsoleStore | null = null;
@@ -76,35 +86,27 @@ window.addEventListener('sagip:incidents', event => {
   const detail = (event as CustomEvent<DashboardState>).detail;
   void mapView.render(detail.incidents, detail.selectedReportId);
   mapView.select(detail.selectedReportId);
-});
-
-window.addEventListener('sagip:focus-map', event => {
-  const reportId = (event as CustomEvent<{reportId?: unknown}>).detail?.reportId;
-  if (typeof reportId !== 'string' || reportId.length === 0) {
-    event.preventDefault();
-    return;
-  }
-  const result = mapView.focusReport(reportId);
-  if (result === 'FOCUSED') return;
-
-  event.preventDefault();
-  if (result === 'MAP_NOT_READY') {
-    window.SagipResponderBridge?.showOperationalMessage(
-      'The offline map is not prepared on this browser yet. Prepare the Tagum map package before using map navigation.',
-    );
-  } else if (result === 'LOCATION_NOT_MAPPED') {
-    window.SagipResponderBridge?.showOperationalMessage(
-      'The selected incident does not have usable location evidence to show on the offline map.',
-    );
-  } else if (result === 'OUTSIDE_EXTENT') {
-    window.SagipResponderBridge?.showOperationalMessage(
-      'The selected incident location is outside the prepared Tagum offline map coverage.',
-    );
+  if (consolePanel.classList.contains('map-focus-mode')) {
+    const selected = detail.incidents.find(item => item.reportId === detail.selectedReportId);
+    if (selected?.location) updateMapFocusStatus(selected);
+    else exitMapFocus(false);
   }
 });
 
 prepareMapButton.addEventListener('click', () => {
   void prepareTagumMap();
+});
+
+mapLink.addEventListener('click', () => {
+  void showSelectedIncidentOnMap();
+});
+
+exitMapFocusButton.addEventListener('click', () => exitMapFocus(true));
+
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && consolePanel.classList.contains('map-focus-mode')) {
+    exitMapFocus(true);
+  }
 });
 
 discardButton.addEventListener('click', async () => {
@@ -329,9 +331,132 @@ function buildProvider(bootstrap: OfflineBootstrap): ConsoleProvider {
   });
 }
 
+async function renderCurrentMapState(): Promise<DashboardState | null> {
+  const state = window.SagipResponderBridge?.getState() ?? null;
+  if (!state) return null;
+  await mapView.render(state.incidents, state.selectedReportId);
+  return state;
+}
+
 function publishCurrentMapState(): void {
+  void renderCurrentMapState();
+}
+
+async function showSelectedIncidentOnMap(): Promise<void> {
   const state = window.SagipResponderBridge?.getState();
-  if (state) void mapView.render(state.incidents, state.selectedReportId);
+  const reportId = state?.selectedReportId ?? null;
+  const incident = reportId
+    ? state?.incidents.find(item => item.reportId === reportId) ?? null
+    : null;
+
+  if (!reportId || !incident) {
+    window.SagipResponderBridge?.showOperationalMessage(
+      'Select an incident before opening the offline map.',
+    );
+    return;
+  }
+  if (!incident.location) {
+    window.SagipResponderBridge?.showOperationalMessage(
+      'The selected incident does not have usable location evidence to show on the offline map.',
+    );
+    return;
+  }
+
+  const previousText = mapLink.textContent;
+  mapLink.disabled = true;
+  try {
+    if (!mapIsReady()) {
+      mapLink.textContent = 'Preparing map…';
+      await prepareTagumMap();
+      if (!mapIsReady()) {
+        mapPanel.scrollIntoView({block: 'start', inline: 'nearest'});
+        mapPanel.focus({preventScroll: true});
+        return;
+      }
+    }
+
+    mapLink.textContent = 'Opening map…';
+    const currentState = await renderCurrentMapState();
+    if (!currentState || currentState.selectedReportId !== reportId) return;
+
+    const focusResult = mapView.focusReport(reportId);
+    if (focusResult !== 'FOCUSED') {
+      reportMapFocusFailure(focusResult);
+      return;
+    }
+
+    enterMapFocus(incident);
+    await nextAnimationFrame();
+    mapView.refreshLayout();
+    mapView.focusReport(reportId);
+    mapPanel.scrollIntoView({
+      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+      block: 'start',
+      inline: 'nearest',
+    });
+    mapPanel.focus({preventScroll: true});
+  } finally {
+    mapLink.disabled = false;
+    mapLink.textContent = previousText;
+  }
+}
+
+function enterMapFocus(incident: IncidentMapItem): void {
+  consolePanel.classList.add('map-focus-mode');
+  for (const target of mapFocusInertTargets) target.inert = true;
+  exitMapFocusButton.hidden = false;
+  mapFocusStatus.hidden = false;
+  updateMapFocusStatus(incident);
+}
+
+function exitMapFocus(restoreTriggerFocus: boolean): void {
+  consolePanel.classList.remove('map-focus-mode');
+  for (const target of mapFocusInertTargets) target.inert = false;
+  exitMapFocusButton.hidden = true;
+  mapFocusStatus.hidden = true;
+  void nextAnimationFrame().then(() => mapView.refreshLayout());
+  if (restoreTriggerFocus && !mapLink.hidden) mapLink.focus({preventScroll: true});
+}
+
+function updateMapFocusStatus(incident: IncidentMapItem): void {
+  mapFocusTitle.textContent = `${formatEmergencyLabel(incident.emergencyType)} incident`;
+  const location = incident.location;
+  mapFocusLocation.textContent = location
+    ? `${Number(location.latitude).toFixed(5)}, ${Number(location.longitude).toFixed(5)}`
+    : 'Location unavailable';
+}
+
+function reportMapFocusFailure(
+  result: ReturnType<IncidentMapView['focusReport']>,
+): void {
+  if (result === 'MAP_NOT_READY') {
+    window.SagipResponderBridge?.showOperationalMessage(
+      'The offline map is not ready on this browser yet. Prepare the Tagum map package and try again.',
+    );
+  } else if (result === 'LOCATION_NOT_MAPPED') {
+    window.SagipResponderBridge?.showOperationalMessage(
+      'The selected incident does not have usable location evidence to show on the offline map.',
+    );
+  } else if (result === 'OUTSIDE_EXTENT') {
+    window.SagipResponderBridge?.showOperationalMessage(
+      'The selected incident location is outside the prepared Tagum offline map coverage.',
+    );
+  }
+}
+
+function mapIsReady(): boolean {
+  return mapReadiness.kind === 'READY';
+}
+
+function formatEmergencyLabel(value: string): string {
+  const normalized = humanize(value).trim();
+  return normalized.length === 0
+    ? 'Emergency'
+    : normalized[0]!.toUpperCase() + normalized.slice(1);
+}
+
+function nextAnimationFrame(): Promise<void> {
+  return new Promise(resolve => requestAnimationFrame(() => resolve()));
 }
 
 function statusToCode(status: ResponderStatusName): 1 | 2 | 3 | 4 {

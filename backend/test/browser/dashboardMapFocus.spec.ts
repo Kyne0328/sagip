@@ -100,14 +100,16 @@ test('Show on offline map centers the prepared local map on the selected inciden
   await page.goto(`${ORIGIN}/responder`);
 
   await expect(page.getByRole('button', {name: 'Prepare Tagum offline map'})).toBeVisible();
-  await page.getByRole('button', {name: 'Prepare Tagum offline map'}).click();
-  await expect(page.getByText(/Ready · Tagum map stored/u)).toBeVisible();
-
   await page.getByRole('button', {name: /Trapped incident/u}).click();
   await expect(page.getByRole('button', {name: 'Show on offline map'})).toBeVisible();
 
   await page.getByRole('button', {name: 'Show on offline map'}).click();
 
+  await expect(page.getByText(/Ready · Tagum map stored/u)).toBeVisible();
+  await expect(page.locator('#consolePanel')).toHaveClass(/map-focus-mode/u);
+  await expect(page.locator('#mapFocusStatus')).toBeVisible();
+  await expect(page.locator('#mapFocusTitle')).toHaveText('Trapped incident');
+  await expect(page.locator('#mapFocusLocation')).toHaveText('7.44770, 125.80780');
   await expect(page.locator('#incidentMapPanel')).toBeFocused();
   await expect(page.locator('#mapAnnouncement')).toContainText(
     'Offline map centered on the selected incident location.',
@@ -116,4 +118,9 @@ test('Show on offline map centers the prepared local map on the selected inciden
     'data-selected',
     'true',
   );
+
+  await page.getByRole('button', {name: 'Back to incident details'}).click();
+  await expect(page.locator('#consolePanel')).not.toHaveClass(/map-focus-mode/u);
+  await expect(page.locator('#mapFocusStatus')).toBeHidden();
+  await expect(page.getByRole('button', {name: 'Show on offline map'})).toBeFocused();
 });

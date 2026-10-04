@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "tsx src/main.ts",
-    "dev": "tsx src/devServer.ts",
+    "dev": "node scripts/dev.mjs",
     "migrate": "tsx src/migrate.ts",
     "provision-responder": "tsx src/provisionResponder.ts",
     "provision-gateway-authority": "tsx src/provisionGatewayAuthority.ts",
