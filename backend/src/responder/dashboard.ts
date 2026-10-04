@@ -1328,19 +1328,7 @@ main {
   }
 
   .map-heading {
-    position: absolute;
-    z-index: 14;
-    inset-block-start: 0.9rem;
-    inset-inline-start: 50%;
-    width: min(19rem, 28vw);
-    transform: translateX(-50%);
-    display: block;
-    padding: 0.62rem 0.75rem;
-    border: 1px solid rgba(192, 205, 214, 0.94);
-    border-radius: 0.75rem;
-    background: rgba(255, 255, 255, 0.95);
-    text-align: center;
-    box-shadow: 0 8px 20px rgba(6, 29, 48, 0.12);
+    display: none;
   }
 
   .map-heading .section-label {
@@ -1364,7 +1352,27 @@ main {
     min-block-size: calc(100vh - 8.6rem);
     border: 0;
     border-radius: 0;
-    background-color: #d1dce2;
+    background: #e9f0f3;
+  }
+
+  .incident-map-canvas {
+    z-index: 1;
+    background: #e9f0f3;
+  }
+
+  .incident-map-canvas .maplibregl-canvas-container,
+  .incident-map-canvas .maplibregl-canvas {
+    inline-size: 100% !important;
+    block-size: 100% !important;
+  }
+
+  .map-marker[data-urgency="IMMEDIATE_DANGER"] {
+    background: var(--red-700);
+  }
+
+  .map-marker[data-selected="true"] {
+    outline: 4px solid var(--focus);
+    outline-offset: 2px;
   }
 
   .map-placeholder {
@@ -1403,7 +1411,7 @@ main {
     grid-template-columns: minmax(20rem, 24rem) minmax(10rem, 1fr) minmax(23rem, 29rem);
     gap: 1rem;
     align-items: stretch;
-    padding: 7.3rem 1rem 1rem;
+    padding: 9.9rem 1rem 1rem;
     pointer-events: none;
   }
 
@@ -1420,6 +1428,7 @@ main {
     position: relative;
     inset-block-start: auto;
     grid-column: 1;
+    margin-block-start: -2.6rem;
     max-block-size: calc(100vh - 17rem);
     overflow: auto;
   }
@@ -1427,7 +1436,7 @@ main {
   .detail-panel {
     grid-column: 3;
     min-block-size: 0;
-    max-block-size: calc(100vh - 17rem);
+    max-block-size: calc(100vh - 19.6rem);
     overflow: auto;
     padding: 1rem;
   }

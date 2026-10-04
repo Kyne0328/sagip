@@ -52,6 +52,7 @@ export class IncidentMapView {
   private manifest: OfflineManifest | null = null;
   private activePackageId: string | null = null;
   private needsInitialFit = false;
+  private hasFittedIncidentBounds = false;
   private readonly resizeObserver: ResizeObserver | null;
 
   constructor(
@@ -124,6 +125,20 @@ export class IncidentMapView {
         .addTo(this.map);
       this.markers.push(marker);
     }
+    const inExtent = located.filter(item => insideExtent(item.location!, this.manifest!.extent));
+    if (!this.hasFittedIncidentBounds && inExtent.length > 0) {
+      const longitudes = inExtent.map(item => item.location!.longitude);
+      const latitudes = inExtent.map(item => item.location!.latitude);
+      let west = Math.min(...longitudes);
+      let east = Math.max(...longitudes);
+      let south = Math.min(...latitudes);
+      let north = Math.max(...latitudes);
+      if (west === east) { west -= 0.006; east += 0.006; }
+      if (south === north) { south -= 0.006; north += 0.006; }
+      this.map.fitBounds([[west, south], [east, north]], {padding: 96, duration: 0});
+      this.hasFittedIncidentBounds = true;
+    }
+
     const missing = items.length - located.length;
     this.announce.textContent =
       `${items.length} incidents loaded; ${located.length} mapped; ${missing} without location; ${outOfExtent.length} outside the prepared map extent.`;
@@ -204,6 +219,7 @@ export class IncidentMapView {
     this.map?.remove();
     this.map = null;
     this.needsInitialFit = false;
+    this.hasFittedIncidentBounds = false;
     this.container.replaceChildren();
   }
 }
@@ -247,7 +263,7 @@ function buildOfflineStyle(
   const background = {
     id: 'sagip-background',
     type: 'background',
-    paint: {'background-color': '#eef2f5'},
+    paint: {'background-color': '#e9f0f3'},
   };
   if ([tileTypes.Png, tileTypes.Jpeg, tileTypes.Webp, tileTypes.Avif].includes(tileType)) {
     return {
@@ -265,36 +281,132 @@ function buildOfflineStyle(
 
   const layerIds = vectorLayerIds(metadata);
   if (layerIds.length === 0) throw new Error('MAP_VECTOR_LAYERS_MISSING');
+
   const layers: Array<Record<string, unknown>> = [background];
-  for (const [index, sourceLayer] of layerIds.entries()) {
-    const prefix = `sagip-base-${index}`;
+  const has = (id: string): boolean => layerIds.includes(id);
+  const addFill = (id: string, color: string, opacity = 1, outline = color): void => {
+    if (!has(id)) return;
+    layers.push({
+      id: `sagip-${id}-fill`,
+      type: 'fill',
+      source: 'basemap',
+      'source-layer': id,
+      paint: {
+        'fill-color': color,
+        'fill-opacity': opacity,
+        'fill-outline-color': outline,
+      },
+    });
+  };
+  const addLine = (id: string, color: string, width: number): void => {
+    if (!has(id)) return;
+    layers.push({
+      id: `sagip-${id}-line`,
+      type: 'line',
+      source: 'basemap',
+      'source-layer': id,
+      paint: {
+        'line-color': color,
+        'line-width': [
+          'interpolate',
+          ['linear'],
+          ['zoom'],
+          8, Math.max(0.5, width * 0.45),
+          12, width,
+          15, width * 2.2,
+        ],
+        'line-opacity': 0.92,
+      },
+    });
+  };
+
+  addFill('earth', '#e8ede4');
+  addFill('landcover', '#dfe9d8', 0.72);
+  addFill('landuse', '#e2eadc', 0.6);
+  addFill('water', '#9fc8dc', 0.96, '#8db9cf');
+  addFill('buildings', '#d7cec3', 0.95, '#c4b8ab');
+  addLine('boundaries', '#96a5ad', 0.8);
+  addLine('transit', '#9aa8b0', 0.9);
+
+  if (has('roads')) {
     layers.push(
       {
-        id: `${prefix}-fill`,
+        id: 'sagip-roads-casing',
+        type: 'line',
+        source: 'basemap',
+        'source-layer': 'roads',
+        paint: {
+          'line-color': '#9ba9b0',
+          'line-width': [
+            'interpolate',
+            ['linear'],
+            ['zoom'],
+            8, 1.2,
+            12, 3.6,
+            15, 7.5,
+          ],
+          'line-opacity': 0.75,
+        },
+      },
+      {
+        id: 'sagip-roads-surface',
+        type: 'line',
+        source: 'basemap',
+        'source-layer': 'roads',
+        paint: {
+          'line-color': '#fffdf8',
+          'line-width': [
+            'interpolate',
+            ['linear'],
+            ['zoom'],
+            8, 0.7,
+            12, 2.4,
+            15, 5.4,
+          ],
+          'line-opacity': 0.98,
+        },
+      },
+    );
+  }
+
+  if (has('places')) {
+    layers.push({
+      id: 'sagip-places',
+      type: 'circle',
+      source: 'basemap',
+      'source-layer': 'places',
+      paint: {
+        'circle-color': '#375d74',
+        'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 1.5, 15, 3.5],
+        'circle-opacity': 0.8,
+      },
+    });
+  }
+
+  for (const [index, sourceLayer] of layerIds.entries()) {
+    if (['earth', 'landcover', 'landuse', 'water', 'buildings', 'boundaries', 'transit', 'roads', 'places'].includes(sourceLayer)) {
+      continue;
+    }
+    layers.push(
+      {
+        id: `sagip-fallback-${index}-fill`,
         type: 'fill',
         source: 'basemap',
         'source-layer': sourceLayer,
         filter: ['==', '$type', 'Polygon'],
-        paint: {'fill-color': '#dfe7dc', 'fill-opacity': 0.48},
+        paint: {'fill-color': '#dde5e0', 'fill-opacity': 0.32},
       },
       {
-        id: `${prefix}-line`,
+        id: `sagip-fallback-${index}-line`,
         type: 'line',
         source: 'basemap',
         'source-layer': sourceLayer,
         filter: ['==', '$type', 'LineString'],
-        paint: {'line-color': '#8798a5', 'line-width': 1},
-      },
-      {
-        id: `${prefix}-point`,
-        type: 'circle',
-        source: 'basemap',
-        'source-layer': sourceLayer,
-        filter: ['==', '$type', 'Point'],
-        paint: {'circle-color': '#526776', 'circle-radius': 1.5},
+        paint: {'line-color': '#889ba6', 'line-width': 0.8, 'line-opacity': 0.7},
       },
     );
   }
+
   return {
     version: 8,
     sources: {
