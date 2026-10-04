@@ -100,7 +100,7 @@ class GatewayActionApiTest {
     return JSONObject().put("actionId", actionId).put("providerKind", 2).put("issuerProviderId", hex(provider)).put("reportId", f.reportId).put("reportProtocolVersion", 1).put("revision", f.revision).put("payloadDigest", hex(f.payloadDigest)).put("originKeyId", hex(f.originKeyId)).put("responderId", responderId).put("observedIncidentVersion", f.observedIncidentVersion.toString()).put("status", listOf("ACKNOWLEDGED","EN_ROUTE","ON_SCENE","RESOLVED")[status-1]).put("note", JSONObject.NULL).put("actionDigest", hex(ReceiptAuthority.actionDigest(f)))
   }
   @Test fun schema_preserves_gateway_data_with_additive_g03_storage() {
-    assertEquals(16, db.writableDatabase.version)
+    assertEquals(Schema.VERSION, db.writableDatabase.version)
   }
   private fun api() = GatewayActionApi(db, gateway) { MonotonicClock(boot, elapsed) }
   private fun post(json: JSONObject, owner: String = "browser-a") = api().handle("POST", "/gateway/v1/actions", json.toString().toByteArray(), owner)
@@ -268,7 +268,7 @@ class GatewayActionApiTest {
     val original=gateway.recordGatewayAction(intent).bytes!!
     listOf("gateway_snapshot_pages","gateway_snapshots","gateway_api_actions","gateway_sync").forEach {db.writableDatabase.execSQL("DROP TABLE $it")}
     db.writableDatabase.version=15;db.close();db=SagipDatabase(context);setupGateway()
-    assertEquals(16,db.readableDatabase.version)
+    assertEquals(Schema.VERSION, db.readableDatabase.version)
     assertArrayEquals(original,gateway.getGatewayAction(intent.actionId).bytes)
   }
   @Test fun withdrawn_deployment_qualification_denies_native_work_time_and_api_before_write() {

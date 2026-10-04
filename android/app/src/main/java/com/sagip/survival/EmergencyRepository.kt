@@ -80,12 +80,19 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
     location: LocationSnapshot?,
     now: Long = System.currentTimeMillis(),
   ): EmergencyReportSummary {
-    val reportId = UUID.randomUUID().toString()
-    val messageId = UUID.randomUUID().toString()
     val db = database.writableDatabase
 
+    // SQLCipher beginTransaction is exclusive: take the write lock before checking activity.
+    // https://www.sqlite.org/lang_transaction.html#deferred_immediate_and_exclusive_transactions
     db.beginTransaction()
     try {
+      findActiveReportId(db)?.let { activeId ->
+        val existing = readRevisionSummary(db, activeId)
+        db.setTransactionSuccessful()
+        return existing
+      }
+      val reportId = UUID.randomUUID().toString()
+      val messageId = UUID.randomUUID().toString()
       insertOrThrow(
         db,
         "reports",
@@ -107,6 +114,7 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
           put("created_at", now)
           put("emergency_type", input.emergencyType.name)
           put("urgency", input.urgency.name)
+          putLocationSnapshot(this, location)
         },
       )
 
@@ -143,20 +151,167 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
       )
 
       insertDeliveryEvent(db, reportId, messageId, EVENT_LOCAL_COMMIT, now)
+      val result = readRevisionSummary(db, reportId)
       db.setTransactionSuccessful()
+      return result
     } finally {
       db.endTransaction()
     }
+  }
 
-    return EmergencyReportSummary(
-      reportId = reportId,
-      createdAt = now,
-      emergencyType = input.emergencyType,
-      urgency = input.urgency,
-      lifecycleState = LIFECYCLE_LOCALLY_COMMITTED,
-      deliveryState = DELIVERY_PENDING,
-      location = location,
-    )
+  /** Commits a full immutable snapshot; signing and transport happen after this returns. */
+  fun appendEmergencyDetails(
+    input: AppendEmergencyDetailsInput,
+    now: Long = System.currentTimeMillis(),
+  ): EmergencyReportSummary {
+    val request = EmergencyDetails.normalize(input)
+    val digest = EmergencyDetails.requestDigest(request)
+    val db = database.writableDatabase
+    db.beginTransaction()
+    try {
+      // Replay precedes stale/resolved checks, including no-op operations.
+      val replayRevision = db.rawQuery(
+        "SELECT request_digest, result_revision FROM detail_operations WHERE operation_id = ?",
+        arrayOf(request.operationId),
+      ).use { cursor ->
+        if (!cursor.moveToFirst()) null else {
+          if (cursor.getString(0) != digest) {
+            throw EmergencyDetailsException("DETAILS_OPERATION_REUSED", "Operation ID was used for different details")
+          }
+          cursor.getInt(1)
+        }
+      }
+      if (replayRevision != null) {
+        val result = readRevisionSummary(db, request.reportId, replayRevision)
+        db.setTransactionSuccessful()
+        return result
+      }
+
+      val current = readRevisionSummary(db, request.reportId)
+      if (current.responderAck?.status == "RESOLVED" || current.latestRevision != request.expectedRevision) {
+        throw EmergencyDetailsException("DETAILS_CONFLICT", "Report resolved or details changed; restore before editing")
+      }
+      val category = request.emergencyType ?: current.emergencyType
+      val message = if (request.message == null) current.message else request.message.ifEmpty { null }
+      val changed = category != current.emergencyType || message != current.message
+      val revision = if (changed) {
+        if (current.latestRevision == Int.MAX_VALUE) {
+          throw EmergencyDetailsException("DETAILS_CONFLICT", "Report revision limit reached")
+        }
+        current.latestRevision + 1
+      } else current.latestRevision
+
+      if (changed) {
+        val messageId = UUID.randomUUID().toString()
+        insertOrThrow(db, "report_revisions", ContentValues().apply {
+          put("report_id", request.reportId)
+          put("revision", revision)
+          put("created_at", now)
+          put("emergency_type", category.name)
+          put("urgency", current.urgency.name)
+          put("message", message)
+          putLocationSnapshot(this, current.location)
+        })
+        insertOrThrow(db, "outbound_envelopes", ContentValues().apply {
+          put("message_id", messageId)
+          put("report_id", request.reportId)
+          put("revision", revision)
+          put("priority", priorityFor(current.urgency))
+          put("created_at", now)
+          put("next_attempt_at", now)
+          put("attempt_count", 0)
+          put("delivery_state", DELIVERY_PENDING)
+          put("preparation_state", PREPARATION_NEEDS)
+        })
+        insertDeliveryEvent(db, request.reportId, messageId, EVENT_LOCAL_COMMIT, now)
+      }
+      insertOrThrow(db, "detail_operations", ContentValues().apply {
+        put("operation_id", request.operationId)
+        put("report_id", request.reportId)
+        put("expected_revision", request.expectedRevision)
+        put("request_digest", digest)
+        put("result_revision", revision)
+      })
+      val result = readRevisionSummary(db, request.reportId, revision)
+      db.setTransactionSuccessful()
+      return result
+    } finally {
+      // A failed insert or commit never returns success and never leaves a partial intent.
+      db.endTransaction()
+    }
+  }
+
+  private fun findActiveReportId(db: SQLiteDatabase): String? = db.rawQuery(
+    """
+      SELECT r.report_id FROM reports r
+      WHERE COALESCE((
+        SELECT a.status FROM responder_acks a WHERE a.report_id = r.report_id
+        ORDER BY a.acknowledged_at DESC, a.ack_id DESC LIMIT 1
+      ), '') != 'RESOLVED'
+      ORDER BY r.created_at DESC, r.report_id DESC LIMIT 1
+    """.trimIndent(), null,
+  ).use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+
+  // A pinned revision reconstructs an operation's result, while ACK/transport evidence may advance.
+  // P09 will also use this snapshot query for the public multi-revision listing.
+  private fun readRevisionSummary(db: SQLiteDatabase, reportId: String, revision: Int? = null): EmergencyReportSummary {
+    val selectedRevision = if (revision == null) {
+      "(SELECT MAX(latest.revision) FROM report_revisions latest WHERE latest.report_id = r.report_id)"
+    } else "?"
+    val sql = """
+      SELECT r.report_id, r.created_at, r.lifecycle_state,
+             rr.revision, rr.emergency_type, rr.urgency, rr.message,
+             rr.latitude, rr.longitude, rr.accuracy_meters, rr.captured_at, rr.source, rr.freshness,
+             o.message_id, o.delivery_state,
+             original.message_id AS original_message_id, original.delivery_state AS original_delivery_state,
+             a.ack_id, a.responder_id, a.callsign, a.status, a.note, a.acknowledged_at
+      FROM reports r
+      JOIN report_revisions rr ON rr.report_id = r.report_id
+      JOIN outbound_envelopes o ON o.report_id = rr.report_id AND o.revision = rr.revision
+      JOIN outbound_envelopes original ON original.report_id = r.report_id AND original.revision = 1
+      LEFT JOIN responder_acks a ON a.ack_id = (
+        SELECT candidate.ack_id FROM responder_acks candidate WHERE candidate.report_id = r.report_id
+        ORDER BY candidate.acknowledged_at DESC, candidate.ack_id DESC LIMIT 1
+      )
+      WHERE r.report_id = ? AND rr.revision = $selectedRevision
+    """.trimIndent()
+    val arguments = if (revision == null) arrayOf(reportId) else arrayOf(reportId, revision.toString())
+    return db.rawQuery(sql, arguments).use { cursor ->
+      if (!cursor.moveToFirst()) throw EmergencyDetailsException("DETAILS_CONFLICT", "Report or revision is unavailable")
+      fun text(name: String) = cursor.getString(cursor.getColumnIndexOrThrow(name))
+      fun optional(name: String): String? = cursor.getColumnIndexOrThrow(name).let {
+        if (cursor.isNull(it)) null else cursor.getString(it)
+      }
+      val number = cursor.getInt(cursor.getColumnIndexOrThrow("revision"))
+      val ack = optional("ack_id")?.let {
+        ResponderAck(it, reportId, text("responder_id"), optional("callsign"), text("status"),
+          optional("note"), cursor.getLong(cursor.getColumnIndexOrThrow("acknowledged_at")))
+      }
+      EmergencyReportSummary(
+        reportId = reportId,
+        createdAt = cursor.getLong(cursor.getColumnIndexOrThrow("created_at")),
+        emergencyType = EmergencyType.valueOf(text("emergency_type")),
+        urgency = Urgency.valueOf(text("urgency")),
+        lifecycleState = text("lifecycle_state"),
+        deliveryState = text("delivery_state"),
+        location = readLocation(cursor),
+        responderAck = ack,
+        latestRevision = number,
+        message = optional("message"),
+        originalDelivery = RevisionDeliverySummary(1, text("original_message_id"), text("original_delivery_state")),
+        latestDelivery = RevisionDeliverySummary(number, text("message_id"), text("delivery_state")),
+      )
+    }
+  }
+
+  private fun putLocationSnapshot(values: ContentValues, location: LocationSnapshot?) {
+    if (location == null) return
+    values.put("latitude", location.latitude)
+    values.put("longitude", location.longitude)
+    values.put("accuracy_meters", location.accuracyMeters)
+    values.put("captured_at", location.capturedAt)
+    values.put("source", location.source)
+    values.put("freshness", location.freshness)
   }
 
   fun listReports(): List<EmergencyReportSummary> {

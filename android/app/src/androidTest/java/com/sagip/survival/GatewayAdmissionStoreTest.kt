@@ -96,7 +96,7 @@ class GatewayAdmissionStoreTest {
     db.writableDatabase.execSQL("ALTER TABLE receipt_time_checkpoints DROP COLUMN proof_bytes")
     db.writableDatabase.version = 13
     db.close(); db = SagipDatabase(context)
-    assertEquals(16, db.readableDatabase.version)
+    assertEquals(Schema.VERSION, db.readableDatabase.version)
     assertEquals("AUTHORIZED", pairing().authorize(secrets.token, secrets.csrf, binding, "https://gateway.example"))
     assertEquals("ADMITTED", store().admit(source()).outcome)
   }

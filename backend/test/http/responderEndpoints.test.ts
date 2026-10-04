@@ -57,8 +57,8 @@ test('responder HTTP endpoints: auth, listing, acknowledging, and public status'
       [reportId, Buffer.alloc(32, 9)],
     );
     await pool.query(
-      `INSERT INTO incident_revisions(report_id, revision, emergency_type, urgency, payload_digest)
-       VALUES ($1, 2, 3, 2, $2)`,
+      `INSERT INTO incident_revisions(report_id, revision, emergency_type, urgency, payload_digest, message)
+       VALUES ($1, 2, 3, 2, $2, 'Need help 🆘')`,
       [reportId, Buffer.alloc(32, 10)],
     );
 
@@ -140,9 +140,10 @@ test('responder HTTP endpoints: auth, listing, acknowledging, and public status'
     });
     assert.equal(listRes.status, 200);
     assert.equal(listRes.headers.get('cache-control'), 'no-store');
-    const incidents = (await listRes.json()) as Array<{reportId: string; emergencyType: string; urgency: string; location: {latitude: number; longitude: number}}>;
+    const incidents = (await listRes.json()) as Array<{message: string | null; reportId: string; emergencyType: string; urgency: string; location: {latitude: number; longitude: number}}>;
     assert.equal(incidents.length, 1);
     assert.equal(incidents[0]?.reportId, reportId);
+    assert.equal(incidents[0]?.message, 'Need help 🆘');
     assert.equal(incidents[0]?.emergencyType, 'FIRE');
     assert.equal(incidents[0]?.urgency, 'NEED_ASSISTANCE');
     assert.equal(incidents[0]?.location.latitude, 14.599512);
@@ -173,10 +174,13 @@ test('responder HTTP endpoints: auth, listing, acknowledging, and public status'
       latestRevision: number;
       emergencyType: string;
       location: {latitude: number};
-      revisions: unknown[];
+      message: string | null;
+      revisions: Array<{revision: number; message: string | null}>;
       acknowledgements: unknown[];
     };
     assert.equal(detail.reportId, reportId);
+    assert.equal(detail.message, 'Need help 🆘');
+    assert.deepEqual(detail.revisions.map(row => [row.revision, row.message]), [[1, null], [2, 'Need help 🆘']]);
     assert.equal(detail.latestRevision, 2);
     assert.equal(detail.emergencyType, 'FIRE');
     assert.equal(detail.location.latitude, 14.599512);

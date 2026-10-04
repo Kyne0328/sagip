@@ -187,7 +187,7 @@ class ResponderGatewayServiceTest {
     db.writableDatabase.execSQL("ALTER TABLE receipt_time_checkpoints DROP COLUMN proof_bytes")
     db.writableDatabase.version = 11
     db.close(); db = SagipDatabase(context)
-    assertEquals(16, db.readableDatabase.version)
+    assertEquals(Schema.VERSION, db.readableDatabase.version)
     assertEquals(id, service().listGatewayIncidents().single().identity.reportId)
     val s = service(); trust(s); assertEquals("ACCEPTED", s.provisionGrant(grant()).state)
     failSigning = true

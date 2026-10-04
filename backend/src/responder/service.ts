@@ -259,6 +259,7 @@ export class ResponderService {
         lr.revision,
         lr.emergency_type,
         lr.urgency,
+        lr.message,
         bl.location_latitude_e6,
         bl.location_longitude_e6,
         bl.location_accuracy_cm,
@@ -302,6 +303,7 @@ export class ResponderService {
       revision: number;
       emergency_type: number;
       urgency: number;
+      message: string | null;
       location_latitude_e6: number | null;
       location_longitude_e6: number | null;
       location_accuracy_cm: number | null;
@@ -323,6 +325,7 @@ export class ResponderService {
       latestRevision: row.revision,
       emergencyType: EMERGENCY_TYPES[row.emergency_type] ?? 'OTHER',
       urgency: URGENCIES[row.urgency] ?? 'NEED_ASSISTANCE',
+      message: row.message,
       location: this.mapLocation(row),
       latestAck: row.ack_id && row.responder_id && row.callsign && row.ack_status && row.ack_time
         ? {
@@ -417,6 +420,7 @@ export class ResponderService {
       revision: number;
       emergency_type: number;
       urgency: number;
+      message: string | null;
       location_latitude_e6: number | null;
       location_longitude_e6: number | null;
       location_accuracy_cm: number | null;
@@ -424,7 +428,7 @@ export class ResponderService {
       location_source: number | null;
       location_freshness: number | null;
     }>(
-      `SELECT revision, emergency_type, urgency, location_latitude_e6, location_longitude_e6,
+      `SELECT revision, emergency_type, urgency, message, location_latitude_e6, location_longitude_e6,
               location_accuracy_cm, location_captured_at_ms, location_source, location_freshness
        FROM incident_revisions
        WHERE report_id = $1
@@ -453,6 +457,7 @@ export class ResponderService {
       revision: r.revision,
       emergencyType: EMERGENCY_TYPES[r.emergency_type] ?? 'OTHER',
       urgency: URGENCIES[r.urgency] ?? 'NEED_ASSISTANCE',
+      message: r.message,
       location: this.mapLocation(r),
     }));
 
@@ -470,6 +475,7 @@ export class ResponderService {
       revision: 1,
       emergencyType: 'OTHER',
       urgency: 'NEED_ASSISTANCE',
+      message: null,
       location: null,
     };
     const bestLocation =
@@ -482,6 +488,7 @@ export class ResponderService {
       latestRevision: latestRev.revision,
       emergencyType: latestRev.emergencyType,
       urgency: latestRev.urgency,
+      message: latestRev.message,
       location: bestLocation,
       latestAck: canonicalResponderAck(acks),
       revisions,

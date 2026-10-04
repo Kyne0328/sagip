@@ -7,7 +7,7 @@ import org.junit.Test
 class SchemaTest {
   @Test
   fun `schema version is explicit and preparation state is present`() {
-    assertEquals(16, Schema.VERSION)
+    assertEquals(17, Schema.VERSION)
     val ddl = Schema.CREATE_STATEMENTS.joinToString("\n")
     listOf(
       "reports",
@@ -22,6 +22,7 @@ class SchemaTest {
       "relay_receipts",
       "responder_acks",
       "relay_responder_acks",
+      "detail_operations",
       "receipt_report_state",
       "receipt_report_identities",
       "receipt_sequences",
@@ -141,6 +142,16 @@ class SchemaTest {
     assertTrue(migration.contains("idx_relay_transfer_active_object"))
     assertTrue(!migration.contains("DROP TABLE"))
   }
+  @Test
+  fun `v16 to v17 migration preserves existing delivery evidence and enables immutable detail revisions`() {
+    val migration = Schema.MIGRATE_16_TO_17.joinToString("\n")
+    assertTrue(migration.contains("ALTER TABLE report_revisions ADD COLUMN message"))
+    assertTrue(migration.contains("UNIQUE(report_id, revision)"))
+    assertTrue(migration.contains("CREATE TABLE detail_operations"))
+    assertTrue(migration.contains("CREATE TEMP TABLE p16_delivery_events"))
+    assertTrue(migration.contains("INSERT INTO delivery_events"))
+  }
+
   @Test
   fun `v14 to v15 migration preserves delegated time proof bytes`() {
     val migration = Schema.MIGRATE_14_TO_15.joinToString("\n")

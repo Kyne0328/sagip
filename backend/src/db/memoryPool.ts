@@ -11,6 +11,12 @@ export function createMemoryPostgresPool(): Pool {
   const memory = newDb({autoCreateForeignKeyIndices: true});
   memory.public.registerFunction({
     name: 'octet_length',
+    args: [DataType.text],
+    returns: DataType.integer,
+    implementation: (value: string) => Buffer.byteLength(value, 'utf8'),
+  });
+  memory.public.registerFunction({
+    name: 'octet_length',
     args: [DataType.bytea],
     returns: DataType.integer,
     implementation: (value: Buffer) => logicalByteLength(value),
