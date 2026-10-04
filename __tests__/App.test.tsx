@@ -1,5 +1,6 @@
 import React from 'react';
 import ReactTestRenderer, {act} from 'react-test-renderer';
+import {ScrollView} from 'react-native';
 
 import App from '../App';
 import {SurvivalCore} from '../src/emergency/SurvivalCore';
@@ -62,7 +63,8 @@ test('shows SAGIP branding and an offline-safe SOS entry point with accessibilit
       accessibilityLabel: 'SAGIP locator pin with medical plus logo',
     }),
   ).toBeTruthy();
-  expect(JSON.stringify(renderer.toJSON())).toContain(
+  expect(JSON.stringify(renderer.toJSON())).toContain('Save an SOS even without internet.');
+  expect(JSON.stringify(renderer.toJSON())).not.toContain(
     'If internet works, SAGIP sends directly to the server.',
   );
   const sosBtn = renderer.root.findByProps({accessibilityLabel: 'Create emergency SOS report'});
@@ -72,6 +74,43 @@ test('shows SAGIP branding and an offline-safe SOS entry point with accessibilit
   expect(
     renderer.root.findAllByProps({accessibilityLiveRegion: 'polite'}).length,
   ).toBeGreaterThan(0);
+});
+
+test('keeps delivery and location explanations available behind Help', async () => {
+  const renderer = await renderApp();
+  const help = renderer.root.findByProps({accessibilityLabel: 'How SOS works'});
+  expect(help.props.accessibilityState.expanded).toBe(false);
+  await act(async () => help.props.onPress());
+  expect(JSON.stringify(renderer.toJSON())).toContain(
+    'If internet works, SAGIP sends directly to the server.',
+  );
+  expect(JSON.stringify(renderer.toJSON())).toContain(
+    'Your SOS still saves if location permission or GPS is unavailable.',
+  );
+  expect(help.props.accessibilityState.expanded).toBe(true);
+  await act(async () => help.props.onPress());
+  expect(JSON.stringify(renderer.toJSON())).not.toContain(
+    'If internet works, SAGIP sends directly to the server.',
+  );
+});
+
+test('requires both choices and keeps Save outside the scrolling form', async () => {
+  const renderer = await renderApp();
+  await act(async () => renderer.root.findByProps({accessibilityLabel: 'Create emergency SOS report'}).props.onPress());
+  const saveButton = renderer.root.findByProps({accessibilityLabel: 'Save SOS now on this device'});
+  expect(saveButton.props.accessibilityState.disabled).toBe(true);
+  await act(async () => renderer.root.findByProps({accessibilityLabel: 'Flood'}).props.onPress());
+  expect(saveButton.props.accessibilityState.disabled).toBe(true);
+  expect(core.createEmergencyReport).not.toHaveBeenCalled();
+  await act(async () => renderer.root.findByProps({accessibilityLabel: 'Need assistance'}).props.onPress());
+  expect(saveButton.props.accessibilityState.disabled).toBe(false);
+  // The action must stay reachable even when large text makes choices scroll.
+  let ancestor = saveButton.parent;
+  while (ancestor) {
+    expect(ancestor.type).not.toBe('RCTScrollView');
+    expect(ancestor.type).not.toBe(ScrollView);
+    ancestor = ancestor.parent;
+  }
 });
 
 test('creates a local SOS and tells the user it is pending delivery', async () => {
@@ -91,7 +130,10 @@ test('creates a local SOS and tells the user it is pending delivery', async () =
   expect(JSON.stringify(renderer.toJSON())).toContain('SOS saved on this device. You do not need internet.');
   const rendered = JSON.stringify(renderer.toJSON());
   expect(rendered).toContain('Pending delivery');
-  expect(rendered).toContain('searching for an internet or nearby-device delivery path');
+  expect(rendered).toContain('Saved on your phone; waiting to send.');
+  expect(rendered.indexOf('Saved on this device')).toBeLessThan(
+    rendered.indexOf('Create emergency SOS report'),
+  );
   expect(renderer.root.findAllByProps({accessibilityRole: 'alert'})).toHaveLength(0);
 });
 
@@ -117,6 +159,10 @@ test('restores a pending local report on launch', async () => {
 
   expect(JSON.stringify(renderer.toJSON())).toContain('Saved on this device');
   expect(JSON.stringify(renderer.toJSON())).toContain('Pending delivery');
+  const rendered = JSON.stringify(renderer.toJSON());
+  expect(rendered.indexOf('Saved on this device')).toBeLessThan(
+    rendered.indexOf('Create emergency SOS report'),
+  );
 });
 
 test('renders server accepted delivery state when report is accepted', async () => {
