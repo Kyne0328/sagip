@@ -28,6 +28,9 @@ test('responder dashboard assets are served with strict browser security headers
   assert.match(body, /Start a responder shift/u);
   assert.match(body, /secure 12-hour browser session/u);
   assert.match(body, /Open incidents/u);
+  assert.match(body, /Tagum emergency operations/u);
+  assert.match(body, /class="operations-stage"/u);
+  assert.match(body, /Prepare Tagum offline map/u);
   assert.doesNotMatch(body, /sagip-dev-token/u);
 
   const css = await handleSagipRequest(
