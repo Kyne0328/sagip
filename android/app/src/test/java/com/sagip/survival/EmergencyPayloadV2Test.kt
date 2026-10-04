@@ -11,7 +11,7 @@ class EmergencyPayloadV2Test {
 
   @Test
   fun `all 34 frozen fixtures decode and valid fixtures encode exactly`() {
-    val fixture = File("../../sagip-docs/fixtures/srp1-details-v2.json")
+    val fixture = File("../../fixtures/srp1-details-v2.json")
     assertTrue("canonical fixture must exist: ${fixture.absolutePath}", fixture.isFile)
     val cases = JsonParser.parseString(fixture.readText(Charsets.UTF_8)).asJsonObject.getAsJsonArray("cases")
     assertEquals(34, cases.size())

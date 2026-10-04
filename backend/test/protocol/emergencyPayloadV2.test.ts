@@ -18,7 +18,7 @@ interface Fixture {
     message?: string | null;
   };
 }
-const fixtures = JSON.parse(readFileSync(new URL('../../../sagip-docs/fixtures/srp1-details-v2.json', import.meta.url), 'utf8')) as {cases: Fixture[]};
+const fixtures = JSON.parse(readFileSync(new URL('../../../fixtures/srp1-details-v2.json', import.meta.url), 'utf8')) as {cases: Fixture[]};
 
 for (const fixture of fixtures.cases) {
   test(`frozen SRP1 vector: ${fixture.name}`, () => {

@@ -14,7 +14,7 @@
     "provision-gateway-authority": "tsx src/provisionGatewayAuthority.ts",
     "build:console": "tsc -p tsconfig.browser.json && node scripts/build-responder-console.mjs",
     "test:browser": "npm run build:console && playwright test test/browser",
-    "test": "tsx --test test/**/*.test.ts",
+    "test": "npm run build:console && tsx --test test/**/*.test.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src test --ext .ts",
     "build:neon": "npm run build:console && node scripts/build-neon-function.mjs"
