@@ -48,11 +48,13 @@ let pmtilesLoadPromise: Promise<PmtilesModule> | null = null;
 export class IncidentMapView {
   private map: MapLike | null = null;
   private markers: MarkerLike[] = [];
+  private readonly locationsByReportId = new Map<string, {latitude: number; longitude: number}>();
   private markerListeners = new AbortController();
   private manifest: OfflineManifest | null = null;
   private activePackageId: string | null = null;
   private needsInitialFit = false;
   private hasFittedIncidentBounds = false;
+  private renderGeneration = 0;
   private readonly resizeObserver: ResizeObserver | null;
 
   constructor(
@@ -89,7 +91,17 @@ export class IncidentMapView {
   }
 
   async render(items: readonly IncidentMapItem[], selectedReportId: string | null): Promise<void> {
+    const generation = ++this.renderGeneration;
     this.clearMarkers();
+    this.locationsByReportId.clear();
+    for (const item of items) {
+      if (item.location) {
+        this.locationsByReportId.set(item.reportId, {
+          latitude: item.location.latitude,
+          longitude: item.location.longitude,
+        });
+      }
+    }
     if (!this.manifest) {
       const located = items.filter(item => item.location !== null).length;
       this.announce.textContent =
@@ -97,7 +109,7 @@ export class IncidentMapView {
       return;
     }
     if (!this.map) await this.createMap(this.manifest);
-    if (!this.map) return;
+    if (generation !== this.renderGeneration || !this.map) return;
 
     const located = items.filter(item => item.location !== null);
     const outOfExtent = located.filter(item => !insideExtent(item.location!, this.manifest!.extent));
@@ -109,6 +121,7 @@ export class IncidentMapView {
       this.placeholder.hidden = true;
     }
     const maplibre = await loadMapLibre();
+    if (generation !== this.renderGeneration || !this.map) return;
     for (const item of located) {
       const location = item.location!;
       const markerElement = document.createElement('div');
@@ -148,6 +161,36 @@ export class IncidentMapView {
     for (const element of this.container.querySelectorAll<HTMLElement>('.map-marker')) {
       element.dataset.selected = element.dataset.reportId === reportId ? 'true' : 'false';
     }
+  }
+
+  focusReport(reportId: string): 'FOCUSED' | 'MAP_NOT_READY' | 'LOCATION_NOT_MAPPED' | 'OUTSIDE_EXTENT' {
+    if (!this.map || !this.manifest) {
+      this.announce.textContent = 'Offline map is not prepared yet.';
+      return 'MAP_NOT_READY';
+    }
+    const location = this.locationsByReportId.get(reportId);
+    if (!location) {
+      this.announce.textContent = 'The selected incident does not have mapped location evidence.';
+      return 'LOCATION_NOT_MAPPED';
+    }
+    if (!insideExtent(location, this.manifest.extent)) {
+      this.announce.textContent = 'The selected incident is outside the prepared Tagum map extent.';
+      return 'OUTSIDE_EXTENT';
+    }
+
+    this.select(reportId);
+    const latitudePadding = 0.003;
+    const longitudePadding = 0.003;
+    this.map.fitBounds(
+      [
+        [location.longitude - longitudePadding, location.latitude - latitudePadding],
+        [location.longitude + longitudePadding, location.latitude + latitudePadding],
+      ],
+      {padding: 96, duration: 0},
+    );
+    this.hasFittedIncidentBounds = true;
+    this.announce.textContent = 'Offline map centered on the selected incident location.';
+    return 'FOCUSED';
   }
 
   destroy(): void {
@@ -215,11 +258,13 @@ export class IncidentMapView {
   }
 
   private destroyMap(): void {
+    this.renderGeneration += 1;
     this.clearMarkers();
     this.map?.remove();
     this.map = null;
     this.needsInitialFit = false;
     this.hasFittedIncidentBounds = false;
+    this.locationsByReportId.clear();
     this.container.replaceChildren();
   }
 }
@@ -462,7 +507,7 @@ async function loadPmtiles(): Promise<PmtilesModule> {
 }
 
 function insideExtent(
-  location: NonNullable<IncidentSnapshotEntry['location']>,
+  location: {latitude: number; longitude: number},
   extent: readonly [number, number, number, number],
 ): boolean {
   const [west, south, east, north] = extent;

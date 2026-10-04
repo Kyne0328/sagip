@@ -114,6 +114,7 @@ test('real Tagum package prepares once and reopens from IndexedDB with network o
       ) => {
         setManifest(value: unknown): Promise<void>;
         render(items: readonly unknown[], selectedReportId: string | null): Promise<void>;
+        focusReport(reportId: string): 'FOCUSED' | 'MAP_NOT_READY' | 'LOCATION_NOT_MAPPED' | 'OUTSIDE_EXTENT';
       };
       const view = new MapView(
         mapContainer,
@@ -144,6 +145,7 @@ test('real Tagum package prepares once and reopens from IndexedDB with network o
           },
         },
       ], '11111111-1111-4111-8111-111111111111');
+      const focusResult = view.focusReport('11111111-1111-4111-8111-111111111111');
       const canvas = mapContainer.querySelector('.maplibregl-canvas') as {
         getBoundingClientRect(): {width: number; height: number};
       } | null;
@@ -174,6 +176,8 @@ test('real Tagum package prepares once and reopens from IndexedDB with network o
         placeholderHidden: placeholder.hidden,
         placeholderText: placeholder.textContent,
         markerCount: mapContainer.querySelectorAll('.map-marker').length,
+        focusResult,
+        announcementText: announcement.textContent,
       };
     },
     {
@@ -196,6 +200,8 @@ test('real Tagum package prepares once and reopens from IndexedDB with network o
   expect(prepared.coverageText).toContain('OpenStreetMap contributors');
   expect(prepared.placeholderHidden).toBe(true);
   expect(prepared.markerCount).toBe(1);
+  expect(prepared.focusResult).toBe('FOCUSED');
+  expect(prepared.announcementText).toContain('centered on the selected incident');
 
   await context.unroute(`${ORIGIN}/**`);
   await context.setOffline(true);

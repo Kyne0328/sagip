@@ -78,6 +78,31 @@ window.addEventListener('sagip:incidents', event => {
   mapView.select(detail.selectedReportId);
 });
 
+window.addEventListener('sagip:focus-map', event => {
+  const reportId = (event as CustomEvent<{reportId?: unknown}>).detail?.reportId;
+  if (typeof reportId !== 'string' || reportId.length === 0) {
+    event.preventDefault();
+    return;
+  }
+  const result = mapView.focusReport(reportId);
+  if (result === 'FOCUSED') return;
+
+  event.preventDefault();
+  if (result === 'MAP_NOT_READY') {
+    window.SagipResponderBridge?.showOperationalMessage(
+      'The offline map is not prepared on this browser yet. Prepare the Tagum map package before using map navigation.',
+    );
+  } else if (result === 'LOCATION_NOT_MAPPED') {
+    window.SagipResponderBridge?.showOperationalMessage(
+      'The selected incident does not have usable location evidence to show on the offline map.',
+    );
+  } else if (result === 'OUTSIDE_EXTENT') {
+    window.SagipResponderBridge?.showOperationalMessage(
+      'The selected incident location is outside the prepared Tagum offline map coverage.',
+    );
+  }
+});
+
 prepareMapButton.addEventListener('click', () => {
   void prepareTagumMap();
 });

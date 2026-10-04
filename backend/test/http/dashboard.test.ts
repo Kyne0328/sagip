@@ -31,6 +31,9 @@ test('responder dashboard assets are served with strict browser security headers
   assert.match(body, /Tagum emergency operations/u);
   assert.match(body, /class="operations-stage"/u);
   assert.match(body, /Prepare Tagum offline map/u);
+  assert.match(body, /<button id="mapLink" type="button" class="map-link">Show on offline map<\/button>/u);
+  assert.match(body, /id="exitMapFocusButton"[^>]*>Back to incident details<\/button>/u);
+  assert.match(body, /id="incidentMapPanel"[^>]*tabindex="-1"/u);
   assert.doesNotMatch(body, /sagip-dev-token/u);
 
   const css = await handleSagipRequest(
@@ -49,6 +52,10 @@ test('responder dashboard assets are served with strict browser security headers
   const javascript = await js.text();
   assert.match(javascript, /\/v1\/responder\/session/u);
   assert.match(javascript, /It may have been saved/u);
+  assert.match(javascript, /sagip:focus-map/u);
+  assert.match(javascript, /cancelable: true/u);
+  assert.match(javascript, /map-focus-mode/u);
+  assert.match(javascript, /scrollIntoView/u);
   assert.doesNotMatch(javascript, /sessionStorage/u);
   assert.doesNotMatch(javascript, /authorization.*Bearer/iu);
 });

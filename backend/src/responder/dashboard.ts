@@ -156,7 +156,7 @@ const DASHBOARD_HTML = `<!doctype html>
           <div class="readiness-item"><span>Incident snapshot</span><strong id="snapshotReadinessStatus">Checking…</strong></div>
           <div class="readiness-item"><span>Offline responder updates</span><strong id="outboxReadinessStatus">Checking…</strong></div>
         </div>
-        <section id="incidentMapPanel" class="incident-map-panel" aria-labelledby="incidentMapTitle">
+        <section id="incidentMapPanel" class="incident-map-panel" aria-labelledby="incidentMapTitle" tabindex="-1">
           <div class="map-heading">
             <div>
               <p class="section-label">INCIDENT MAP</p>
@@ -167,6 +167,7 @@ const DASHBOARD_HTML = `<!doctype html>
           <div class="map-stage">
             <div id="incidentMapCanvas" class="incident-map-canvas" aria-hidden="true"></div>
             <div id="incidentMapPlaceholder" class="map-placeholder">Checking local map package…</div>
+          <button id="exitMapFocusButton" type="button" class="map-focus-exit" hidden>Back to incident details</button>
           </div>
           <p id="mapAnnouncement" class="sr-only" aria-live="polite"></p>
           <p class="map-accessibility-note">The incident queue remains the primary keyboard and screen-reader workspace. The map is a supplemental spatial view.</p>
@@ -222,7 +223,7 @@ const DASHBOARD_HTML = `<!doctype html>
                 <span id="locationMeta" class="muted"></span>
                 <span id="locationCaptured" class="muted"></span>
               </div>
-              <a id="mapLink" class="map-link" href="#incidentMapPanel">Show on offline map</a>
+              <button id="mapLink" type="button" class="map-link">Show on offline map</button>
             </div>
 
             <form id="ackForm" class="ack-form" method="post" novalidate>
@@ -955,6 +956,7 @@ main {
   text-decoration: none;
   font-weight: 850;
   background: var(--surface);
+  color: var(--navy-800);
 }
 
 .ack-form {
@@ -1379,6 +1381,34 @@ main {
     width: min(80%, 30rem);
   }
 
+  .map-focus-exit {
+    position: absolute;
+    z-index: 26;
+    inset-block-start: 1rem;
+    inset-inline-end: 1rem;
+    min-block-size: 3rem;
+    padding-inline: 1rem;
+    border: 1px solid rgba(8, 48, 78, 0.25);
+    border-radius: 0.7rem;
+    background: rgba(255, 255, 255, 0.97);
+    color: var(--navy-900);
+    font-weight: 800;
+    box-shadow: 0 10px 26px rgba(6, 29, 48, 0.16);
+  }
+
+  .console.map-focus-mode .stats-grid,
+  .console.map-focus-mode .offline-heading,
+  .console.map-focus-mode .readiness-grid,
+  .console.map-focus-mode .incident-column,
+  .console.map-focus-mode .detail-panel {
+    visibility: hidden;
+    pointer-events: none;
+  }
+
+  .console.map-focus-mode .map-stage {
+    min-block-size: calc(100vh - 8.6rem);
+  }
+
   .map-accessibility-note,
   .map-attribution {
     position: absolute;
@@ -1784,6 +1814,7 @@ const DASHBOARD_JS = `(() => {
   const locationMeta = document.getElementById('locationMeta');
   const locationCaptured = document.getElementById('locationCaptured');
   const mapLink = document.getElementById('mapLink');
+  const exitMapFocusButton = document.getElementById('exitMapFocusButton');
   const revisionHistory = document.getElementById('revisionHistory');
   const ackHistory = document.getElementById('ackHistory');
   const ackForm = document.getElementById('ackForm');
@@ -2164,7 +2195,6 @@ const DASHBOARD_JS = `(() => {
       ? 'Captured ' + formatDate(location.capturedAtMs) + ' (' + formatRelative(location.capturedAtMs) + ')'
       : 'Capture time unavailable';
 
-    mapLink.href = '#incidentMapPanel';
   }
 
   function renderAckHistory(acks) {
@@ -2444,6 +2474,39 @@ const DASHBOARD_JS = `(() => {
     resetDetail();
     if (dataSource === 'offline' && activeOfflineSnapshot) renderOfflineSnapshot(activeOfflineSnapshot);
     else void refreshIncidents(true);
+  }, {signal: lifecycle.signal});
+
+  function exitMapFocus() {
+    consolePanel.classList.remove('map-focus-mode');
+    exitMapFocusButton.hidden = true;
+    if (!mapLink.classList.contains('hidden')) mapLink.focus({preventScroll: true});
+  }
+
+  mapLink.addEventListener('click', () => {
+    if (!selectedReportId) return;
+    const mapPanel = document.getElementById('incidentMapPanel');
+    const focused = window.dispatchEvent(new CustomEvent('sagip:focus-map', {
+      cancelable: true,
+      detail: {reportId: selectedReportId}
+    }));
+    if (!focused || !mapPanel) return;
+
+    consolePanel.classList.add('map-focus-mode');
+    exitMapFocusButton.hidden = false;
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    mapPanel.scrollIntoView({
+      behavior: reducedMotion ? 'auto' : 'smooth',
+      block: 'start',
+      inline: 'nearest'
+    });
+    mapPanel.focus({preventScroll: true});
+  }, {signal: lifecycle.signal});
+
+  exitMapFocusButton.addEventListener('click', exitMapFocus, {signal: lifecycle.signal});
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && consolePanel.classList.contains('map-focus-mode')) {
+      exitMapFocus();
+    }
   }, {signal: lifecycle.signal});
 
   ackForm.addEventListener('submit', async (event) => {
