@@ -111,6 +111,14 @@ test('Show on offline map centers the prepared local map on the selected inciden
   await expect(page.locator('#mapFocusTitle')).toHaveText('Trapped incident');
   await expect(page.locator('#mapFocusLocation')).toHaveText('7.44770, 125.80780');
   await expect(page.locator('#incidentMapPanel')).toBeFocused();
+  await expect.poll(async () => {
+    const box = await page.locator('#incidentMapCanvas').boundingBox();
+    return box?.height ?? 0;
+  }).toBeGreaterThan(500);
+  await expect.poll(async () => {
+    const box = await page.locator('#incidentMapCanvas .maplibregl-canvas').boundingBox();
+    return box?.height ?? 0;
+  }).toBeGreaterThan(500);
   await expect(page.locator('#mapAnnouncement')).toContainText(
     'Offline map centered on the selected incident location.',
   );

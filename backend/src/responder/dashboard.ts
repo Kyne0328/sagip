@@ -7,8 +7,8 @@ const DASHBOARD_HTML = `<!doctype html>
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#0c2942">
   <title>SAGIP Responder Console</title>
-  <link rel="stylesheet" href="/responder/styles.css">
   <link rel="stylesheet" href="/responder/assets/maplibre-gl-6.11.2/maplibre-gl.css">
+  <link rel="stylesheet" href="/responder/styles.css">
 </head>
 <body>
   <a class="skip-link" href="#mainContent">Skip to emergency operations</a>
@@ -692,6 +692,7 @@ main {
   background-size: 2rem 2rem;
 }
 
+.map-stage > .incident-map-canvas.maplibregl-map,
 .incident-map-canvas { position: absolute; inset: 0; }
 
 .map-placeholder {
