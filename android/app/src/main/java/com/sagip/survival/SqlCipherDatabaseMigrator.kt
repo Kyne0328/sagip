@@ -105,28 +105,27 @@ object SqlCipherDatabaseMigrator {
     key: ByteArray,
     userVersion: Int,
   ) {
-    val sourceDb = SQLiteDatabase.openDatabase(
-      source.absolutePath,
-      ByteArray(0),
+    val destinationDb = SQLiteDatabase.openDatabase(
+      destination.absolutePath,
+      key,
       null,
-      SQLiteDatabase.OPEN_READWRITE,
+      SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.CREATE_IF_NECESSARY,
       null,
       null,
     )
     try {
-      val escapedPath = destination.absolutePath.replace("'", "''")
-      val keyHex = key.joinToString("") { "%02x".format(it.toInt() and 0xff) }
-      sourceDb.execSQL("ATTACH DATABASE '$escapedPath' AS encrypted KEY \"x'$keyHex'\"")
+      destinationDb.execSQL(
+        "ATTACH DATABASE ? AS plaintext KEY ''",
+        arrayOf(source.absolutePath),
+      )
       try {
-        sourceDb.rawQuery("SELECT sqlcipher_export('encrypted')", emptyArray()).use { cursor ->
-          check(cursor.moveToFirst()) { "sqlcipher_export did not complete" }
-        }
-        sourceDb.execSQL("PRAGMA encrypted.user_version = $userVersion")
+        destinationDb.rawExecSQL("SELECT sqlcipher_export('main', 'plaintext')")
+        destinationDb.execSQL("PRAGMA user_version = $userVersion")
       } finally {
-        sourceDb.execSQL("DETACH DATABASE encrypted")
+        destinationDb.execSQL("DETACH DATABASE plaintext")
       }
     } finally {
-      sourceDb.close()
+      destinationDb.close()
     }
   }
 
