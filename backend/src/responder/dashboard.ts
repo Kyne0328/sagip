@@ -291,7 +291,7 @@ const DASHBOARD_HTML = `<!doctype html>
 
 const DASHBOARD_CSS = `:root {
   color-scheme: light;
-  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: Bahnschrift, "Segoe UI", Arial, sans-serif;
   --navy-950: #071b2b;
   --navy-900: #0c2942;
   --navy-800: #123b5d;
@@ -1817,7 +1817,7 @@ main {
 
   body {
     background: #dfe7ec;
-    font-family: "Segoe UI Variable", "Segoe UI", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    font-family: Bahnschrift, "Segoe UI", Arial, sans-serif;
     line-height: 1.45;
     text-rendering: optimizeLegibility;
   }
