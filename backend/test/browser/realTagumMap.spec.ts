@@ -91,6 +91,7 @@ test('real Tagum package prepares once and reopens from IndexedDB with network o
             hidden: boolean;
             textContent: string | null;
             querySelector(selector: string): unknown;
+            querySelectorAll(selector: string): {length: number};
           };
           body: {append(...nodes: unknown[]): void};
         };
@@ -128,7 +129,21 @@ test('real Tagum package prepares once and reopens from IndexedDB with network o
         requestAnimationFrame(callback: () => void): number;
       }).requestAnimationFrame;
       await new Promise<void>(resolve => requestFrame(() => requestFrame(() => resolve())));
-      await view.render([], null);
+      await view.render([
+        {
+          reportId: '11111111-1111-4111-8111-111111111111',
+          emergencyType: 'TRAPPED',
+          urgency: 'IMMEDIATE_DANGER',
+          location: {
+            latitude: 7.4477,
+            longitude: 125.8078,
+            accuracyMeters: 9,
+            capturedAtMs: 1_000n,
+            source: 1,
+            freshness: 1,
+          },
+        },
+      ], '11111111-1111-4111-8111-111111111111');
       const canvas = mapContainer.querySelector('.maplibregl-canvas') as {
         getBoundingClientRect(): {width: number; height: number};
       } | null;
@@ -158,6 +173,7 @@ test('real Tagum package prepares once and reopens from IndexedDB with network o
         coverageText: coverage.textContent,
         placeholderHidden: placeholder.hidden,
         placeholderText: placeholder.textContent,
+        markerCount: mapContainer.querySelectorAll('.map-marker').length,
       };
     },
     {
@@ -178,8 +194,8 @@ test('real Tagum package prepares once and reopens from IndexedDB with network o
   expect(prepared.canvasWidth).toBe(800);
   expect(prepared.canvasHeight).toBe(600);
   expect(prepared.coverageText).toContain('OpenStreetMap contributors');
-  expect(prepared.placeholderHidden).toBe(false);
-  expect(prepared.placeholderText).toContain('no incident markers');
+  expect(prepared.placeholderHidden).toBe(true);
+  expect(prepared.markerCount).toBe(1);
 
   await context.unroute(`${ORIGIN}/**`);
   await context.setOffline(true);
