@@ -154,13 +154,25 @@ const DASHBOARD_HTML = `<!doctype html>
           <div class="map-heading">
             <div>
               <p class="section-label">Incident map</p>
-              <h4 id="incidentMapTitle">Prepared local coverage</h4>
+              <h4 id="incidentMapTitle">Tagum response map</h4>
             </div>
             <span id="mapCoverage" class="muted">Checking local map package…</span>
           </div>
           <div class="map-stage">
             <div id="incidentMapCanvas" class="incident-map-canvas" role="region" aria-label="Interactive incident map"></div>
-            <div id="incidentMapPlaceholder" class="map-placeholder">Checking local map package…</div>
+            <div id="incidentMapPlaceholder" class="map-placeholder">Loading street map…</div>
+            <div class="map-source-panel" aria-label="Basemap controls">
+              <div class="map-source-buttons" role="group" aria-label="Map source">
+                <button type="button" data-map-source="online" aria-pressed="false">Streets</button>
+                <button type="button" data-map-source="offline" aria-pressed="false" disabled>Prepared map</button>
+              </div>
+              <p data-map-source-status role="status">Loading OpenFreeMap streets…</p>
+            </div>
+            <div class="map-legend" aria-label="Incident marker legend">
+              <span><b class="legend-danger" aria-hidden="true">!</b> Immediate danger</span>
+              <span><b class="legend-reported" aria-hidden="true">•</b> Reported</span>
+              <span><b class="legend-unknown" aria-hidden="true">?</b> Unspecified</span>
+            </div>
             <div id="mapFocusStatus" class="map-focus-status" hidden>
               <span>Viewing incident location</span>
               <strong id="mapFocusTitle">Emergency incident</strong>
@@ -171,7 +183,7 @@ const DASHBOARD_HTML = `<!doctype html>
           <p id="mapAnnouncement" class="sr-only" aria-live="polite"></p>
           <p class="map-package-status"><span class="map-package-dot" aria-hidden="true"></span><strong id="mapReadinessStatus">Checking…</strong></p>
           <p class="map-accessibility-note">The incident queue remains the primary keyboard and screen-reader workspace. The map is a supplemental spatial view.</p>
-          <p class="map-attribution">Map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap contributors</a> · package by <a href="https://protomaps.com" target="_blank" rel="noreferrer">Protomaps</a>. ODbL.</p>
+          <p class="map-attribution">Streets: <a href="https://openfreemap.org" target="_blank" rel="noreferrer">OpenFreeMap</a> · <a href="https://openmaptiles.org" target="_blank" rel="noreferrer">© OpenMapTiles</a> · <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap contributors</a>. Prepared map: <a href="https://protomaps.com" target="_blank" rel="noreferrer">Protomaps</a>.</p>
         </section>
       </section>
 
@@ -230,7 +242,7 @@ const DASHBOARD_HTML = `<!doctype html>
                 <span id="locationMeta" class="muted"></span>
                 <span id="locationCaptured" class="muted"></span>
               </div>
-              <button id="mapLink" type="button" class="map-link">Show on offline map</button>
+              <button id="mapLink" type="button" class="map-link">Show on map</button>
             </div>
 
             </div>
@@ -717,6 +729,32 @@ main {
 }
 
 .map-placeholder[hidden] { display: none; }
+.map-source-panel { position:absolute; z-index:14; top:12px; left:12px; width:250px; max-width:calc(100% - 24px); padding:8px; border:1px solid #d6e1e9; border-radius:12px; background:#fffffffa; box-shadow:0 4px 18px #102b4520; }
+.map-source-buttons { display:flex; gap:4px; }
+.map-source-buttons button { flex:1; min-height:44px; padding:8px; border:1px solid transparent; border-radius:7px; background:#edf2f6; color:#284b66; font-size:12px; }
+.map-source-buttons button[aria-pressed="true"] { background:#125da8; color:white; }
+.map-source-buttons button:disabled { opacity:.55; cursor:not-allowed; }
+.map-source-panel p { margin:7px 4px 2px; color:#52697b; font-size:11px; line-height:1.4; }
+.map-legend { position:absolute; z-index:13; bottom:88px; left:12px; display:flex; flex-wrap:wrap; gap:8px 12px; max-width:calc(100% - 76px); padding:8px 10px; background:#ffffffed; border:1px solid #d6e1e9; border-radius:9px; color:#3a5265; font-size:10px; }
+.map-legend span { display:flex; gap:5px; align-items:center; }
+.map-legend b { display:inline-grid; place-items:center; width:18px; height:18px; border-radius:50%; color:white; font-size:13px; }
+.legend-danger { background:#e32b3a; } .legend-reported { background:#086edd; } .legend-unknown { background:#697887; }
+.map-marker[data-urgency="UNSPECIFIED"] { background:#697887; }
+@media screen and (min-width:1051px) {
+  .map-source-panel { top:148px; left:410px; width:250px; }
+  .map-legend { left:410px; bottom:82px; max-width:calc(100% - 850px); }
+  .console.map-focus-mode .map-source-panel { top:110px; left:20px; }
+  .console.map-focus-mode .map-legend { left:20px; max-width:calc(100% - 100px); }
+}
+@media screen and (min-width:1051px) and (max-width:1400px) {
+  .map-source-panel { left:365px; width:220px; }
+  .map-legend { left:365px; max-width:calc(100% - 750px); }
+}
+@media screen and (max-width:1050px) {
+  .map-source-panel { top:64px; }
+  .console.map-focus-mode .map-source-panel { top:126px; width:220px; }
+}
+
 .map-accessibility-note,
 .map-attribution { margin: 0; color: var(--ink-soft); font-size: 0.78rem; }
 .map-attribution a { color: var(--navy-800); font-weight: 750; }
@@ -1295,7 +1333,7 @@ main {
   .maplibregl-ctrl-group { border:1px solid var(--line); border-radius:9px; overflow:hidden; box-shadow:0 4px 18px #102b4525; }
   .maplibregl-ctrl-group button { width:44px; height:44px; min-height:44px; padding:0; border-radius:0; }
   .maplibregl-ctrl-scale { color:var(--ink); background:#ffffffee; font-size:11px; }
-  .map-marker { width:38px; height:38px; min-height:38px; border:3px solid #fff; background:#086edd; font-size:22px; box-shadow:0 3px 12px #173f6055; }
+  .map-marker { width:44px; height:44px; min-height:44px; border:3px solid #fff; background:#086edd; font-size:22px; box-shadow:0 3px 12px #173f6055; }
   .map-marker[data-urgency="IMMEDIATE_DANGER"] { background:#e32b3a; }
   .map-marker[data-selected="true"] { outline:7px solid #e52c3a36; outline-offset:3px; box-shadow:0 0 0 2px #fff,0 5px 20px #9c10264d; }
   .map-focus-status,.map-focus-exit { position:absolute; z-index:30; top:18px; border:1px solid var(--line); border-radius:10px; background:#fff; color:var(--ink); box-shadow:0 5px 22px #102b4530; }
@@ -2436,7 +2474,7 @@ const DASHBOARD_JS = `(() => {
 
 const SECURITY_HEADERS: Record<string, string> = {
   'cache-control': 'no-store',
-  'content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+  'content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://tiles.openfreemap.org; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
   'cross-origin-opener-policy': 'same-origin',
   'cross-origin-resource-policy': 'same-origin',
   'permissions-policy': 'camera=(), geolocation=(), microphone=()',

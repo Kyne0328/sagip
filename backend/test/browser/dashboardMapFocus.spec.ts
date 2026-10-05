@@ -28,7 +28,7 @@ const incident = {
   latestAck: null,
 };
 
-test('Show on offline map centers the prepared local map on the selected incident', async ({page, context}) => {
+test('Show on map centers the prepared local map on the selected incident', async ({page, context}) => {
   await context.route(`${ORIGIN}/**`, async route => {
     const request = route.request();
     const url = new URL(request.url());
@@ -97,13 +97,14 @@ test('Show on offline map centers the prepared local map on the selected inciden
     });
   });
 
+  await context.route('https://tiles.openfreemap.org/**', route => route.abort());
   await page.goto(`${ORIGIN}/responder`);
 
   await expect(page.getByRole('button', {name: 'Prepare Tagum offline map'})).toBeVisible();
   await page.getByRole('button', {name: /Trapped incident/u}).click();
-  await expect(page.getByRole('button', {name: 'Show on offline map'})).toBeVisible();
+  await expect(page.getByRole('button', {name: 'Show on map'})).toBeVisible();
 
-  await page.getByRole('button', {name: 'Show on offline map'}).click();
+  await page.getByRole('button', {name: 'Show on map'}).click();
 
   await expect(page.getByText(/Ready · Tagum map stored/u)).toBeVisible();
   await expect(page.locator('#consolePanel')).toHaveClass(/map-focus-mode/u);
@@ -120,7 +121,7 @@ test('Show on offline map centers the prepared local map on the selected inciden
     return box?.height ?? 0;
   }).toBeGreaterThan(500);
   await expect(page.locator('#mapAnnouncement')).toContainText(
-    'Offline map centered on the selected incident location.',
+    'Map centered on the selected incident location.',
   );
   await expect(page.locator('.map-marker[data-report-id="' + REPORT_ID + '"]')).toHaveAttribute(
     'data-selected',
@@ -130,5 +131,5 @@ test('Show on offline map centers the prepared local map on the selected inciden
   await page.getByRole('button', {name: 'Back to incident details'}).click();
   await expect(page.locator('#consolePanel')).not.toHaveClass(/map-focus-mode/u);
   await expect(page.locator('#mapFocusStatus')).toBeHidden();
-  await expect(page.getByRole('button', {name: 'Show on offline map'})).toBeFocused();
+  await expect(page.getByRole('button', {name: 'Show on map'})).toBeFocused();
 });

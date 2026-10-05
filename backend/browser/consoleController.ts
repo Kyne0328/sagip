@@ -351,13 +351,13 @@ async function showSelectedIncidentOnMap(): Promise<void> {
 
   if (!reportId || !incident) {
     window.SagipResponderBridge?.showOperationalMessage(
-      'Select an incident before opening the offline map.',
+      'Select an incident before opening the map.',
     );
     return;
   }
   if (!incident.location) {
     window.SagipResponderBridge?.showOperationalMessage(
-      'The selected incident does not have usable location evidence to show on the offline map.',
+      'The selected incident does not have usable location evidence to show on the map.',
     );
     return;
   }
@@ -365,9 +365,11 @@ async function showSelectedIncidentOnMap(): Promise<void> {
   const previousText = mapLink.textContent;
   mapLink.disabled = true;
   try {
+    await mapView.waitUntilReady();
     if (!mapIsReady()) {
       mapLink.textContent = 'Preparing map…';
       await prepareTagumMap();
+      await mapView.waitUntilReady();
       if (!mapIsReady()) {
         mapPanel.scrollIntoView({block: 'start', inline: 'nearest'});
         mapPanel.focus({preventScroll: true});
@@ -431,11 +433,11 @@ function reportMapFocusFailure(
 ): void {
   if (result === 'MAP_NOT_READY') {
     window.SagipResponderBridge?.showOperationalMessage(
-      'The offline map is not ready on this browser yet. Prepare the Tagum map package and try again.',
+      'The map is not ready. Retry streets or prepare the Tagum offline map package.',
     );
   } else if (result === 'LOCATION_NOT_MAPPED') {
     window.SagipResponderBridge?.showOperationalMessage(
-      'The selected incident does not have usable location evidence to show on the offline map.',
+      'The selected incident does not have usable location evidence to show on the map.',
     );
   } else if (result === 'OUTSIDE_EXTENT') {
     window.SagipResponderBridge?.showOperationalMessage(
@@ -445,7 +447,7 @@ function reportMapFocusFailure(
 }
 
 function mapIsReady(): boolean {
-  return mapReadiness.kind === 'READY';
+  return mapView.isReady();
 }
 
 function formatEmergencyLabel(value: string): string {

@@ -113,6 +113,8 @@ test('real Tagum package prepares once and reopens from IndexedDB with network o
         onSelect: (reportId: string) => void,
       ) => {
         setManifest(value: unknown): Promise<void>;
+        setBasemap(value: 'offline'): Promise<void>;
+        waitUntilReady(): Promise<boolean>;
         render(items: readonly unknown[], selectedReportId: string | null): Promise<void>;
         focusReport(reportId: string): 'FOCUSED' | 'MAP_NOT_READY' | 'LOCATION_NOT_MAPPED' | 'OUTSIDE_EXTENT';
       };
@@ -124,6 +126,7 @@ test('real Tagum package prepares once and reopens from IndexedDB with network o
         () => undefined,
       );
       if (readiness.kind !== 'READY') throw new Error('real package was not activated');
+      await view.setBasemap('offline');
       await view.setManifest(readiness.manifest);
       mapContainer.hidden = false;
       const requestFrame = (globalThis as unknown as {
@@ -145,6 +148,7 @@ test('real Tagum package prepares once and reopens from IndexedDB with network o
           },
         },
       ], '11111111-1111-4111-8111-111111111111');
+      await view.waitUntilReady();
       const focusResult = view.focusReport('11111111-1111-4111-8111-111111111111');
       const canvas = mapContainer.querySelector('.maplibregl-canvas') as {
         getBoundingClientRect(): {width: number; height: number};

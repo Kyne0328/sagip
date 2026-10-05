@@ -109,7 +109,7 @@ test('responder dashboard assets are served with strict browser security headers
   assert.match(body, /Tagum emergency operations/u);
   assert.match(body, /class="operations-stage"/u);
   assert.match(body, /Prepare Tagum offline map/u);
-  assert.match(body, /<button id="mapLink" type="button" class="map-link">Show on offline map<\/button>/u);
+  assert.match(body, /<button id="mapLink" type="button" class="map-link">Show on map<\/button>/u);
   assert.match(body, /id="exitMapFocusButton"[^>]*>Back to incident details<\/button>/u);
   assert.match(body, /id="incidentMapPanel"[^>]*tabindex="-1"/u);
   assert.doesNotMatch(body, /sagip-dev-token/u);

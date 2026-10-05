@@ -4,6 +4,7 @@ import {previewResponse} from './fixtures/consolePreview.js';
 const ORIGIN = 'https://sagip.test';
 
 test('reference shell keeps queue, tabs, map focus and offline controls functional', async ({page, context}) => {
+  await context.route('https://tiles.openfreemap.org/**', route => route.abort());
   await context.route(ORIGIN + '/**', async route => {
     const request = route.request();
     const response = await previewResponse(new Request(request.url(), {method: request.method()}));
@@ -43,12 +44,12 @@ test('reference shell keeps queue, tabs, map focus and offline controls function
   await expect(page.locator('.incident-card')).toHaveCount(5);
   await page.getByRole('button',{name:/^Trapped incident, Immediate danger, Pending, report /u}).click();
   await page.getByRole('button',{name:'Map',exact:true}).click();
-  await page.getByRole('button',{name:'Show on offline map',exact:true}).click();
+  await page.getByRole('button',{name:'Show on map',exact:true}).click();
   await expect(page.locator('#consolePanel')).toHaveClass(/map-focus-mode/);
   await page.getByRole('button',{name:'Incidents',exact:true}).click();
   await expect(page.locator('#consolePanel')).not.toHaveClass(/map-focus-mode/);
   await expect(page.getByRole('heading',{name:'Incident queue',exact:true})).toBeVisible();
-  await page.getByRole('button',{name:'Show on offline map',exact:true}).click();
+  await page.getByRole('button',{name:'Show on map',exact:true}).click();
   await page.getByRole('button',{name:'Offline',exact:true}).click();
   await expect(page.locator('#consolePanel')).not.toHaveClass(/map-focus-mode/);
   await expect(page.getByRole('heading',{name:'Offline response workspace'})).toBeVisible();
@@ -92,6 +93,7 @@ test('bounded 100-incident queue renders and scrolls without missing rows', asyn
   const listResponse = await previewResponse(new Request(ORIGIN + '/v1/incidents'));
   const seed = await listResponse.json() as Array<Record<string,unknown>>;
   const incidents = Array.from({length:100},(_,index) => ({...seed[0],reportId:'33333333-3333-4333-8333-' + String(index).padStart(12,'0'),emergencyType:'OTHER',urgency:'NEEDS_ASSISTANCE'}));
+  await context.route('https://tiles.openfreemap.org/**', route => route.abort());
   await context.route(ORIGIN + '/**', async route => {
     if (new URL(route.request().url()).pathname === '/v1/incidents') {
       await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(incidents)});
@@ -114,6 +116,7 @@ test('bounded 100-incident queue renders and scrolls without missing rows', asyn
 });
 
 test('authentication shell remains usable at mobile size', async ({page,context}) => {
+  await context.route('https://tiles.openfreemap.org/**', route => route.abort());
   await context.route(ORIGIN + '/**', async route => {
     const url = new URL(route.request().url());
     if (url.pathname === '/v1/responder/session') {
@@ -131,6 +134,7 @@ test('authentication shell remains usable at mobile size', async ({page,context}
 });
 
 test('narrow and 200-percent-equivalent layouts retain keyboard navigation with reduced motion', async ({page,context}) => {
+  await context.route('https://tiles.openfreemap.org/**', route => route.abort());
   await context.route(ORIGIN + '/**', async route => {
     const response = await previewResponse(new Request(route.request().url()));
     await route.fulfill({status:response.status,headers:Object.fromEntries(response.headers.entries()),body:Buffer.from(await response.arrayBuffer())});
@@ -156,6 +160,7 @@ test('late detail response cannot steal focus from another incident response dra
   let releaseFirst: () => void = () => undefined;
   const firstGate = new Promise<void>(resolve => {releaseFirst = resolve;});
   const firstPath = '/v1/incidents/11111111-1111-4111-8111-000000000001';
+  await context.route('https://tiles.openfreemap.org/**', route => route.abort());
   await context.route(ORIGIN + '/**', async route => {
     if (new URL(route.request().url()).pathname === firstPath) await firstGate;
     const response = await previewResponse(new Request(route.request().url()));
