@@ -45,6 +45,8 @@ export interface IncidentMapItem {
   reportId: string;
   emergencyType: string;
   urgency: string;
+  status?: 'PENDING' | 'ACKNOWLEDGED' | 'EN_ROUTE' | 'ON_SCENE' | 'RESOLVED';
+  resolutionPending?: boolean;
   location: IncidentSnapshotEntry['location'];
 }
 
@@ -119,6 +121,20 @@ export class IncidentMapView {
     }
   }
 
+  async prepareOfflineRuntime(): Promise<void> {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        Promise.all([loadMapLibre(), loadPmtiles()]),
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => reject(new Error('OFFLINE_RUNTIME_TIMEOUT')), 12000);
+        }),
+      ]);
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
+    }
+  }
+
   async setBasemap(source: 'online' | 'offline'): Promise<void> {
     this.preferredSource = source;
     await this.switchSource(source);
@@ -143,9 +159,9 @@ export class IncidentMapView {
 
   async render(items: readonly IncidentMapItem[], selectedReportId: string | null): Promise<void> {
     if (this.destroyed) return;
-    this.items = items.slice();
+    this.items = items.filter(item => item.status !== 'RESOLVED');
     this.locationsByReportId.clear();
-    for (const item of items) {
+    for (const item of this.items) {
       if (validLocation(item.location)) this.locationsByReportId.set(item.reportId, item.location!);
     }
     this.select(selectedReportId);
@@ -364,11 +380,17 @@ export class IncidentMapView {
       marker.setLngLat([item.location!.longitude, item.location!.latitude]);
       const category = item.emergencyType === 'UNSPECIFIED' ? 'SOS · category not specified' : item.emergencyType.toLowerCase().replaceAll('_', ' ');
       const urgency = item.urgency === 'IMMEDIATE_DANGER' ? 'immediate danger' : item.urgency === 'UNSPECIFIED' ? 'urgency not specified' : 'reported incident';
-      element.setAttribute('aria-label', `${category} incident location · ${urgency}`);
+      const status = item.status ?? 'PENDING';
+      const label = status.toLowerCase().replaceAll('_', ' ');
+      const pending = item.resolutionPending ? ' · resolution pending server confirmation' : '';
+      element.setAttribute('aria-label', `${category} incident location · ${label} · ${urgency} · report ${item.reportId}${pending}`);
+      element.title = `${label}${pending}`;
+      element.dataset.status = status;
+      element.dataset.resolutionPending = String(!!item.resolutionPending);
       element.dataset.urgency = item.urgency;
       element.dataset.selected = String(item.reportId === this.selectedReportId);
       element.setAttribute('aria-pressed', String(item.reportId === this.selectedReportId));
-      element.textContent = item.urgency === 'IMMEDIATE_DANGER' ? '!' : item.urgency === 'UNSPECIFIED' ? '?' : '•';
+      element.textContent = status === 'ACKNOWLEDGED' ? '✓' : status === 'EN_ROUTE' ? '→' : status === 'ON_SCENE' ? '◆' : '!';
     }
     const mappable = valid.filter(item => this.canFocus(item.location!));
     if (!this.hasFittedIncidentBounds && mappable.length > 0 && this.container.clientWidth > 0) {

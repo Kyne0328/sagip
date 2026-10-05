@@ -156,6 +156,17 @@ test('responder HTTP endpoints: auth, listing, acknowledging, and private origin
     });
     assert.equal(invalidFilterRes.status, 400);
 
+    const invalidSortRes = await fetch(`${baseUrl}/v1/incidents?sort=created_at`, {
+      headers: {authorization: `Bearer ${token}`},
+    });
+    assert.equal(invalidSortRes.status, 400);
+    assert.deepEqual(await invalidSortRes.json(), {error: 'INVALID_SORT'});
+    const sortedFilteredRes = await fetch(`${baseUrl}/v1/incidents?status=PENDING&sort=urgency&limit=100`, {
+      headers: {authorization: `Bearer ${token}`},
+    });
+    assert.equal(sortedFilteredRes.status, 200);
+    assert.equal(((await sortedFilteredRes.json()) as unknown[]).length, 1);
+
     const invalidLimitRes = await fetch(`${baseUrl}/v1/incidents?limit=1000`, {
       headers: {authorization: `Bearer ${token}`},
     });

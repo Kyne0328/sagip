@@ -46,6 +46,7 @@ export const RESPONDER_BROWSER_ASSET_PATHS = {
   incidentSnapshotModule: `${BROWSER_ASSET_ROOT}/incidentSnapshot.js`,
   actionCodecModule: `${BROWSER_ASSET_ROOT}/actionCodec.js`,
   actionOutboxModule: `${BROWSER_ASSET_ROOT}/actionOutbox.js`,
+  resolutionStateModule: `${BROWSER_ASSET_ROOT}/resolutionState.js`,
   incidentMapModule: `${BROWSER_ASSET_ROOT}/incidentMap.js`,
   consoleControllerModule: `${BROWSER_ASSET_ROOT}/consoleController.js`,
   serviceWorker: '/responder/service-worker.js',
@@ -151,6 +152,10 @@ const assets = new Map<string, AssetDescriptor>([
     browserModule('actionOutbox.js'),
   ],
   [
+    RESPONDER_BROWSER_ASSET_PATHS.resolutionStateModule,
+    browserModule('resolutionState.js'),
+  ],
+  [
     RESPONDER_BROWSER_ASSET_PATHS.incidentMapModule,
     browserModule('incidentMap.js'),
   ],
@@ -164,7 +169,7 @@ const assets = new Map<string, AssetDescriptor>([
       contentType: 'text/javascript; charset=utf-8',
       resolveFile: () => join(GENERATED_BROWSER_ROOT, 'serviceWorker.js'),
       cacheControl: 'no-cache',
-      headers: {'service-worker-allowed': '/responder/'},
+      headers: {'service-worker-allowed': '/responder'},
     },
   ],
 ]);

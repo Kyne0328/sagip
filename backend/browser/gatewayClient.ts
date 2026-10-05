@@ -122,18 +122,22 @@ export class GatewayClient implements ConsoleProvider {
     },
     allowExpectedError = false,
   ): Promise<Response> {
+    // An aborted commit remains an unknown outcome for exact-ID reconciliation.
+    const signal = AbortSignal.timeout(30000);
     const body = options.body ?? new Uint8Array(0);
     const headers: Record<string, string> = {};
     if (options.contentType) headers['content-type'] = options.contentType;
     if (this.providerKind === 2) {
       if (!this.authorizeNativeRequest) throw new Error('NATIVE_AUTHORIZATION_REQUIRED');
-      Object.assign(headers, await this.authorizeNativeRequest({
+      Object.assign(headers, await abortable(this.authorizeNativeRequest({
         method: options.method,
         path,
         body,
-      }));
+      }), signal));
     }
+    signal.throwIfAborted();
     const response = await fetch(`${this.baseUrl}${path}`, {
+      signal,
       method: options.method,
       headers,
       body: body.length > 0 ? ownedArrayBuffer(body) : undefined,
@@ -145,6 +149,19 @@ export class GatewayClient implements ConsoleProvider {
       throw await responseError(response);
     }
     return response;
+  }
+}
+
+async function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+  signal.throwIfAborted();
+  let onAbort: (() => void) | undefined;
+  try {
+    return await Promise.race([operation, new Promise<never>((_, reject) => {
+      onAbort = () => reject(signal.reason);
+      signal.addEventListener('abort', onAbort, {once: true});
+    })]);
+  } finally {
+    if (onAbort) signal.removeEventListener('abort', onAbort);
   }
 }
 

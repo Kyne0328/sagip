@@ -197,6 +197,7 @@ export class ResponderService {
     statusFilter?: string,
     limit: number = 50,
     offset: number = 0,
+    sort: string = 'newest_received',
   ): Promise<IncidentSummary[]> {
     const validFilters = new Set(['PENDING', 'ACKNOWLEDGED', 'EN_ROUTE', 'ON_SCENE', 'RESOLVED']);
     if (statusFilter && !validFilters.has(statusFilter)) {
@@ -209,6 +210,19 @@ export class ResponderService {
     if (!Number.isInteger(offset) || offset < 0 || offset > 10_000) {
       throw new ResponderValidationError(`Invalid offset: ${offset}`);
     }
+
+    if (sort !== 'newest_received' && sort !== 'urgency') {
+      throw new ResponderValidationError(`Invalid sort: ${sort}`);
+    }
+    // Literal allowlisted ordering is applied before LIMIT/OFFSET, never to a truncated page.
+    const orderBy = sort === 'newest_received'
+      ? 'i.first_received_at DESC, i.report_id ASC'
+      : `CASE WHEN la.status = 'RESOLVED' THEN 1 ELSE 0 END ASC,
+         CASE WHEN lr.urgency IN (0, 1) THEN 0 ELSE 1 END ASC,
+         CASE la.status
+           WHEN 'ACKNOWLEDGED' THEN 1 WHEN 'EN_ROUTE' THEN 2
+           WHEN 'ON_SCENE' THEN 3 WHEN 'RESOLVED' THEN 4 ELSE 0
+         END ASC, i.first_received_at ASC, i.report_id ASC`;
 
     // Query incidents with latest revision, newest available location, and latest ack.
     const sql = `
@@ -282,19 +296,7 @@ export class ResponderService {
       LEFT JOIN best_location bl ON i.report_id = bl.report_id
       LEFT JOIN latest_ack la ON i.report_id = la.report_id
       ${statusFilter ? 'WHERE ($3 = \'PENDING\' AND la.ack_id IS NULL) OR la.status = $3' : ''}
-      ORDER BY
-        CASE WHEN la.status = 'RESOLVED' THEN 1 ELSE 0 END ASC,
-        -- Untriaged SOS remains emergency-priority without claiming immediate danger.
-        CASE WHEN lr.urgency IN (0, 1) THEN 0 ELSE 1 END ASC,
-        CASE la.status
-          WHEN 'ACKNOWLEDGED' THEN 1
-          WHEN 'EN_ROUTE' THEN 2
-          WHEN 'ON_SCENE' THEN 3
-          WHEN 'RESOLVED' THEN 4
-          ELSE 0
-        END ASC,
-        i.first_received_at ASC,
-        i.report_id ASC
+      ORDER BY ${orderBy}
       LIMIT $1
       OFFSET $2
     `;

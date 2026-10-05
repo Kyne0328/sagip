@@ -47,7 +47,9 @@ test('failed check keeps last successful check and warns cached status can be st
   expect(text).toContain('Last successful server check:');
   expect(text).toContain('Last server check failed at');
   expect(text).toContain('Showing saved status; it may be out of date.');
-  expect(text).toContain('Without internet or a return relay, new responder updates cannot arrive.');
+  expect(text).toContain('Saved status remains available offline.');
+  expect(text).toContain('Verified responder updates over nearby relay are not enabled in this build.');
+  expect(text).toContain('Connect to the internet to check for new responder updates.');
 });
 
 test('an absent server check is never inferred from a local history read', async () => {

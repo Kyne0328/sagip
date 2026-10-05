@@ -43,7 +43,7 @@ export function StatusFreshness({report, syncing = false}: {
       {sync?.state === 'FAILED' ? (
         <Text style={styles.warning}>Last server check failed at {historyDate(sync.lastAttemptAt)}. Showing saved status; it may be out of date.</Text>
       ) : null}
-      <Text style={styles.detail}>Cached status remains available offline. Without internet or a return relay, new responder updates cannot arrive.</Text>
+      <Text style={styles.detail}>Saved status remains available offline. Verified responder updates over nearby relay are not enabled in this build. Connect to the internet to check for new responder updates.</Text>
     </View>
   );
 }

@@ -24,7 +24,7 @@ import {
 import {SurvivalCore} from './src/emergency/SurvivalCore';
 import {prepareSosLocation} from './src/emergency/prepareSosLocation';
 import {useBleRelayStatus} from './src/emergency/useBleRelayStatus';
-import {reportIsResolved, useEmergencyReports} from './src/emergency/useEmergencyReports';
+import {activeEmergencyReport, reportIsResolved, useEmergencyReports} from './src/emergency/useEmergencyReports';
 import {AuthenticatedServerStatus, historyDate, SosHistory, StatusFreshness} from './src/emergency/SosHistory';
 
 const emergencyLabels: Record<EmergencyType, string> = {
@@ -121,6 +121,8 @@ export default function App() {
     refresh: refreshRelay,
   } = useBleRelayStatus();
   const scrollRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
+  const primarySosBottom = useRef(0);
+  const [showCompactSos, setShowCompactSos] = useState(false);
   const {width, fontScale} = useWindowDimensions();
   const compactCategories = width >= 360 && fontScale <= 1.3;
   const [showHelp, setShowHelp] = useState(false);
@@ -136,9 +138,11 @@ export default function App() {
   const message = detailsError ?? nativeMessage;
   const [emergencyType, setEmergencyType] = useState<EmergencyType | null>(null);
   const [urgency, setUrgency] = useState<Urgency | null>(null);
-  const latest = reports[0];
-  const hasActiveSos = !!latest && !reportIsResolved(latest);
-  const detailsTargetClosed = !!latest && detailsTarget?.reportId === latest.reportId && reportIsResolved(latest);
+  const activeSos = activeEmergencyReport(reports);
+  const latest = activeSos ?? reports[0];
+  const hasActiveSos = !!activeSos;
+  const detailsReport = reports.find(report => report.reportId === detailsTarget?.reportId);
+  const detailsTargetClosed = !!detailsReport && reportIsResolved(detailsReport);
   const originalDeliveryState = latest?.originalDelivery?.deliveryState ?? latest?.deliveryState;
   const latestVerifiedReportId = latest?.reportId;
   const latestVerifiedReceipt = latest?.verifiedReceipt;
@@ -182,14 +186,22 @@ export default function App() {
   useEffect(() => {
     // Reveal the form, saved report or error without jumping on delivery refreshes.
     scrollRef.current?.scrollTo({y: 0, animated: false});
+    setShowCompactSos(false);
   }, [showForm, messageIsError]);
 
   const sendSos = async () => {
     setDetailsError(null);
     setShowHelp(false);
     // No form, permission request, or location acquisition can gate durable creation.
-    await create({});
+    const saved = await create({});
+    if (saved) {
+      setShowForm(false);
+      setDetailsTarget(null);
+      detailOperation.current = null;
+    }
   };
+
+  const pressSos = () => { if (hasActiveSos) { void refresh(); } else { void sendSos(); } };
 
   const openDetails = () => {
     if (!latest || saving) return;
@@ -233,7 +245,7 @@ export default function App() {
 
   const statusCard = (
     <View style={styles.statusCard}>
-      <Text accessibilityRole="header" style={styles.sectionTitle}>Latest SOS status</Text>
+      <Text accessibilityRole="header" style={styles.sectionTitle}>{hasActiveSos ? 'Active SOS status' : 'Latest SOS status'}</Text>
       {loading ? (
         <Text style={styles.statusText}>Checking this device…</Text>
       ) : latest ? (
@@ -346,7 +358,20 @@ export default function App() {
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="dark-content" />
-      <ScrollView ref={scrollRef} contentContainerStyle={styles.container}>
+      {showForm || showCompactSos ? (
+        <Pressable testID="compact-sos-button" accessibilityRole="button"
+          accessibilityLabel={hasActiveSos ? 'Active SOS. Check saved delivery status' : 'Save a new emergency SOS'}
+          accessibilityHint={hasActiveSos ? 'Keeps your optional details and checks the same active SOS' : 'Immediately saves an SOS. Optional details never block saving.'}
+          disabled={saving} accessibilityState={{disabled: saving, busy: saving}}
+          onPress={pressSos}
+          style={({pressed}) => [styles.compactSosButton, saving && styles.disabledButton, pressed && styles.pressed]}>
+          <Text style={styles.compactSosText}>{saving ? 'Saving SOS…' : hasActiveSos ? 'SOS already active' : 'SOS'}</Text>
+          <Text style={styles.compactSosHint}>{hasActiveSos ? 'Tap to check delivery status' : 'Tap once to send SOS'}</Text>
+        </Pressable>
+      ) : null}
+      <ScrollView ref={scrollRef} contentContainerStyle={styles.container}
+        scrollEventThrottle={16}
+        onScroll={event => setShowCompactSos(primarySosBottom.current > 0 && event.nativeEvent.contentOffset.y >= primarySosBottom.current)}>
         <View style={styles.brandRow}>
           <SagipMark />
           <View style={styles.brandCopy}>
@@ -362,7 +387,6 @@ export default function App() {
             <Text style={styles.messageText}>{message}</Text>
           </View>
         ) : null}
-        {latest && !showForm ? statusCard : null}
         {showForm || !latest ? (
           <View style={styles.introduction}>
             <Text accessibilityRole="header" style={styles.title}>
@@ -375,16 +399,21 @@ export default function App() {
         {!showForm ? (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={hasActiveSos ? 'Refresh SOS delivery status' : 'Create emergency SOS report'}
+            testID="primary-sos-button"
+            onLayout={event => { primarySosBottom.current = event.nativeEvent.layout.y + event.nativeEvent.layout.height; }}
+            accessibilityLabel={hasActiveSos ? 'SOS already active. Check delivery status' : 'Create emergency SOS report'}
             accessibilityHint={hasActiveSos ? 'Checks saved delivery evidence for your active SOS without creating another incident' : 'Immediately save SOS locally and start available delivery. Details are optional.'}
             disabled={saving}
             accessibilityState={{disabled: saving, busy: saving}}
-            style={({pressed}) => [latest ? styles.anotherSosButton : styles.sosButton, saving && styles.disabledButton, pressed && styles.pressed]}
-            onPress={() => { if (hasActiveSos) { void refresh(); } else { void sendSos(); } }}>
-            <Text style={latest ? styles.saveButtonText : styles.sosButtonText}>
-              {saving ? 'Saving SOS…' : syncing && hasActiveSos ? 'Checking delivery status…' : hasActiveSos ? 'Check delivery status' : latest ? 'Send new SOS' : 'SOS'}
+            style={({pressed}) => [styles.sosButton, saving && styles.disabledButton, pressed && styles.pressed]}
+            onPress={pressSos}>
+            <Text style={styles.sosButtonText}>SOS</Text>
+            <Text style={styles.sosButtonSubtext}>
+              {saving ? 'Saving SOS…' : hasActiveSos ? 'SOS already active' : latest ? 'Tap to send a new SOS' : 'Tap once to send SOS'}
             </Text>
-            {!latest ? <Text style={styles.sosButtonSubtext}>Tap once to send SOS</Text> : null}
+            {hasActiveSos ? <Text style={styles.sosButtonHint}>
+              {syncing ? 'Checking delivery status…' : 'Tap to check delivery. Your saved SOS stays active.'}
+            </Text> : null}
           </Pressable>
         ) : (
           <View style={styles.card}>
@@ -413,6 +442,7 @@ export default function App() {
             ))}
           </View>
         )}
+        {!showForm ? statusCard : null}
         {latest && hasActiveSos && !showForm ? (
           <Pressable accessibilityRole="button" accessibilityLabel="Add optional SOS details"
             disabled={saving} accessibilityState={{disabled: saving}}
@@ -420,7 +450,7 @@ export default function App() {
             <Text style={styles.secondaryButtonText}>Add optional details</Text>
           </Pressable>
         ) : null}
-        {!latest || showForm ? statusCard : null}
+        {showForm ? statusCard : null}
 
         {!showForm ? <>
           <Pressable accessibilityRole="button" accessibilityLabel="Your SOS history"
@@ -673,7 +703,6 @@ const styles = StyleSheet.create({
   formActions: {paddingHorizontal: 16, paddingBottom: 8, gap: 8, borderTopWidth: 1, borderTopColor: '#BCC4C0', backgroundColor: '#F7F5F0'},
   secondaryButton: {minHeight: 48, justifyContent: 'center'},
   secondaryButtonText: {fontSize: 16, fontWeight: '700', color: '#35423D'},
-  anotherSosButton: {minHeight: 58, borderRadius: 16, backgroundColor: '#B33A32', alignItems: 'center', justifyContent: 'center', padding: 16},
   brandRow: {flexDirection: 'row', alignItems: 'center', gap: 12},
   brandCopy: {flex: 1, gap: 2},
   brand: {fontSize: 20, fontWeight: '900', letterSpacing: 2, color: '#21302B'},
@@ -684,6 +713,10 @@ const styles = StyleSheet.create({
   sosButton: {minHeight: 190, borderRadius: 28, backgroundColor: '#B33A32', alignItems: 'center', justifyContent: 'center', padding: 24, marginVertical: 8},
   sosButtonText: {fontSize: 56, fontWeight: '900', color: '#FFFFFF', letterSpacing: 3},
   sosButtonSubtext: {fontSize: 16, lineHeight: 23, textAlign: 'center', fontWeight: '700', color: '#FFFFFF', marginTop: 8},
+  compactSosButton: {minHeight: 64, marginHorizontal: 16, marginTop: 8, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 14, backgroundColor: '#B33A32', justifyContent: 'center'},
+  compactSosText: {fontSize: 20, lineHeight: 26, fontWeight: '800', color: '#FFFFFF'},
+  compactSosHint: {fontSize: 13, lineHeight: 19, color: '#FFFFFF'},
+  sosButtonHint: {fontSize: 14, lineHeight: 21, textAlign: 'center', color: '#FFFFFF', marginTop: 6},
   card: {backgroundColor: '#FFFFFF', borderRadius: 20, padding: 18, gap: 12, borderWidth: 1, borderColor: '#DCE1DB'},
   sectionTitle: {fontSize: 18, fontWeight: '800', color: '#18211E', marginTop: 4},
   optionGrid: {flexDirection: 'row', flexWrap: 'wrap', gap: 10},

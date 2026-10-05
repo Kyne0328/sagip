@@ -169,15 +169,16 @@ test('late detail response cannot steal focus from another incident response dra
   await page.setViewportSize({width:390,height:844});
   await page.goto(ORIGIN + '/responder');
   await page.getByRole('button',{name:/^Trapped incident, Immediate danger, Pending, report /u}).click();
+  const cancelledFirst = page.waitForEvent('requestfailed', request => new URL(request.url()).pathname === firstPath);
   await page.getByRole('button',{name:/^Fire incident, Immediate danger, Pending, report /u}).click();
   await expect(page.locator('#detailTitle')).toHaveText('Fire emergency');
   await expect(page.locator('#detailPanel')).toBeFocused();
   await page.getByRole('button',{name:'Update status ↗',exact:true}).click();
   await page.locator('#ackNote').fill('Keep this response draft focused');
-  const lateResponse = page.waitForResponse(response => new URL(response.url()).pathname === firstPath);
+  // Selecting the second report aborts this request. Its delayed handler may
+  // finish, but it must never regain focus or replace the newer detail.
   releaseFirst();
-  await (await lateResponse).finished();
-  await page.waitForTimeout(100);
+  await cancelledFirst;
   await expect(page.locator('#ackNote')).toBeFocused();
   await expect(page.locator('#ackNote')).toHaveValue('Keep this response draft focused');
   await expect(page.locator('#detailTitle')).toHaveText('Fire emergency');

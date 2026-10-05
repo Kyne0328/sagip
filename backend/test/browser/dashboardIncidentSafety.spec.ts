@@ -114,15 +114,16 @@ test('stale refresh cannot replace the current status-filter results', async ({p
   state.deferNextList();
   await page.locator('#refreshButton').click();
   await expect.poll(state.lists).toBe(2);
-  await page.locator('#statusFilter').selectOption('RESOLVED');
-  await expect(page.locator('#incidentList .incident-card')).toHaveCount(1);
-  const lateResponse = page.waitForResponse(response => {
-    const url = new URL(response.url());
+  const cancelledList = page.waitForEvent('requestfailed', request => {
+    const url = new URL(request.url());
     return url.pathname === '/v1/incidents' && !url.searchParams.has('status');
   });
+  await page.locator('#statusFilter').selectOption('RESOLVED');
+  await expect(page.locator('#incidentList .incident-card')).toHaveCount(1);
+  // Changing view cancels the obsolete request. Release its delayed route anyway
+  // and verify it cannot replace the active results, even if the handler finishes.
   state.releaseList();
-  await (await lateResponse).finished();
-  await page.waitForTimeout(50);
+  await cancelledList;
   await expect(page.locator('#incidentList .incident-card')).toHaveCount(1);
   await expect(page.locator('#statusFilter')).toHaveValue('RESOLVED');
 });
@@ -131,6 +132,7 @@ test('old unauthorized detail cannot terminate a newly connected session', async
   const state = await setup(page, {delayB: true, unauthorizedB: true});
   await page.locator('[data-report-id="' + B + '"]').first().click();
   await expect.poll(state.details).toBe(2);
+  const cancelledDetail = page.waitForEvent('requestfailed', request => new URL(request.url()).pathname === '/v1/incidents/' + B);
   await page.locator('#logoutButton').click();
   await page.locator('#tokenInput').fill('synthetic-test-token-not-a-real-credential');
   await page.locator('#connectButton').click();
@@ -139,10 +141,9 @@ test('old unauthorized detail cannot terminate a newly connected session', async
   await expect(page.locator('#detailFacts')).toContainText(A);
   await page.locator('#responseTab').click();
   await page.locator('#ackNote').fill('New session draft');
-  const lateResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/v1/incidents/' + B);
+  // New selection/session cancels this obsolete request before its 401 arrives.
   state.releaseDetail();
-  await (await lateResponse).finished();
-  await page.waitForTimeout(50);
+  await cancelledDetail;
   await expect(page.locator('#consolePanel')).toBeVisible();
   await expect(page.locator('#ackNote')).toHaveValue('New session draft');
 });

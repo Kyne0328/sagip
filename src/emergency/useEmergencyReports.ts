@@ -16,6 +16,13 @@ export function reportIsResolved(report: EmergencyReportSummary): boolean {
     (report.verifiedReceipt?.status === 'RESOLVED' && report.verifiedReceipt.revision === (report.revision ?? 1));
 }
 
+/** Match the native repository's canonical newest-active ordering, including legacy history. */
+export function activeEmergencyReport(reports: EmergencyReportSummary[]): EmergencyReportSummary | undefined {
+  return reports.filter(report => !reportIsResolved(report)).sort((a, b) =>
+    b.createdAt - a.createdAt || (a.reportId < b.reportId ? 1 : a.reportId > b.reportId ? -1 : 0),
+  )[0];
+}
+
 export function reportNeedsStatusSync(report: EmergencyReportSummary): boolean {
   const states = [report.deliveryState, report.originalDelivery?.deliveryState, report.latestDelivery?.deliveryState];
   // Incident closure does not finish history pagination or outstanding envelope delivery.
@@ -35,6 +42,8 @@ export function useEmergencyReports() {
   const [message, setMessage] = useState<string | null>(null);
   const [restoreFailed, setRestoreFailed] = useState(false);
   const restoreGeneration = useRef(0);
+  // Keep committed identity current even before React renders an async save result.
+  const reportsRef = useRef<EmergencyReportSummary[]>([]);
   const saveInFlight = useRef(false);
   const syncInFlight = useRef(false);
 
@@ -43,6 +52,7 @@ export function useEmergencyReports() {
     try {
       const restored = await SurvivalCore.listEmergencyReports();
       if (generation !== restoreGeneration.current) return;
+      reportsRef.current = restored;
       setReports(restored);
       setLastLocalReadAt(Date.now());
       setRestoreFailed(false);
@@ -102,6 +112,12 @@ export function useEmergencyReports() {
   const create = useCallback(async (input: CreateEmergencyReportInput) => {
     // State updates alone cannot guard two presses in the same render frame.
     if (saveInFlight.current) return null;
+    const active = activeEmergencyReport(reportsRef.current);
+    if (active) {
+      setMessage('SOS already active. Checking saved delivery status.');
+      void syncFromNative();
+      return active;
+    }
     saveInFlight.current = true;
     setSaving(true);
     setMessage(null);
@@ -111,7 +127,8 @@ export function useEmergencyReports() {
       // A read started before this commit must not erase the committed report.
       restoreGeneration.current += 1;
       setLoading(false);
-      setReports(current => [savedReport!, ...current.filter(item => item.reportId !== savedReport!.reportId)]);
+      reportsRef.current = [savedReport, ...reportsRef.current.filter(item => item.reportId !== savedReport!.reportId)];
+      setReports(reportsRef.current);
       setMessage('SOS saved on this device. You do not need internet.');
     } catch {
       setMessage('SOS was not saved. Please try again.');
@@ -134,7 +151,8 @@ export function useEmergencyReports() {
     try {
       const updated = await SurvivalCore.appendEmergencyReportDetails(reportId, input);
       restoreGeneration.current += 1;
-      setReports(current => current.map(item => item.reportId === reportId ? updated : item));
+      reportsRef.current = reportsRef.current.map(item => item.reportId === reportId ? updated : item);
+      setReports(reportsRef.current);
       setMessage('Details saved on this device. Delivery will keep trying.');
       void syncFromNative();
       return updated;

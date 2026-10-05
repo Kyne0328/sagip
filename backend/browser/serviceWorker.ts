@@ -1,7 +1,8 @@
 const CACHE_PREFIX = 'sagip-responder-public-';
-const CACHE_NAME = `${CACHE_PREFIX}c05-v1`;
+const CACHE_NAME = `${CACHE_PREFIX}c05-v2`;
 const ASSET_MANIFEST_PATH = '/responder/assets/asset-manifest.json';
 const PUBLIC_SHELL_PATHS = [
+  '/responder',
   '/responder/',
   '/responder/styles.css',
   '/responder/app.js',
@@ -15,6 +16,7 @@ const PUBLIC_SHELL_PATHS = [
   '/responder/assets/browser/incidentSnapshot.js',
   '/responder/assets/browser/actionCodec.js',
   '/responder/assets/browser/actionOutbox.js',
+  '/responder/assets/browser/resolutionState.js',
   '/responder/assets/browser/incidentMap.js',
   '/responder/assets/browser/consoleController.js',
   ASSET_MANIFEST_PATH,

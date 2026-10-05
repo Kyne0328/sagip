@@ -44,6 +44,53 @@ test('a double tap issues only one native SOS save request', async () => {
   expect(core.createEmergencyReport).toHaveBeenCalledTimes(1);
 });
 
+test('awaited calls through the same callback reuse the committed identity before render and reconciliation', async () => {
+  const delivery = deferred<number>();
+  core.triggerDelivery.mockReturnValue(delivery.promise);
+  await mount();
+  const create = current.create;
+  await act(async () => {
+    expect((await create(input))?.reportId).toBe(report.reportId);
+    expect((await create(input))?.reportId).toBe(report.reportId);
+    expect((await create(input))?.reportId).toBe(report.reportId);
+  });
+  expect(core.createEmergencyReport).toHaveBeenCalledTimes(1);
+  expect(core.triggerDelivery).toHaveBeenCalledTimes(1);
+  expect(current.reports).toEqual([report]);
+});
+
+test('a restored active identity prevents a new native save after remount', async () => {
+  core.listEmergencyReports.mockResolvedValue([report]);
+  await mount();
+  await act(async () => {await current.create(input);});
+  act(() => renderer.unmount());
+  await mount();
+  await act(async () => {await current.create(input);});
+  expect(core.createEmergencyReport).not.toHaveBeenCalled();
+  expect(current.reports[0].reportId).toBe(report.reportId);
+});
+
+test('an active report behind newer closed history remains canonical', async () => {
+  const closed: EmergencyReportSummary = {...report, reportId: 'closed', createdAt: 5000,
+    serverStatus: {status: 'RESOLVED', revision: null, statusScope: 'REPORT', updatedAt: 6000, callsign: null, note: null}};
+  core.listEmergencyReports.mockResolvedValue([closed, report]);
+  await mount();
+  let reused: EmergencyReportSummary | null = null;
+  await act(async () => {reused = await current.create(input);});
+  expect(reused).toEqual(report);
+  expect(core.createEmergencyReport).not.toHaveBeenCalled();
+});
+
+test('a failed reconciliation cannot forget the committed identity', async () => {
+  core.listEmergencyReports.mockResolvedValueOnce([]).mockRejectedValue(new Error('read failed'));
+  await mount();
+  const create = current.create;
+  await act(async () => {await create(input);});
+  await act(async () => {await create(input);});
+  expect(core.createEmergencyReport).toHaveBeenCalledTimes(1);
+  expect(current.reports[0].reportId).toBe(report.reportId);
+});
+
 test('an older startup read cannot erase a newly committed SOS', async () => {
   const read = deferred<EmergencyReportSummary[]>();
   const delivery = deferred<number>();

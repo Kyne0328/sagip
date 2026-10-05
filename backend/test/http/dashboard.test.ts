@@ -27,7 +27,7 @@ class TextNodeDouble {
 async function renderingHarness() {
   const response = await handleSagipRequest(new Request('http://localhost/responder/app.js'), deps);
   const javascript = await response.text();
-  const functions = ['formatUrgency', 'incidentTitle', 'createText', 'addFact', 'renderRevisionHistory', 'renderDetail'].map((name) => {
+  const functions = ['formatUrgency', 'incidentTitle', 'createText', 'addFact', 'renderRevisionHistory', 'statusLabel', 'detailStateKey', 'resolutionPending', 'cancelResolutionConfirmation', 'renderDetail'].map((name) => {
     const start = javascript.indexOf('  function ' + name + '(');
     assert.ok(start >= 0, name + ' exists');
     const end = javascript.indexOf('\n  }', start);
@@ -43,8 +43,9 @@ async function renderingHarness() {
     ackStatus: new TextNodeDouble(),
     ackNote: new TextNodeDouble(), ackButton: new TextNodeDouble(),
     responseDrafts: new Map(), loadedReportId: null, acknowledgementPending: false,
+    pendingResolutions: new Set(), resolutionConfirmation: null, loadedDetailState: null,
     formatEmergencyType: String, formatRelative: String, formatDate: String,
-    formatStatus: String, statusLabel: () => 'PENDING', statusClass: String,
+    formatStatus: String, statusClass: String,
     renderLocation: () => {}, renderAckHistory: () => {},
   };
   const render = runInNewContext(functions + '\n({renderDetail, renderRevisionHistory})', context) as {

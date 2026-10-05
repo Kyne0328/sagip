@@ -22,7 +22,7 @@ async function seedResponder(
   );
 }
 
-test('incident queue uses server arrival, operational status, urgency, and stable tie breakers', async () => {
+test('newest receipt default ignores device clocks and optional urgency preserves operational priority', async () => {
   const pool = createMemoryPostgresPool();
   await applyMigrations(pool, MIGRATIONS_DIR);
   const service = new ResponderService(pool);
@@ -73,7 +73,12 @@ test('incident queue uses server arrival, operational status, urgency, and stabl
     [ids.immediateEnRoute, ids.resolvedImmediate, responderId],
   );
 
-  const ordered = await service.listIncidents();
+  const newest = await service.listIncidents();
+  assert.deepEqual(newest.map(incident => incident.reportId), [
+    ids.newerImmediatePending, ids.oldestImmediatePending, ids.immediateEnRoute,
+    ids.needAssistancePending, ids.resolvedImmediate,
+  ]);
+  const ordered = await service.listIncidents(undefined, 50, 0, 'urgency');
   for (const incident of ordered) {
     assert.equal(incident.message, null);
   }
@@ -204,4 +209,34 @@ test('canonical incident status cannot regress because a lower-stage acknowledge
   assert.equal((await service.listIncidents('ACKNOWLEDGED')).length, 0);
 
   await pool.end();
+});
+
+test('sorting and status filtering happen before the 100-row limit with stable receipt ties', async () => {
+  const pool = createMemoryPostgresPool();
+  try {
+    await applyMigrations(pool, MIGRATIONS_DIR);
+    const service = new ResponderService(pool);
+    const key = Buffer.alloc(32, 79);
+    await pool.query('INSERT INTO origin_keys VALUES ($1,$2,NOW(),NOW())', [key, Buffer.from([7, 9])]);
+    const ids: string[] = [];
+    for (let index = 0; index < 103; index++) {
+      const id = 'abcdabcd-abcd-4abc-8abc-' + String(index).padStart(12, '0');
+      ids.push(id);
+      // Old device-created reports can be the newest server arrivals.
+      await pool.query('INSERT INTO incidents(report_id,origin_key_id,created_at_ms,first_received_at) VALUES ($1,$2,$3,$4)',
+        [id, key, 99999999 - index, new Date(Date.UTC(2026, 8, 20, 0, index === 102 ? 101 : index))]);
+      await pool.query('INSERT INTO incident_revisions(report_id,revision,emergency_type,urgency,payload_digest) VALUES ($1,1,1,$2,$3)',
+        [id, index === 0 ? 1 : 2, Buffer.alloc(32, index)]);
+    }
+    const newest = await service.listIncidents('PENDING', 100);
+    assert.equal(newest.length, 100);
+    assert.deepEqual(newest.slice(0, 3).map(item => item.reportId), [ids[101], ids[102], ids[100]]);
+    assert.equal(newest.some(item => item.reportId === ids[0]), false);
+    const urgent = await service.listIncidents('PENDING', 100, 0, 'urgency');
+    assert.equal(urgent[0]?.reportId, ids[0]);
+    assert.equal(urgent.length, 100);
+    await assert.rejects(service.listIncidents(undefined, 100, 0, 'created_at'), /Invalid sort/u);
+  } finally {
+    await pool.end();
+  }
 });

@@ -5,6 +5,7 @@ import type {ConsoleProvider, IncidentSnapshot, IncidentSnapshotEntry, Responder
 import {GatewayClient} from './gatewayClient.js';
 import {IncidentMapView, type IncidentMapItem} from './incidentMap.js';
 import {syncSnapshot} from './incidentSnapshot.js';
+import {pendingResolutionReportIds} from './resolutionState.js';
 import {createWebAuthnUserVerifier, unlockOffline} from './offlineAccess.js';
 import {inspectReadiness, preparePackage, type OfflineManifest, type ReadinessResult} from './offlinePackage.js';
 import type {BrowserVerificationContext} from './receiptVerifier.js';
@@ -17,6 +18,8 @@ interface DashboardBridge {
   getState(): DashboardState;
   selectReport(reportId: string): void;
   useOfflineSnapshot(snapshot: IncidentSnapshot): void;
+  updateOfflineSnapshot(snapshot: IncidentSnapshot): void;
+  setPendingResolutions(reportIds: string[]): void;
   showOperationalMessage(message: string): void;
 }
 interface OfflineBootstrap {
@@ -71,6 +74,9 @@ let store: ConsoleStore | null = null;
 let outbox: ActionOutbox | null = null;
 let provider: ConsoleProvider | null = null;
 let activeSnapshot: IncidentSnapshot | null = null;
+let providerRefresh: Promise<unknown> | null = null;
+let outboxDrain: ReturnType<ActionOutbox['drain']> | null = null;
+let providerSuspended = false;
 let mapReadiness: ReadinessResult = {kind: 'INCOMPLETE', reason: 'NOT_CHECKED'};
 const mapView = new IncidentMapView(
   mapCanvas,
@@ -131,12 +137,75 @@ discardButton.addEventListener('click', async () => {
   }
 });
 
+let publicShellPreparation: Promise<boolean> | null = null;
+
+async function preparePublicOfflineShell(): Promise<boolean> {
+  if (!navigator.serviceWorker) return false;
+  if (!navigator.onLine) return navigator.serviceWorker.controller !== null;
+  if (publicShellPreparation) return publicShellPreparation;
+  publicShellPreparation = (async () => {
+    const lifecycle = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        (async () => {
+          // Existing public-only worker. The scope includes both console URL forms,
+          // never /v1 APIs; the worker also explicitly excludes protected responses.
+          const registration = await navigator.serviceWorker.register('/responder/service-worker.js', {scope: '/responder'});
+          const worker = registration.installing ?? registration.waiting;
+          if (worker && worker.state !== 'activated') {
+            await new Promise<void>((resolve, reject) => {
+              const check = (): void => {
+                if (worker.state === 'activated') resolve();
+                else if (worker.state === 'redundant') reject(new Error('OFFLINE_SHELL_INSTALL_FAILED'));
+              };
+              worker.addEventListener('statechange', check, {signal: lifecycle.signal});
+              check();
+            });
+          }
+          await navigator.serviceWorker.ready;
+          if (!navigator.serviceWorker.controller) {
+            await new Promise<void>(resolve => {
+              navigator.serviceWorker.addEventListener('controllerchange', () => resolve(), {once: true, signal: lifecycle.signal});
+              if (navigator.serviceWorker.controller) resolve();
+            });
+          }
+          return true;
+        })(),
+        new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), 12000); }),
+      ]);
+    } catch {
+      return false;
+    } finally {
+      lifecycle.abort();
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  })();
+  const ready = await publicShellPreparation;
+  if (!ready) publicShellPreparation = null;
+  return ready;
+}
+
+async function verifyOfflineSupport(): Promise<boolean> {
+  const [, reloadReady] = await Promise.all([mapView.prepareOfflineRuntime(), preparePublicOfflineShell()]);
+  if (mapReadiness.kind !== 'READY') return false;
+  prepareMapButton.hidden = reloadReady;
+  setText(mapStatus, reloadReady
+    ? 'Ready · Tagum map stored; offline reload ready' + (mapReadiness.persistentStorage ? '' : '; browser may evict it')
+    : 'Ready · Tagum map stored for this open page only; offline reload unavailable');
+  return reloadReady;
+}
+
 async function initialize(): Promise<void> {
   mapReadiness = await inspectReadiness().catch(() => ({kind: 'INCOMPLETE', reason: 'READINESS_UNAVAILABLE'}));
   if (mapReadiness.kind === 'READY') {
-    setText(mapStatus, mapReadiness.persistentStorage ? 'Ready · storage persisted' : 'Ready · storage may be evicted');
+    setText(mapStatus, 'Stored · checking offline runtime');
     prepareMapButton.hidden = true;
     await mapView.setManifest(mapReadiness.manifest);
+    void verifyOfflineSupport().catch(() => {
+      setText(mapStatus, 'Stored · offline runtime unavailable; reconnect and prepare again');
+      prepareMapButton.hidden = false;
+    });
   } else {
     prepareMapButton.hidden = false;
     setText(mapStatus, 'Not prepared');
@@ -174,7 +243,8 @@ async function initialize(): Promise<void> {
   outbox = new ActionOutbox(store, provider);
   activeSnapshot = await store.readSnapshot();
   if (activeSnapshot) {
-    window.SagipResponderBridge?.useOfflineSnapshot(activeSnapshot);
+    if (!navigator.onLine) window.SagipResponderBridge?.useOfflineSnapshot(activeSnapshot);
+    else window.SagipResponderBridge?.updateOfflineSnapshot(activeSnapshot);
     setText(snapshotStatus, `${activeSnapshot.entries.length} incidents saved offline`);
   }
   await updateOutboxReadiness();
@@ -188,7 +258,7 @@ async function initialize(): Promise<void> {
 
   if (navigator.onLine || provider.providerKind === 2) {
     await refreshSnapshot();
-    await outbox.drain();
+    await drainOutbox();
     await updateOutboxReadiness();
   }
   publishCurrentMapState();
@@ -211,17 +281,12 @@ async function prepareTagumMap(): Promise<unknown> {
     if (result.kind === 'READY') {
       mapReadiness = await inspectReadiness();
       if (mapReadiness.kind !== 'READY') throw new Error('MAP_READINESS_FAILED');
-      prepareMapButton.hidden = true;
-      setText(
-        mapStatus,
-        mapReadiness.persistentStorage
-          ? 'Ready · Tagum map stored persistently'
-          : 'Ready · Tagum map stored; browser may evict it',
-      );
       await mapView.setManifest(mapReadiness.manifest);
+      const reloadReady = await verifyOfflineSupport();
       publishCurrentMapState();
-      window.SagipResponderBridge?.showOperationalMessage(
-        'Tagum offline map prepared and verified. Keep this browser profile on the responder device for outage use.',
+      window.SagipResponderBridge?.showOperationalMessage(reloadReady
+        ? 'Tagum map and public offline shell prepared and verified. Protected incident access requires its separate offline readiness checks.'
+        : 'Tagum map is ready in this open page. Offline reload is unavailable; keep this page open and retry preparation while connected.',
       );
       return result;
     }
@@ -250,6 +315,42 @@ async function prepareTagumMap(): Promise<unknown> {
   }
 }
 
+function drainOutbox(): ReturnType<ActionOutbox['drain']> {
+  if (outboxDrain) return outboxDrain;
+  const pending = outbox!.drain().finally(() => {
+    if (outboxDrain === pending) outboxDrain = null;
+  });
+  outboxDrain = pending;
+  return pending;
+}
+
+function reconcileProvider(): Promise<unknown> {
+  if (providerRefresh) return providerRefresh;
+  if (!outbox || !provider || providerSuspended || document.hidden || (!navigator.onLine && provider.providerKind !== 2)) {
+    return Promise.resolve({kind: 'UNAVAILABLE'});
+  }
+  const pending = (async () => {
+    await drainOutbox();
+    await updateOutboxReadiness();
+    return refreshSnapshot();
+  })().catch(() => {
+    setText(snapshotStatus, 'Refresh incomplete · existing snapshot kept');
+  }).finally(() => {
+    if (providerRefresh === pending) providerRefresh = null;
+  });
+  providerRefresh = pending;
+  return pending;
+}
+
+window.addEventListener('online', () => { void reconcileProvider(); });
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) void reconcileProvider();
+});
+window.addEventListener('pagehide', () => { providerSuspended = true; });
+window.addEventListener('pageshow', event => {
+  if (event.persisted) { providerSuspended = false; void reconcileProvider(); }
+});
+
 async function refreshSnapshot(): Promise<unknown> {
   if (!store || !provider) return {kind: 'LOCKED'};
   const result = await syncSnapshot(
@@ -259,7 +360,7 @@ async function refreshSnapshot(): Promise<unknown> {
   );
   if (result.kind === 'COMPLETE') {
     activeSnapshot = await store.readSnapshot();
-    if (activeSnapshot) window.SagipResponderBridge?.useOfflineSnapshot(activeSnapshot);
+    if (activeSnapshot) window.SagipResponderBridge?.updateOfflineSnapshot(activeSnapshot);
     setText(snapshotStatus, `${result.count} incidents saved offline`);
   } else {
     setText(snapshotStatus, activeSnapshot
@@ -293,7 +394,7 @@ async function queueStatus(
   };
   const queued = await outbox.queue(draft);
   if (queued.kind === 'SAVED_LOCAL') {
-    const drain = await outbox.drain();
+    const drain = await drainOutbox();
     await updateOutboxReadiness();
     return {queued, drain};
   }
@@ -307,6 +408,11 @@ async function updateOutboxReadiness(): Promise<void> {
     discardButton.hidden = true;
     return;
   }
+  // Provider custody (including PREPARING) survives reload but is not canonical
+  // resolution. Keep the pending label until an authoritative status is resolved.
+  window.SagipResponderBridge?.setPendingResolutions(
+    await pendingResolutionReportIds(store),
+  );
   const pending = await store.pendingIntentCount();
   setText(outboxStatus, pending === 0
     ? 'No pending offline updates'

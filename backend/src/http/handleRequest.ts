@@ -505,7 +505,11 @@ export async function handleSagipRequest(
         if (!Number.isInteger(offset) || offset < 0 || offset > 10_000) {
           return jsonResponse(400, {error: 'INVALID_OFFSET'});
         }
-        const incidents = await deps.responderService.listIncidents(statusFilter, limit, offset);
+        const sort = parsedUrl.searchParams.get('sort') ?? 'newest_received';
+        if (sort !== 'newest_received' && sort !== 'urgency') {
+          return jsonResponse(400, {error: 'INVALID_SORT'});
+        }
+        const incidents = await deps.responderService.listIncidents(statusFilter, limit, offset, sort);
         return jsonResponse(200, incidents);
       }
 

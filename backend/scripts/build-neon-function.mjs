@@ -37,6 +37,7 @@ const routeFiles = new Map([
   ['/responder/assets/browser/incidentSnapshot.js', browserAsset('incidentSnapshot.js')],
   ['/responder/assets/browser/actionCodec.js', browserAsset('actionCodec.js')],
   ['/responder/assets/browser/actionOutbox.js', browserAsset('actionOutbox.js')],
+  ['/responder/assets/browser/resolutionState.js', browserAsset('resolutionState.js')],
   ['/responder/assets/browser/incidentMap.js', browserAsset('incidentMap.js')],
   ['/responder/assets/browser/consoleController.js', browserAsset('consoleController.js')],
   ['/responder/service-worker.js', browserAsset('serviceWorker.js')],

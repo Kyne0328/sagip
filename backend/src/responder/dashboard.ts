@@ -38,6 +38,15 @@ const DASHBOARD_HTML = `<!doctype html>
     </div>
   </header>
 
+  <dialog id="resolveDialog" aria-labelledby="resolveTitle" aria-describedby="resolveIdentity resolveExplanation">
+    <h2 id="resolveTitle">Resolve this incident?</h2>
+    <p id="resolveIdentity"></p>
+    <p id="resolveExplanation">The incident leaves the active map only after server acceptance. Its record and history are kept. An offline update stays pending until server confirmation.</p>
+    <div class="resolve-actions">
+      <button id="cancelResolveButton" type="button" class="secondary" autofocus>Cancel</button>
+      <button id="confirmResolveButton" type="button">Confirm resolved</button>
+    </div>
+  </dialog>
   <main id="mainContent" tabindex="-1">
     <h1 class="sr-only">SAGIP Responder Console</h1>
 
@@ -97,6 +106,13 @@ const DASHBOARD_HTML = `<!doctype html>
               <option value="EN_ROUTE">En route</option>
               <option value="ON_SCENE">On scene</option>
               <option value="RESOLVED">Resolved</option>
+            </select>
+          </div>
+          <div class="control-field">
+            <label for="sortOrder">Sort incidents</label>
+            <select id="sortOrder">
+              <option value="newest_received">Newest received</option>
+              <option value="urgency">Urgency first</option>
             </select>
           </div>
           <button id="refreshButton" type="button" class="secondary">Refresh</button>
@@ -169,9 +185,11 @@ const DASHBOARD_HTML = `<!doctype html>
               <p data-map-source-status role="status">Loading OpenFreeMap streets…</p>
             </div>
             <div class="map-legend" aria-label="Incident marker legend">
-              <span><b class="legend-danger" aria-hidden="true">!</b> Immediate danger</span>
-              <span><b class="legend-reported" aria-hidden="true">•</b> Reported</span>
-              <span><b class="legend-unknown" aria-hidden="true">?</b> Unspecified</span>
+              <span><b data-status="PENDING" aria-hidden="true">!</b> Pending</span>
+              <span><b data-status="ACKNOWLEDGED" aria-hidden="true">✓</b> Acknowledged</span>
+              <span><b data-status="EN_ROUTE" aria-hidden="true">→</b> En route</span>
+              <span><b data-status="ON_SCENE" aria-hidden="true">◆</b> On scene</span>
+              <span class="legend-note">Resolved incidents stay in the queue and history.</span>
             </div>
             <div id="mapFocusStatus" class="map-focus-status" hidden>
               <span>Viewing incident location</span>
@@ -1379,7 +1397,7 @@ main {
   .incident-column { grid-column:1; max-height:620px; align-self:start; }
   .detail-panel { grid-column:2; max-height:760px; }
   .map-package-status { bottom:24px; left:12px; }
-  .maplibregl-ctrl-bottom-right { right:0; bottom:28px; }
+  .maplibregl-ctrl-bottom-right { right:0; bottom:100px; }
   .maplibregl-ctrl-bottom-left { left:0; bottom:58px; }
   .map-attribution { bottom:3px; right:3px; font-size:9px; }
   .prepare-map-shortcut { top:12px; left:12px; }
@@ -1483,6 +1501,33 @@ body:has(#authPanel:not(.hidden)) main { width:100%; padding:0; }
 }
 @media (prefers-reduced-motion:reduce) { .auth-card button { transition:none; } }
 
+/* Status is encoded with both color and a symbol/text label. */
+.map-marker[data-status="PENDING"], .map-legend b[data-status="PENDING"] { background:#c62828; }
+.map-marker[data-status="ACKNOWLEDGED"], .map-legend b[data-status="ACKNOWLEDGED"] { background:#16713c; }
+.map-marker[data-status="EN_ROUTE"], .map-legend b[data-status="EN_ROUTE"] { background:#0865c3; }
+.map-marker[data-status="ON_SCENE"], .map-legend b[data-status="ON_SCENE"] { background:#783bb4; }
+.map-marker[data-resolution-pending="true"] { border-style:dashed; }
+.map-marker[data-selected="true"] { outline-color:#173f6070; }
+.map-legend { flex-wrap:wrap; gap:6px 10px; right:76px; max-width:none; }
+/* Reserve the real navigation-control lane; the growing status legend must not cover buttons. */
+@media screen and (min-width:1051px) {
+  .map-legend { right:520px; }
+  .console.map-focus-mode .map-legend { right:80px; max-width:none; }
+}
+@media screen and (min-width:1051px) and (max-width:1400px) {
+  .map-legend { right:465px; }
+}
+.map-legend .legend-note { width:100%; font-size:10px; }
+.queue-controls { display:grid; gap:8px; }
+.queue-controls label { position:static; width:auto; height:auto; clip:auto; font-size:11px; }
+.queue-controls select { min-height:36px; }
+#resolveDialog { width:min(480px,calc(100vw - 32px)); border:1px solid #a8b7c1; border-radius:12px; padding:24px; color:#18384e; }
+#resolveDialog::backdrop { background:#102f48aa; }
+#resolveDialog h2 { margin-top:0; font-size:22px; }
+#resolveIdentity { font-weight:650; overflow-wrap:anywhere; }
+#resolveExplanation { font-size:14px; line-height:1.6; }
+.resolve-actions { display:flex; justify-content:flex-end; gap:12px; margin-top:24px; }
+#confirmResolveButton { background:#783bb4; }
 @media print {
   .topbar,
   .toolbar-actions,
@@ -1511,9 +1556,17 @@ const DASHBOARD_JS = `(() => {
   let selectedReportId = null;
   let loadedReportId = null;
   let detailRequestVersion = 0;
+  let activeDetail = null;
   let acknowledgementPending = false;
   let sessionGeneration = 0;
   let refreshRequestVersion = 0;
+  let activeRefresh = null;
+  let pageSuspended = false;
+  let lastSuccessfulRefresh = null;
+  let loadedDetailState = null;
+  let selectionVersion = 0;
+  let resolutionConfirmation = null;
+  const pendingResolutions = new Set();
   const responseDrafts = new Map();
   let refreshTimer = null;
   let latestIncidents = [];
@@ -1567,6 +1620,9 @@ const DASHBOARD_JS = `(() => {
   const ackButton = document.getElementById('ackButton');
   const ackResult = document.getElementById('ackResult');
   const statusFilter = document.getElementById('statusFilter');
+  const sortOrder = document.getElementById('sortOrder');
+  const resolveDialog = document.getElementById('resolveDialog');
+  const resolveIdentity = document.getElementById('resolveIdentity');
   const lastUpdated = document.getElementById('lastUpdated');
   const sessionExpiry = document.getElementById('sessionExpiry');
   const serverError = document.getElementById('serverError');
@@ -1583,7 +1639,7 @@ const DASHBOARD_JS = `(() => {
   const readinessButton = document.getElementById('readinessButton');
   const queueControls = document.createElement('div');
   queueControls.className = 'queue-controls';
-  queueControls.append(statusFilter.parentElement);
+  queueControls.append(statusFilter.parentElement, sortOrder.parentElement);
   document.querySelector('.panel-header').append(queueControls);
   const prepareMapShortcut = document.createElement('button');
   prepareMapShortcut.type = 'button';
@@ -1676,6 +1732,10 @@ const DASHBOARD_JS = `(() => {
   function showError(message) {
     serverError.textContent = message || '';
     serverError.classList.toggle('hidden', !message);
+  }
+
+  function statusStage(status) {
+    return ({PENDING: 0, ACKNOWLEDGED: 1, EN_ROUTE: 2, ON_SCENE: 3, RESOLVED: 4})[status] || 0;
   }
 
   function statusLabel(incident) {
@@ -1800,12 +1860,12 @@ const DASHBOARD_JS = `(() => {
     consolePanel.classList.remove('hidden');
     renderSessionIdentity();
     setConnected(dataSource === 'online');
-    if (dataSource === 'online') startRefreshTimer();
-    else stopRefreshTimer();
+    startRefreshTimer();
   }
 
   function showDetailPlaceholder(title, message) {
     loadedReportId = null;
+    loadedDetailState = null;
     detailContent.classList.add('hidden');
     detailPlaceholder.classList.remove('hidden');
     detailPlaceholder.querySelector('strong').textContent = title;
@@ -1814,6 +1874,8 @@ const DASHBOARD_JS = `(() => {
   }
 
   function resetDetail() {
+    cancelResolutionConfirmation();
+    selectionVersion++;
     selectedReportId = null;
     detailRequestVersion++;
     showDetailPlaceholder('Select an incident', 'Location evidence, accepted revisions, and persisted responder actions will appear here.');
@@ -1825,6 +1887,10 @@ const DASHBOARD_JS = `(() => {
     sessionGeneration++;
     refreshRequestVersion++;
     acknowledgementPending = false;
+    activeRefresh?.controller.abort();
+    activeRefresh = null;
+    lastSuccessfulRefresh = null;
+    pendingResolutions.clear();
     currentResponder = null;
     responseDrafts.clear();
     sessionExpiresAt = null;
@@ -1846,7 +1912,7 @@ const DASHBOARD_JS = `(() => {
   }
 
   function startRefreshTimer() {
-    stopRefreshTimer();
+    if (refreshTimer !== null || pageSuspended || document.hidden || !navigator.onLine || !currentResponder) return;
     refreshTimer = window.setInterval(() => {
       void refreshIncidents(false);
     }, REFRESH_MS);
@@ -1859,19 +1925,33 @@ const DASHBOARD_JS = `(() => {
     }
   }
 
-  function publishDashboardState() {
-    const incidents = latestIncidents.map((incident) => ({
+  function resolutionPending(incident) {
+    return statusLabel(incident) !== 'RESOLVED' && (pendingResolutions.has(incident.reportId) ||
+      (incident.pendingActions || []).some(action => action.status === 'RESOLVED'));
+  }
+
+  function mapIncidents() {
+    return latestIncidents.filter(incident => statusLabel(incident) !== 'RESOLVED').map(incident => ({
       reportId: incident.reportId,
       emergencyType: incident.emergencyType,
       urgency: incident.urgency,
+      status: statusLabel(incident),
+      resolutionPending: resolutionPending(incident),
       location: incident.location || null
     }));
+  }
+
+  function publishDashboardState() {
+    const incidents = mapIncidents();
     window.dispatchEvent(new CustomEvent('sagip:incidents', {
       detail: {incidents: incidents, selectedReportId: selectedReportId}
     }));
   }
 
   function selectIncident(reportId) {
+    cancelResolutionConfirmation();
+    rememberResponseDraft();
+    selectionVersion++;
     selectedReportId = reportId;
     ackResult.textContent = '';
     ackNote.value = '';
@@ -1918,6 +1998,19 @@ const DASHBOARD_JS = `(() => {
     };
   }
 
+  function sortIncidents(incidents) {
+    const statusRank = status => ({PENDING: 0, ACKNOWLEDGED: 1, EN_ROUTE: 2, ON_SCENE: 3, RESOLVED: 4}[status] || 0);
+    const urgencyRank = value => !value || value === 'UNSPECIFIED' || value === 'IMMEDIATE_DANGER' ? 0 : 1;
+    return incidents.slice().sort((a, b) => {
+      const received = new Date(a.firstReceivedAt).getTime() - new Date(b.firstReceivedAt).getTime();
+      const id = a.reportId < b.reportId ? -1 : a.reportId > b.reportId ? 1 : 0;
+      if (sortOrder.value === 'newest_received') return -received || id;
+      return Number(statusLabel(a) === 'RESOLVED') - Number(statusLabel(b) === 'RESOLVED') ||
+        urgencyRank(a.urgency) - urgencyRank(b.urgency) ||
+        statusRank(statusLabel(a)) - statusRank(statusLabel(b)) || received || id;
+    });
+  }
+
   function renderOfflineSnapshot(snapshot) {
     refreshRequestVersion++;
     dataSource = 'offline';
@@ -1933,7 +2026,7 @@ const DASHBOARD_JS = `(() => {
     setConnected(false);
     connectionText.textContent = 'Offline snapshot';
     renderSummary(snapshot.summary);
-    renderIncidents(filtered);
+    renderIncidents(sortIncidents(filtered));
     queueScope.textContent = 'Complete offline snapshot · ' + snapshot.total + ' incidents';
     lastUpdated.textContent = 'Snapshot prepared ' + formatDate(snapshot.createdAtMs);
     if (selectedReportId && offlineDetails.has(selectedReportId)) {
@@ -1945,12 +2038,7 @@ const DASHBOARD_JS = `(() => {
 
   window.SagipResponderBridge = {
     getState: () => ({
-      incidents: latestIncidents.map((incident) => ({
-        reportId: incident.reportId,
-        emergencyType: incident.emergencyType,
-        urgency: incident.urgency,
-        location: incident.location || null
-      })),
+      incidents: mapIncidents(),
       selectedReportId: selectedReportId
     }),
     selectReport: (reportId) => {
@@ -1959,6 +2047,20 @@ const DASHBOARD_JS = `(() => {
       }
     },
     useOfflineSnapshot: (snapshot) => renderOfflineSnapshot(snapshot),
+    updateOfflineSnapshot: (snapshot) => {
+      activeOfflineSnapshot = snapshot;
+      if (dataSource === 'offline') renderOfflineSnapshot(snapshot);
+    },
+    setPendingResolutions: (reportIds) => {
+      pendingResolutions.clear();
+      reportIds.forEach(reportId => pendingResolutions.add(reportId));
+      renderIncidents(latestIncidents);
+      if (loadedReportId && loadedReportId === selectedReportId) {
+        const incident = latestIncidents.find(item => item.reportId === loadedReportId) || offlineDetails.get(loadedReportId);
+        if (incident) detailStatus.textContent = formatStatus(statusLabel(incident)) +
+          (resolutionPending(incident) ? ' · Resolution pending' : '');
+      }
+    },
     showOperationalMessage: (message) => showError(message),
     finishOfflineLogout: (message) => showLoggedOut(message || '')
   };
@@ -1990,6 +2092,7 @@ const DASHBOARD_JS = `(() => {
       incidentTitle(incident, '')
     );
     const pill = createText('span', 'status-pill ' + statusClass(status), formatStatus(status));
+    if (resolutionPending(incident)) pill.textContent += ' · Resolution pending';
     top.append(type, pill);
 
     const meta = document.createElement('div');
@@ -2025,11 +2128,29 @@ const DASHBOARD_JS = `(() => {
   function renderIncidents(incidents) {
     const focusedCard = document.activeElement && document.activeElement.closest('.incident-card');
     const focusedReportId = focusedCard && incidentList.contains(focusedCard) ? focusedCard.dataset.reportId : null;
+    const selectedSummary = incidents.find(incident => incident.reportId === selectedReportId);
+    if (resolutionConfirmation && (!selectedSummary || detailStateKey(selectedSummary) !== resolutionConfirmation.stateKey)) {
+      cancelResolutionConfirmation();
+    }
+    if (loadedReportId && (!selectedSummary || detailStateKey(selectedSummary) !== loadedDetailState)) {
+      rememberResponseDraft();
+      loadedReportId = null;
+      loadedDetailState = null;
+      activeDetail?.controller.abort();
+      activeDetail = null;
+      detailRequestVersion++;
+      ackButton.disabled = true;
+    }
     latestIncidents = incidents;
     incidentList.replaceChildren();
     emptyState.classList.toggle('hidden', incidents.length !== 0);
     incidentCount.textContent = incidents.length + (incidents.length === 1 ? ' incident loaded' : ' incidents loaded');
-    queueScope.textContent = incidents.length >= 100 ? 'Newest 100 shown' : 'All matching incidents shown';
+    queueScope.textContent = incidents.length >= 100
+      ? (sortOrder.value === 'urgency' ? 'Urgency first · first 100 shown' : 'Newest received · first 100 shown')
+      : (sortOrder.value === 'urgency' ? 'Urgency first' : 'Newest received') + ' · All matching shown';
+    incidents.forEach(incident => {
+      if (statusLabel(incident) === 'RESOLVED') pendingResolutions.delete(incident.reportId);
+    });
     incidents.forEach((incident) => incidentList.appendChild(makeIncidentCard(incident)));
     if (focusedReportId) {
       const replacement = Array.from(incidentList.children).find(card => card.dataset.reportId === focusedReportId);
@@ -2143,14 +2264,22 @@ const DASHBOARD_JS = `(() => {
     });
   }
 
+  function detailStateKey(detail) {
+    const ack = detail.latestAck || {};
+    return [detail.reportId, detail.latestRevision, statusLabel(detail), ack.ackId || '', ack.acknowledgedAt || ''].join('|');
+  }
+
   function renderDetail(detail) {
+    const stateKey = detailStateKey(detail);
+    if (resolutionConfirmation && resolutionConfirmation.stateKey !== stateKey) cancelResolutionConfirmation();
+    loadedDetailState = stateKey;
     detailPlaceholder.classList.add('hidden');
     detailContent.classList.remove('hidden');
     detailTitle.textContent = incidentTitle(detail, ' emergency');
     detailSubtitle.textContent = 'Server accepted ' + formatRelative(detail.firstReceivedAt) + ' · Revision ' + detail.latestRevision;
 
     const status = statusLabel(detail);
-    detailStatus.textContent = formatStatus(status);
+    detailStatus.textContent = formatStatus(status) + (resolutionPending(detail) ? ' · Resolution pending' : '');
     detailStatus.className = 'status-pill ' + statusClass(status);
     urgencyBanner.classList.toggle('hidden', detail.urgency !== 'IMMEDIATE_DANGER');
 
@@ -2194,18 +2323,34 @@ const DASHBOARD_JS = `(() => {
     ackButton.disabled = acknowledgementPending;
   }
 
-  async function loadDetail(reportId) {
+  function loadDetail(reportId) {
+    const summary = latestIncidents.find(incident => incident.reportId === reportId);
+    const key = [sessionGeneration, dataSource, reportId, summary ? detailStateKey(summary) : ''].join('|');
+    if (activeDetail && activeDetail.key === key) return activeDetail.promise;
+    activeDetail?.controller.abort();
+    const operation = {key, controller: new AbortController(), promise: null};
+    activeDetail = operation;
     const requestVersion = ++detailRequestVersion;
+    operation.promise = performLoadDetail(reportId, requestVersion, operation.controller.signal).finally(() => {
+      if (activeDetail === operation) activeDetail = null;
+    });
+    return operation.promise;
+  }
+
+  async function performLoadDetail(reportId, requestVersion, signal) {
     try {
-      showError('');
       const detail = dataSource === 'offline'
         ? offlineDetails.get(reportId)
-        : await api('/v1/incidents/' + encodeURIComponent(reportId));
-      if (reportId !== selectedReportId || requestVersion !== detailRequestVersion) return;
+        : await api('/v1/incidents/' + encodeURIComponent(reportId), {signal: AbortSignal.any([signal, AbortSignal.timeout(30000)])});
+      if (signal.aborted || reportId !== selectedReportId || requestVersion !== detailRequestVersion) return;
       if (!detail || detail.reportId !== reportId) throw new Error('DETAIL_NOT_AVAILABLE');
+      const summary = latestIncidents.find(incident => incident.reportId === reportId);
+      if (summary && (detail.latestRevision < summary.latestRevision || statusStage(statusLabel(detail)) < statusStage(statusLabel(summary)))) {
+        throw new Error('DETAIL_OUTDATED');
+      }
       renderDetail(detail);
     } catch (error) {
-      if (reportId !== selectedReportId || requestVersion !== detailRequestVersion) return;
+      if (signal.aborted || reportId !== selectedReportId || requestVersion !== detailRequestVersion) return;
       if (String(error && error.message) !== 'UNAUTHORIZED') {
         showDetailPlaceholder('Incident detail unavailable', 'Select the incident again or refresh to retry. Responder actions remain unavailable.');
         showError('Could not load incident detail. The server retains the incident; retry when connectivity returns.');
@@ -2213,53 +2358,77 @@ const DASHBOARD_JS = `(() => {
     }
   }
 
-  async function refreshIncidents(showLoading) {
-    if (!currentResponder) return;
+  function refreshIncidents(showLoading) {
+    if (!currentResponder || pageSuspended) return Promise.resolve();
+    const key = [sessionGeneration, statusFilter.value, sortOrder.value].join('|');
+    // A slow same-view refresh owns its request version until it settles. Interval
+    // ticks join it rather than invalidating every response on a slow connection.
+    if (activeRefresh && activeRefresh.key === key) return activeRefresh.promise;
+    activeRefresh?.controller.abort();
+    const operation = {key, controller: new AbortController(), promise: null};
+    activeRefresh = operation;
+    operation.promise = performRefresh(showLoading, operation.controller.signal).finally(() => {
+      if (activeRefresh === operation) activeRefresh = null;
+    });
+    return operation.promise;
+  }
+
+  async function performRefresh(showLoading, signal) {
     const responderAtStart = currentResponder;
     const generation = sessionGeneration;
     const requestVersion = ++refreshRequestVersion;
     const requestedFilter = statusFilter.value;
-    const isCurrentRefresh = () => currentResponder === responderAtStart && generation === sessionGeneration && requestVersion === refreshRequestVersion && statusFilter.value === requestedFilter;
-
+    const requestedSort = sortOrder.value;
+    const isCurrentRefresh = () => !signal.aborted && !pageSuspended && currentResponder === responderAtStart &&
+      generation === sessionGeneration && requestVersion === refreshRequestVersion &&
+      statusFilter.value === requestedFilter && sortOrder.value === requestedSort;
+    const timeout = window.setTimeout(() => {
+      if (isCurrentRefresh()) {
+        lastUpdated.textContent = lastSuccessfulRefresh
+          ? 'Refresh delayed · last success ' + lastSuccessfulRefresh.toLocaleTimeString()
+          : 'Waiting for server · refresh delayed';
+      }
+    }, REFRESH_MS);
     try {
-      if (showLoading) lastUpdated.textContent = 'Refreshing…';
-      showError('');
-
-      const query = requestedFilter
-        ? '?limit=100&status=' + encodeURIComponent(requestedFilter)
-        : '?limit=100';
-
+      if (showLoading) lastUpdated.textContent = lastSuccessfulRefresh
+        ? 'Refreshing · last success ' + lastSuccessfulRefresh.toLocaleTimeString() : 'Refreshing…';
+      const query = '?limit=100&sort=' + encodeURIComponent(requestedSort) +
+        (requestedFilter ? '&status=' + encodeURIComponent(requestedFilter) : '');
+      const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(30000)]);
       const results = await Promise.all([
-        api('/v1/incidents/summary'),
-        api('/v1/incidents' + query)
+        api('/v1/incidents/summary', {signal: requestSignal}),
+        api('/v1/incidents' + query, {signal: requestSignal})
       ]);
       if (!isCurrentRefresh()) return;
-      const summary = results[0];
-      const incidents = results[1];
-
       dataSource = 'online';
+      showError('');
       showConsole();
-      renderSummary(summary);
-      renderIncidents(incidents);
-      lastUpdated.textContent = 'Updated ' + new Date().toLocaleTimeString();
-
-      if (selectedReportId && incidents.some((incident) => incident.reportId === selectedReportId)) {
-        await loadDetail(selectedReportId);
+      renderSummary(results[0]);
+      renderIncidents(results[1]);
+      lastSuccessfulRefresh = new Date();
+      lastUpdated.textContent = 'Updated ' + lastSuccessfulRefresh.toLocaleTimeString() + ' · Every 10 seconds';
+      if (selectedReportId && results[1].some(incident => incident.reportId === selectedReportId)) {
+        void loadDetail(selectedReportId);
       } else if (selectedReportId) {
         resetDetail();
+        publishDashboardState();
       }
     } catch (error) {
       if (!isCurrentRefresh()) return;
       if (String(error && error.message) !== 'UNAUTHORIZED') {
         setConnected(false);
-        lastUpdated.textContent = 'Last refresh failed';
         if (activeOfflineSnapshot) {
           renderOfflineSnapshot(activeOfflineSnapshot);
           showError('Cloud refresh failed. Showing the last complete protected offline snapshot; pending responder updates remain in the durable browser outbox.');
         } else {
-          showError('The responder console could not refresh. Existing incidents remain persisted on the server; retry shortly.');
+          showError('The responder console could not refresh. Showing retained incident data; retry shortly.');
         }
+        lastUpdated.textContent = lastSuccessfulRefresh
+          ? 'Refresh failed · last success ' + lastSuccessfulRefresh.toLocaleTimeString()
+          : 'Refresh failed · no successful server update';
       }
+    } finally {
+      window.clearTimeout(timeout);
     }
   }
 
@@ -2393,11 +2562,14 @@ const DASHBOARD_JS = `(() => {
     }
   }, {signal: lifecycle.signal});
 
-  statusFilter.addEventListener('change', () => {
-    resetDetail();
+  function changeQueueView() {
+    cancelResolutionConfirmation();
+    rememberResponseDraft();
     if (dataSource === 'offline' && activeOfflineSnapshot) renderOfflineSnapshot(activeOfflineSnapshot);
     else void refreshIncidents(true);
-  }, {signal: lifecycle.signal});
+  }
+  statusFilter.addEventListener('change', changeQueueView, {signal: lifecycle.signal});
+  sortOrder.addEventListener('change', changeQueueView, {signal: lifecycle.signal});
 
   function rememberResponseDraft() {
     if (loadedReportId && loadedReportId === selectedReportId) {
@@ -2407,6 +2579,41 @@ const DASHBOARD_JS = `(() => {
   ackStatus.addEventListener('change', rememberResponseDraft, {signal: lifecycle.signal});
   ackNote.addEventListener('input', rememberResponseDraft, {signal: lifecycle.signal});
 
+  function cancelResolutionConfirmation() {
+    if (!resolutionConfirmation) return;
+    const pending = resolutionConfirmation;
+    resolutionConfirmation = null;
+    if (resolveDialog.open) resolveDialog.close();
+    pending.finish(false);
+  }
+
+  function confirmResolution(reportId, stateKey, selectionAtStart) {
+    const incident = latestIncidents.find(item => item.reportId === reportId) || offlineDetails.get(reportId);
+    const identity = incident ? incidentTitle(incident, ' incident') : 'Incident';
+    resolveIdentity.textContent = identity + ' · Report ' + reportId +
+      ' · Current status: ' + (incident ? formatStatus(statusLabel(incident)) : detailStatus.textContent);
+    return new Promise(finish => {
+      resolutionConfirmation = {reportId, stateKey, selectionAtStart, finish};
+      resolveDialog.showModal();
+      document.getElementById('cancelResolveButton').focus();
+    });
+  }
+  document.getElementById('cancelResolveButton').addEventListener('click', cancelResolutionConfirmation, {signal: lifecycle.signal});
+  resolveDialog.addEventListener('cancel', event => {
+    event.preventDefault();
+    cancelResolutionConfirmation();
+  }, {signal: lifecycle.signal});
+  resolveDialog.addEventListener('close', cancelResolutionConfirmation, {signal: lifecycle.signal});
+  document.getElementById('confirmResolveButton').addEventListener('click', () => {
+    const pending = resolutionConfirmation;
+    if (!pending) return;
+    const valid = pending.reportId === selectedReportId && pending.reportId === loadedReportId &&
+      pending.stateKey === loadedDetailState && pending.selectionAtStart === selectionVersion;
+    resolutionConfirmation = null;
+    resolveDialog.close();
+    pending.finish(valid);
+  }, {signal: lifecycle.signal});
+
   ackForm.addEventListener('submit', async (event) => {
     event.preventDefault();
     if (!selectedReportId || loadedReportId !== selectedReportId || acknowledgementPending) return;
@@ -2414,6 +2621,8 @@ const DASHBOARD_JS = `(() => {
     const reportId = loadedReportId;
     const submittedStatus = ackStatus.value;
     const submittedNote = ackNote.value;
+    const stateKey = loadedDetailState;
+    const selectionAtStart = selectionVersion;
     const isCurrentReport = () => generation === sessionGeneration && selectedReportId === reportId && loadedReportId === reportId;
     const clearSubmittedDraft = () => {
       if (generation !== sessionGeneration) return;
@@ -2425,16 +2634,38 @@ const DASHBOARD_JS = `(() => {
     };
     acknowledgementPending = true;
     ackButton.disabled = true;
-    ackResult.textContent = 'Saving…';
     try {
+      if (submittedStatus === 'RESOLVED') {
+        const summary = latestIncidents.find(incident => incident.reportId === reportId);
+        if (!summary || detailStateKey(summary) !== stateKey) {
+          ackResult.textContent = 'Incident changed. Refresh before resolving.';
+          void refreshIncidents(true);
+          return;
+        }
+        const confirmed = await confirmResolution(reportId, stateKey, selectionAtStart);
+        if (!confirmed || !isCurrentReport() || selectionAtStart !== selectionVersion || stateKey !== loadedDetailState ||
+            ackStatus.value !== submittedStatus || ackNote.value !== submittedNote) {
+          if (isCurrentReport()) ackResult.textContent = 'Resolution cancelled. No update was sent.';
+          return;
+        }
+      }
+      ackResult.textContent = 'Saving…';
       if (dataSource === 'offline' && window.SagipOfflineConsole) {
         const queuedResult = await window.SagipOfflineConsole.queueStatus(
           reportId, submittedStatus, submittedNote.trim()
         );
+        if (generation !== sessionGeneration) return;
         if (queuedResult && queuedResult.queued && queuedResult.queued.kind === 'SAVED_LOCAL') {
           const remaining = queuedResult.drain && Number(queuedResult.drain.remaining || 0);
-          if (isCurrentReport()) ackResult.textContent = remaining === 0
-            ? 'Saved locally and committed to the selected provider.'
+          if (submittedStatus === 'RESOLVED') {
+            pendingResolutions.add(reportId);
+            renderIncidents(latestIncidents);
+            if (isCurrentReport()) {
+              detailStatus.textContent = formatStatus(statusLabel(offlineDetails.get(reportId) || {})) + ' · Resolution pending';
+              ackResult.textContent = 'Resolution pending server confirmation. Saved locally; the active map pin is kept.';
+            }
+          } else if (isCurrentReport()) ackResult.textContent = remaining === 0
+            ? 'Saved locally; selected provider has custody. Server confirmation may still be pending.'
             : 'Saved on this browser. Provider delivery is still pending.';
           clearSubmittedDraft();
         } else if (isCurrentReport()) {
@@ -2449,9 +2680,21 @@ const DASHBOARD_JS = `(() => {
         headers: {'content-type': 'application/json'},
         body: JSON.stringify({status: submittedStatus, note: submittedNote.trim() || null})
       });
-      if (isCurrentReport()) ackResult.textContent = 'Saved: ' + formatStatus(ack.status);
+      if (generation !== sessionGeneration) return;
+      // Only the accepted server response changes canonical map status.
+      latestIncidents = latestIncidents.map(incident => incident.reportId === reportId && statusStage(ack.status) >= statusStage(statusLabel(incident)) ? {...incident, latestAck: ack} : incident);
+      if (ack.status === 'RESOLVED') pendingResolutions.delete(reportId);
+      renderIncidents(latestIncidents);
+      if (selectedReportId === reportId) ackResult.textContent = 'Saved: ' + formatStatus(ack.status);
       clearSubmittedDraft();
-      if (generation === sessionGeneration) await refreshIncidents(false);
+      if (generation === sessionGeneration) {
+        activeRefresh?.controller.abort();
+        activeRefresh = null;
+        detailRequestVersion++;
+        activeDetail?.controller.abort();
+        activeDetail = null;
+        await refreshIncidents(false);
+      }
     } catch (error) {
       if (isCurrentReport() && String(error && error.message) !== 'UNAUTHORIZED') {
         ackResult.textContent = 'Could not confirm the update. It may have been saved; refresh before retrying.';
@@ -2464,10 +2707,41 @@ const DASHBOARD_JS = `(() => {
     }
   }, {signal: lifecycle.signal});
 
-  window.addEventListener('pagehide', () => {
+  function resumeRefresh() {
+    if (pageSuspended || document.hidden || !navigator.onLine) return;
+    startRefreshTimer();
+    void refreshIncidents(false);
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) stopRefreshTimer();
+    else resumeRefresh();
+  }, {signal: lifecycle.signal});
+  window.addEventListener('online', resumeRefresh, {signal: lifecycle.signal});
+  window.addEventListener('offline', () => {
     stopRefreshTimer();
-    lifecycle.abort();
-  }, {once: true});
+    setConnected(false);
+    lastUpdated.textContent = lastSuccessfulRefresh
+      ? 'Offline · last success ' + lastSuccessfulRefresh.toLocaleTimeString()
+      : 'Offline · no successful server update';
+  }, {signal: lifecycle.signal});
+  window.addEventListener('pagehide', event => {
+    pageSuspended = true;
+    activeDetail?.controller.abort();
+    activeDetail = null;
+    stopRefreshTimer();
+    cancelResolutionConfirmation();
+    refreshRequestVersion++;
+    detailRequestVersion++;
+    activeRefresh?.controller.abort();
+    activeRefresh = null;
+    // bfcache keeps the page and its listeners; pageshow resumes one timer.
+    if (!event.persisted) lifecycle.abort();
+  });
+  window.addEventListener('pageshow', event => {
+    if (!event.persisted) return;
+    pageSuspended = false;
+    resumeRefresh();
+  }, {signal: lifecycle.signal});
 
   void restoreSession();
 })();`;

@@ -117,7 +117,7 @@ test('untriaged SOS remains high in pending queue and frozen snapshot without fa
       await ingestion.ingestEnvelope(buildSignedEnvelope({identity, reportId, messageId: randomUUID(),
         emergencyType: urgency === 0 ? 0 : 1, urgency}), new Date(at + received));
     }
-    const queue = await responder.listIncidents('PENDING');
+    const queue = await responder.listIncidents('PENDING', 50, 0, 'urgency');
     assert.deepEqual(queue.map(item => item.reportId), [unknownId, immediateId, routineId]);
     assert.equal(queue[0]?.emergencyType, 'UNSPECIFIED');
     assert.equal(queue[0]?.urgency, 'UNSPECIFIED');
