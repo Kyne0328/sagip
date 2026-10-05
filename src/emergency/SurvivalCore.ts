@@ -235,6 +235,8 @@ function parseSummary(value: unknown): EmergencyReportSummary {
   if (
     typeof reportId !== 'string' ||
     reportId.length === 0 ||
+    (value.providerConflict !== undefined && typeof value.providerConflict !== 'boolean') ||
+    (value.receiptReturnState !== undefined && !['DISABLED', 'WAITING_FOR_QUALIFICATION', 'READY'].includes(value.receiptReturnState as string)) ||
     typeof createdAt !== 'number' ||
     (revision !== undefined && (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 1)) ||
     (emergencyType !== 'UNSPECIFIED' && !EMERGENCY_TYPES.includes(emergencyType as never)) ||
@@ -260,6 +262,8 @@ function parseSummary(value: unknown): EmergencyReportSummary {
     location: parseLocation(location),
     ...(ack ? {responderAck: ack} : {}),
     ...(verified ? {verifiedReceipt: verified} : {}),
+    ...(value.providerConflict !== undefined ? {providerConflict: value.providerConflict as boolean} : {}),
+    ...(value.receiptReturnState !== undefined ? {receiptReturnState: value.receiptReturnState as EmergencyReportSummary['receiptReturnState']} : {}),
     ...(value.history !== undefined ? {history: parseHistory(value.history)} : {}),
     ...(value.statusSync !== undefined ? {statusSync: parseStatusSync(value.statusSync)} : {}),
     ...(value.serverStatus !== undefined ? {serverStatus: parseServerStatus(value.serverStatus)} : {}),

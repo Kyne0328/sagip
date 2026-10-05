@@ -13,6 +13,7 @@ import {
   issuerProviderId,
   verifyReceipt,
   type ReportIdentity,
+  type TimeInterval,
 } from './receiptAuthority.js';
 import type { ResponderIdentity } from './types.js';
 
@@ -200,6 +201,7 @@ export class ReceiptService {
     private readonly pool: Pick<Pool, 'connect'>,
     private readonly signer: AuthoritySigner,
     private readonly now: () => number = Date.now,
+    private readonly qualifiedInterval?: () => TimeInterval,
   ) {
     validateReceiptPublicKey(signer.publicKeyDer);
     this.key = Buffer.from(signer.publicKeyDer);
@@ -211,6 +213,13 @@ export class ReceiptService {
     if (!Number.isSafeInteger(n) || n < 0 || !Number.isSafeInteger(n + WEEK))
       throw new Error('INVALID_TIME');
     return n;
+  }
+  private verificationTime(now: number): TimeInterval {
+    const time = this.qualifiedInterval?.() ?? {earliestMs: now, latestMs: now};
+    if (!Number.isSafeInteger(time.earliestMs) || !Number.isSafeInteger(time.latestMs) ||
+        time.earliestMs < 0 || time.latestMs < time.earliestMs)
+      throw new Error('TIME_UNAVAILABLE');
+    return time;
   }
   private async lookup(
     c: PoolClient,
@@ -547,7 +556,7 @@ export class ReceiptService {
         roots: new Map([[this.keyId.toString('hex'), this.key]]),
         revokedGrants: new Set(),
         allowedScopes: new Set(),
-        trustedTime: { earliestMs: time, latestMs: time },
+        trustedTime: this.verificationTime(time),
         authorityCheckedAtMs: time,
         currentAuthorityChecked: true,
         report: original,
@@ -976,7 +985,7 @@ export class ReceiptService {
           roots: new Map([[this.keyId.toString('hex'), this.key]]),
           revokedGrants,
           allowedScopes,
-          trustedTime: {earliestMs: now, latestMs: now},
+          trustedTime: this.verificationTime(now),
           authorityCheckedAtMs: now,
           currentAuthorityChecked: true,
           report,

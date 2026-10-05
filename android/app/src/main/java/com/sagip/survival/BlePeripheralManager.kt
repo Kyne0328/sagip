@@ -25,6 +25,8 @@ class BlePeripheralManager(
   private val verificationContextProvider: () -> VerificationContext? = { null },
   private val nowProvider: () -> Long = { System.currentTimeMillis() },
   private val onDurableRelayReceived: () -> Unit = {},
+  private val objectContextProvider: ((ObjectKind, ByteArray) -> VerificationContext?)? = null,
+  private val canForwardObject: ((ObjectKind, ByteArray) -> Boolean)? = null,
 ) : BlePeripheralController {
   private val bluetoothManager: BluetoothManager? =
     context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
@@ -116,6 +118,10 @@ class BlePeripheralManager(
         return
       }
       if (characteristic.uuid == BleProtocolConstants.CHARACTERISTIC_EXTENSION_CONTROL_UUID) {
+        if (!extensionEnabled() || extensionSnapshots[device.address]?.entries?.all(::canAdvertiseEntry) == false) {
+          extensionControlResponses.remove(device.address)
+          extensionSnapshots.remove(device.address)
+        }
         sendLongReadResponse(device, requestId, offset, extensionControlResponses[device.address] ?: ByteArray(0))
         return
       }
@@ -218,7 +224,20 @@ class BlePeripheralManager(
     }
   }
 
-  private fun extensionEnabled(): Boolean = receiptQueue != null && verificationContextProvider() != null
+  private fun extensionEnabled(): Boolean = receiptQueue != null && runCatching { verificationContextProvider()?.trustedTime != null }.getOrDefault(false)
+
+  private fun canAdvertiseEntry(entry: InventoryEntry): Boolean = runCatching {
+    val stored = receiptQueue?.getObject(entry.objectId, entry.digest) ?: return false
+    forwardAllowed(entry.objectKind, stored.bytes)
+  }.getOrDefault(false)
+
+  private fun forwardAllowed(kind: ObjectKind, bytes: ByteArray): Boolean = runCatching {
+    canForwardObject?.invoke(kind, bytes) ?: run {
+      val context = verificationContextProvider() ?: return false
+      if (kind == ObjectKind.SOS) context.trustedTime != null
+      else ReceiptAuthority.verifyReceipt(bytes, context) is ReceiptVerification.Verified
+    }
+  }.getOrDefault(false)
 
   private fun ensureExtensionPeer(peerId: String, nowMs: Long): Boolean {
     val stale = extensionPeerActivity.entries
@@ -269,8 +288,8 @@ class BlePeripheralManager(
   private fun admitExtensionObject(kind: ObjectKind, bytes: ByteArray): CustodyResult {
     val queue = receiptQueue
       ?: return CustodyResult(CustodyResultKind.PENDING_VERIFICATION, reason = "RECEIPT_EXTENSION_DISABLED")
-    val context = verificationContextProvider()
-      ?: return CustodyResult(CustodyResultKind.PENDING_VERIFICATION, reason = "VERIFICATION_CONTEXT_UNAVAILABLE")
+    val context = if (objectContextProvider != null) objectContextProvider.invoke(kind, bytes) else verificationContextProvider()
+    if (context == null) return CustodyResult(CustodyResultKind.PENDING_VERIFICATION, reason = "VERIFICATION_CONTEXT_UNAVAILABLE")
     val result = queue.admitObject(bytes, kind, context)
     if (result.kind == CustodyResultKind.COMMITTED || result.kind == CustodyResultKind.DUPLICATE) {
       runCatching { onDurableRelayReceived() }
@@ -339,7 +358,7 @@ class BlePeripheralManager(
     }
     if (request.snapshotId == null) {
       if (snapshot == null) {
-        val entries = requireNotNull(receiptQueue).contactInventory(BleReceiptExchangeCodec.MAX_INVENTORY_ENTRIES)
+        val entries = requireNotNull(receiptQueue).contactInventory(BleReceiptExchangeCodec.MAX_INVENTORY_ENTRIES, ::forwardAllowed)
         snapshot = ExtensionSnapshot(UUID.randomUUID().toString(), entries.map { it.copy(digest = it.digest.copyOf()) }, now)
         extensionSnapshots[peerId] = snapshot
       }
@@ -347,6 +366,7 @@ class BlePeripheralManager(
       require(snapshot != null && snapshot.snapshotId == request.snapshotId) { "unknown inventory snapshot" }
     }
     val active = requireNotNull(snapshot)
+    require(active.entries.all(::canAdvertiseEntry)) { "inventory authority changed" }
     active.lastActivityAtMs = now
     val from = request.pageIndex * BleReceiptExchangeCodec.MAX_INVENTORY_PAGE_ENTRIES
     if (active.entries.isEmpty()) {

@@ -12,6 +12,7 @@ import {parseReportStatusAccessProof, validReportStatusCursor} from '../responde
 import type {ResponderIdentity, ResponderStatus} from '../responder/types.js';
 import type {IncidentSnapshotService} from '../responder/incidentSnapshot.js';
 import type {ActionCommitResult, ActionIntent, ReceiptService} from '../responder/receiptService.js';
+import type {GatewayReceiptFeed} from '../responder/gatewayReceiptFeed.js';
 import type {GatewayGrantRequest, GrantProvisioningService, TimeChallenge} from '../responder/grantProvisioning.js';
 import {responderDashboardResponse} from '../responder/dashboard.js';
 import {
@@ -24,6 +25,7 @@ export interface SagipServerDependencies {
   ingestEnvelope(bytes: Buffer): Promise<ServerReceipt>;
   responderService?: ResponderService;
   receiptService?: ReceiptService;
+  gatewayReceiptFeed?: GatewayReceiptFeed;
   authorityService?: GrantProvisioningService;
   incidentSnapshotService?: IncidentSnapshotService;
   rateLimiter?: RateLimiter;
@@ -45,6 +47,7 @@ const INCIDENT_ACK_RE = new RegExp(`^/v1/incidents/(${UUID_SEGMENT})/ack$`, 'u')
 const INCIDENT_DETAIL_RE = new RegExp(`^/v1/incidents/(${UUID_SEGMENT})$`, 'u');
 const RESPONDER_SESSION_PATH = '/v1/responder/session';
 const RECEIPT_IMPORT_PATH = '/v2/responder/receipts/import';
+const GATEWAY_RECEIPT_PAGE_RE = new RegExp(`^/v2/responder/reports/(${UUID_SEGMENT})/receipts$`, 'u');
 const RESPONDER_ACTIONS_PATH = '/v2/responder/actions';
 const RESPONDER_ACTION_RE = new RegExp(`^/v2/responder/actions/(${UUID_SEGMENT})$`, 'u');
 const RESPONDER_ACTION_RECEIPT_RE = new RegExp(`^/v2/responder/actions/(${UUID_SEGMENT})/receipt$`, 'u');
@@ -183,6 +186,24 @@ export async function handleSagipRequest(
         const challenge = parseTimeChallenge(await readBoundedBody(request, 4096));
         return binaryResponse(200, await deps.authorityService.issueAuthorityTimeProof(challenge, responder));
       }
+    }
+    const gatewayReceiptMatch = GATEWAY_RECEIPT_PAGE_RE.exec(pathname);
+    if (gatewayReceiptMatch) {
+      if (method !== 'GET') {
+        discardRequestBody(context);
+        return jsonResponse(405, {error: 'METHOD_NOT_ALLOWED'}, {allow: 'GET'});
+      }
+      if (!deps.responderService || !deps.gatewayReceiptFeed)
+        return jsonResponse(501, {error: 'NOT_IMPLEMENTED'});
+      const responder = await extractAndAuthResponder(request, deps.responderService);
+      if (!responder) return jsonResponse(401, {error: 'UNAUTHORIZED'});
+      const cursor = parsedUrl.searchParams.get('cursor');
+      if (parsedUrl.searchParams.size > (cursor === null ? 0 : 1) ||
+          (cursor !== null && !/^[0-9a-f]{64}$/u.test(cursor)))
+        return jsonResponse(400, {error: 'INVALID_CURSOR'});
+      return jsonResponse(200, await deps.gatewayReceiptFeed.list(
+        (gatewayReceiptMatch[1] as string).toLowerCase(), cursor, responder,
+      ));
     }
     const receiptChallengeMatch = RECEIPT_ACCESS_CHALLENGE_RE.exec(pathname);
     if (receiptChallengeMatch) {
@@ -621,6 +642,7 @@ function isRateLimitedEndpointPath(pathname: string): boolean {
     pathname === '/v1/envelopes' ||
     pathname === RESPONDER_SESSION_PATH ||
     pathname === RECEIPT_IMPORT_PATH ||
+    pathname.startsWith('/v2/responder/reports/') ||
     pathname.startsWith('/v2/responder/actions') ||
     pathname.startsWith('/v2/responder/snapshots') ||
     pathname.startsWith('/v2/reports/') ||

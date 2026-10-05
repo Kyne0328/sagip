@@ -88,6 +88,8 @@ class VictimStatusStore(private val database: SagipDatabase) {
       VictimSyncState(if(c.isNull(0)) null else c.getLong(0),if(c.isNull(1)) null else c.getLong(1),c.getString(2),c.isNull(1) || !c.isNull(3))
   }
 
+  fun providerConflict(reportId: String, revision: Int): Boolean = providerConflict(database.readableDatabase, reportId, revision)
+
   fun serverStatus(reportId: String): VictimServerStatus? = serverStatus(database.readableDatabase, reportId)
 
   fun history(reportId: String): List<VictimHistoryEvent> {
@@ -136,25 +138,38 @@ class VictimStatusStore(private val database: SagipDatabase) {
     ).use { c -> if(!c.moveToFirst()) null else VictimServerStatus(c.getString(0),c.getLong(1),
       if(c.isNull(2)) null else c.getString(2),if(c.isNull(3)) null else c.getString(3)) }
 
-    internal fun isResolved(db: SQLiteDatabase, reportId: String, revision: Int): Boolean {
-      // Legacy server status is explicitly report-wide; only this origin-authenticated store may close it.
-      if (serverStatus(db, reportId)?.status == "RESOLVED") return true
-      return db.rawQuery("""
+    private fun currentProviderStatuses(db: SQLiteDatabase, reportId: String, revision: Int): List<Int> =
+      db.rawQuery("""
         SELECT p.event_id,p.sequence,r.object_bytes,p.issuer_provider_id
         FROM receipt_projections p JOIN receipt_records r ON r.event_id=p.event_id
         WHERE p.report_id=? AND p.revision=?
           AND p.verification_kind IN ('VERIFIED_CURRENT','VERIFIED_OFFLINE_AUTHORITY')
           AND r.verification_kind IN ('VERIFIED_CURRENT','VERIFIED_OFFLINE_AUTHORITY')
-      """.trimIndent(),arrayOf(reportId,revision.toString())).use { c ->
-        var resolved = false
-        while(c.moveToNext()) {
-          val f = runCatching { ReceiptV2Codec.decode(c.getBlob(2)).fields as? ReceiptFields.Responder }.getOrNull() ?: continue
-          if(f.reportId == reportId && f.revision == revision && f.status == 4 &&
-            f.actionId == c.getString(0) && f.sequence == c.getLong(1) &&
-            java.security.MessageDigest.isEqual(f.issuerProviderId,c.getBlob(3))) resolved = true
+      """.trimIndent(), arrayOf(reportId, revision.toString())).use { c ->
+        if (!ReceiptRepository.hasConsistentReportOrigin(db, reportId)) return emptyList()
+        buildList {
+          while (c.moveToNext()) {
+            val f = runCatching { ReceiptV2Codec.decode(c.getBlob(2)).fields as? ReceiptFields.Responder }.getOrNull() ?: continue
+            if (f.reportId == reportId && f.revision == revision && f.actionId == c.getString(0) &&
+              f.sequence == c.getLong(1) && java.security.MessageDigest.isEqual(f.issuerProviderId, c.getBlob(3))) add(f.status)
+          }
         }
-        resolved
       }
+
+    internal fun providerConflict(db: SQLiteDatabase, reportId: String, revision: Int): Boolean {
+      if (ReceiptRepository.hasConflictingReportOrigins(db, reportId)) return true
+      val statuses = currentProviderStatuses(db, reportId, revision).toMutableList()
+      serverStatus(db, reportId)?.let { server ->
+        statuses += if (server.status == "RESOLVED") 4 else 1
+      }
+      return statuses.any { it == 4 } && statuses.any { it in 1..3 }
+    }
+
+    internal fun isResolved(db: SQLiteDatabase, reportId: String, revision: Int): Boolean {
+      // Independent provider streams have no shared ordering or implicit supersession.
+      if (providerConflict(db, reportId, revision)) return false
+      if (serverStatus(db, reportId)?.status == "RESOLVED") return true
+      return currentProviderStatuses(db, reportId, revision).any { it == 4 }
     }
     internal fun statusName(status: Int) = when(status) {
       1 -> "ACKNOWLEDGED"; 2 -> "EN_ROUTE"; 3 -> "ON_SCENE"; 4 -> "RESOLVED"; else -> "UNKNOWN"

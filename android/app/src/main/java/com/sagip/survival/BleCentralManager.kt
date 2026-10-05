@@ -28,6 +28,8 @@ class BleCentralManager(
   private val repository: EmergencyRepository,
   private val receiptQueue: ReceiptQueue? = null,
   private val nowProvider: () -> Long = { System.currentTimeMillis() },
+  private val canForwardObject: (ObjectKind, ByteArray) -> Boolean = { kind, _ -> kind == ObjectKind.SOS },
+  private val custodyTimeProvider: () -> Long? = { null },
 ) : BleCentralController {
   private data class ActiveBleTransfer(
     val work: OutboundEnvelopeWork,
@@ -401,6 +403,8 @@ class BleCentralManager(
           gatt.device.address,
           now,
           if (fastTypedOffer) BleRelayLatencyPolicy.DIRECT_TYPED_OFFER_THRESHOLD else BleReceiptExchangeCodec.MAX_CONTACT_TRANSFERS,
+          eligible = canForwardObject,
+          custodyTimeMs = custodyTimeProvider() ?: now,
         )
       } catch (_: Exception) {
         gatt.disconnect()
@@ -409,6 +413,10 @@ class BleCentralManager(
       val remote = peerInventory.associateBy { it.objectKind to it.objectId }
       val remaining = mutableListOf<TransferLease>()
       for (lease in leased) {
+        if (!runCatching { canForwardObject(lease.objectKind, lease.bytes) }.getOrDefault(false)) {
+          runCatching { queue.releaseTransferLease(lease.leaseId, nowProvider()) }
+          continue
+        }
         val held = remote[lease.objectKind to lease.objectId]
         if (held != null && MessageDigest.isEqual(held.digest, lease.digest)) {
           runCatching { queue.releaseTransferLease(lease.leaseId, nowProvider()) }
@@ -431,6 +439,12 @@ class BleCentralManager(
       val lease = typedLeases.getOrNull(typedLeaseIndex) ?: run {
         extensionState = ExtensionState.NONE
         continueLegacyAfterReturnAck(gatt)
+        return
+      }
+      if (!runCatching { canForwardObject(lease.objectKind, lease.bytes) }.getOrDefault(false)) {
+        releaseTypedLease(lease)
+        typedLeaseIndex++
+        sendTypedOffer(gatt)
         return
       }
       val entry = try {
@@ -529,6 +543,12 @@ class BleCentralManager(
     }
 
     private fun sendTypedNextChunk(gatt: BluetoothGatt) {
+      val lease = typedLeases.getOrNull(typedLeaseIndex) ?: run { gatt.disconnect(); return }
+      if (!runCatching { canForwardObject(lease.objectKind, lease.bytes) }.getOrDefault(false)) {
+        releaseTypedLease(lease)
+        gatt.disconnect()
+        return
+      }
       val characteristic = extensionChunkChar ?: run { gatt.disconnect(); return }
       val bytes = typedChunks.getOrNull(typedChunkIndex) ?: run { readTypedCustody(gatt); return }
       characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE

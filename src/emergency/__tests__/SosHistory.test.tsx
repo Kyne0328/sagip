@@ -52,6 +52,23 @@ test('failed check keeps last successful check and warns cached status can be st
   expect(text).toContain('Connect to the internet to check for new responder updates.');
 });
 
+test('qualified relay capability names the contact requirement without promising cloud-root return', async () => {
+  await act(async () => {renderer = ReactTestRenderer.create(<StatusFreshness report={{...base, receiptReturnState: 'READY'}} />);});
+  const text = JSON.stringify(renderer.toJSON());
+  expect(text).toContain('Signed updates from approved offline responders can arrive through a compatible nearby relay.');
+  expect(text).toContain('no new update can arrive without a connection path.');
+  expect(text).toContain('Connect to the internet to check cloud responder status.');
+  expect(text).not.toContain('not enabled in this build');
+});
+
+test('unqualified relay state keeps saved history visible and makes new verification pending', async () => {
+  await act(async () => {renderer = ReactTestRenderer.create(<StatusFreshness report={{...base, receiptReturnState: 'WAITING_FOR_QUALIFICATION'}} />);});
+  const text = JSON.stringify(renderer.toJSON());
+  expect(text).toContain('Saved status remains available offline.');
+  expect(text).toContain('New relay updates cannot be verified yet.');
+  expect(text).not.toContain('can arrive through a compatible nearby relay');
+});
+
 test('an absent server check is never inferred from a local history read', async () => {
   await act(async () => {renderer = ReactTestRenderer.create(<StatusFreshness report={base} syncing />);});
   const text = JSON.stringify(renderer.toJSON());
@@ -111,6 +128,21 @@ test('large timelines render bounded pages while every saved event remains reach
   expect(JSON.stringify(renderer.toJSON())).toContain('history-note-0-END');
   expect(renderer.root.findAllByProps({accessibilityLabel: 'Show more history events for saved-1'})).toHaveLength(0);
   expect(report.history).toHaveLength(130);
+});
+
+test('conflicting current providers preserve the active SOS and show uncertainty offline', async () => {
+  const conflict: EmergencyReportSummary = {...base, providerConflict: true,
+    serverStatus: {...serverStatus, status: 'RESOLVED'},
+    verifiedReceipt: {eventId: 'receipt', revision: 2, verificationKind: 'VERIFIED_OFFLINE_AUTHORITY',
+      authorityCheckedAt: 2000, status: 'RESOLVED', callsign: 'UNIT-1', note: '',
+      requesterDeliveryState: 'UNKNOWN'}};
+  expect(reportIsResolved(conflict)).toBe(false);
+  expect(reportNeedsStatusSync(conflict)).toBe(true);
+  expect(reportIsResolved({...conflict, providerConflict: false})).toBe(true);
+  await act(async () => {renderer = ReactTestRenderer.create(<SosHistory reports={[conflict]} />);});
+  await act(async () => renderer.root.findByProps({accessibilityLabel: 'SOS history for saved-1'}).props.onPress());
+  expect(JSON.stringify(renderer.toJSON())).toContain('Responder updates disagree about whether this SOS is resolved.');
+  expect(JSON.stringify(renderer.toJSON())).toContain('Your SOS stays active while the conflict is unresolved.');
 });
 
 test('empty history has an offline-readable explanation', async () => {

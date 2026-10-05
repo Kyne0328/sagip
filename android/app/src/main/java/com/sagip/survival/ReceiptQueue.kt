@@ -24,6 +24,8 @@ data class CustodyResult(
   val objectId: String? = null,
   val digest: ByteArray? = null,
   val reason: String? = null,
+  // Local projection acceptance is independent from a promise to forward.
+  val localApplication: ReceiptApplication? = null,
 )
 
 data class StoredObject(
@@ -175,32 +177,6 @@ class ReceiptQueue(
       )
     }
 
-    if (kind != ObjectKind.SOS) {
-      when (val application = ReceiptRepository(database).applyToReport(bytes, context)) {
-        ReceiptApplication.APPLIED,
-        ReceiptApplication.HISTORICAL,
-        ReceiptApplication.DUPLICATE -> Unit
-        ReceiptApplication.PENDING_AUTHORITY -> {
-          quarantine(db, candidate, "RECEIPT_APPLICATION_PENDING")
-          return CustodyResult(
-            CustodyResultKind.PENDING_VERIFICATION,
-            candidate.objectId,
-            candidate.digest.copyOf(),
-            "RECEIPT_APPLICATION_PENDING",
-          )
-        }
-        ReceiptApplication.REJECTED -> {
-          quarantine(db, candidate, "RECEIPT_APPLICATION_REJECTED")
-          return CustodyResult(
-            CustodyResultKind.REJECTED,
-            candidate.objectId,
-            candidate.digest.copyOf(),
-            "RECEIPT_APPLICATION_REJECTED",
-          )
-        }
-      }
-    }
-
     val localDeadline = safeAdd(trustedTime.earliestMs, ReceiptQueueLimits.RELAY_RETENTION_MS)
     val custodyExpiresAt = candidate.signedExpiresAtMs?.let { minOf(it, localDeadline) } ?: localDeadline
     val protectedUntil = safeAdd(
@@ -210,6 +186,7 @@ class ReceiptQueue(
     val activeBytes = activeAccountedBytes(candidate)
     val tombstoneBytes = tombstoneAccountedBytes(candidate)
 
+    var localApplication: ReceiptApplication? = null
     db.beginTransaction()
     try {
       if (!timeStillAcceptableLocked(db, trustedTime)) {
@@ -247,6 +224,36 @@ class ReceiptQueue(
         IdentityState.ABSENT -> Unit
       }
 
+    if (kind != ObjectKind.SOS) {
+      when (ReceiptRepository(database).applyToReport(bytes, context).also { localApplication = it }) {
+        ReceiptApplication.APPLIED,
+        ReceiptApplication.HISTORICAL,
+        ReceiptApplication.DUPLICATE -> Unit
+        ReceiptApplication.PENDING_AUTHORITY -> {
+          insertQuarantineLocked(db, candidate, "RECEIPT_APPLICATION_PENDING")
+          trimQuarantineLocked(db)
+          db.setTransactionSuccessful()
+          return CustodyResult(
+            CustodyResultKind.PENDING_VERIFICATION,
+            candidate.objectId,
+            candidate.digest.copyOf(),
+            "RECEIPT_APPLICATION_PENDING",
+          )
+        }
+        ReceiptApplication.REJECTED -> {
+          insertQuarantineLocked(db, candidate, "RECEIPT_APPLICATION_REJECTED")
+          trimQuarantineLocked(db)
+          db.setTransactionSuccessful()
+          return CustodyResult(
+            CustodyResultKind.REJECTED,
+            candidate.objectId,
+            candidate.digest.copyOf(),
+            "RECEIPT_APPLICATION_REJECTED",
+          )
+        }
+      }
+    }
+
       if (!hasActiveCapacityLocked(db, activeBytes) || !hasTombstoneCapacityLocked(db, tombstoneBytes)) {
         db.setTransactionSuccessful()
         return CustodyResult(
@@ -254,10 +261,14 @@ class ReceiptQueue(
           candidate.objectId,
           candidate.digest.copyOf(),
           "CUSTODY_CAPACITY_FULL",
+          localApplication = localApplication,
         )
       }
 
       if (candidate.kind == ObjectKind.SOS) {
+        // Legacy upload dedupe may suppress equal payloads across distinct signed revisions.
+        // Typed custody still binds every exact verified envelope identity atomically.
+        ReceiptRepository.persistReportIdentity(db, candidate.bytes, trustedTime.earliestMs)
         EmergencyRepository(database).persistVerifiedInboundEnvelope(
           db,
           candidate.bytes,
@@ -308,6 +319,7 @@ class ReceiptQueue(
       CustodyResultKind.COMMITTED,
       candidate.objectId,
       candidate.digest.copyOf(),
+      localApplication = localApplication,
     )
   }
 
@@ -453,24 +465,30 @@ class ReceiptQueue(
     return InventoryPage(pageEntries, nextCursor)
   }
 
-  fun contactInventory(limit: Int = MAX_INVENTORY_ENTRIES): List<InventoryEntry> {
+  fun contactInventory(limit: Int = MAX_INVENTORY_ENTRIES,
+    eligible: ((ObjectKind, ByteArray) -> Boolean)? = null,
+  ): List<InventoryEntry> {
     require(limit in 1..MAX_INVENTORY_ENTRIES) { "limit must be between 1 and $MAX_INVENTORY_ENTRIES" }
+    val after = if (eligible != null) scanCursor("inventory_row_id") else 0L
+    var scanned = after
     data class Candidate(val scheduling: SchedulingCandidate, val entry: InventoryEntry)
     val candidates = database.readableDatabase.rawQuery(
       """
         SELECT object_kind,object_id,object_digest,object_bytes,report_id,revision,
-               custody_accepted_at_ms,signed_expires_at_ms
+               custody_accepted_at_ms,signed_expires_at_ms,rowid
         FROM relay_objects
         WHERE transport_state=?
-        ORDER BY custody_accepted_at_ms ASC,object_kind ASC,object_id ASC
+        ORDER BY CASE WHEN rowid>? THEN 0 ELSE 1 END,rowid
         LIMIT ?
       """.trimIndent(),
-      arrayOf(TRANSPORT_READY, limits.activeObjects.toString()),
+      arrayOf(TRANSPORT_READY, after.toString(), minOf(limits.activeObjects, if (eligible == null) limits.activeObjects else MAX_TRUST_SCAN).toString()),
     ).use { cursor ->
       buildList {
         while (cursor.moveToNext()) {
+          scanned = cursor.getLong(8)
           val kind = objectKind(cursor.getInt(0))
           val bytes = cursor.getBlob(3).copyOf()
+          if (eligible != null && !runCatching { eligible(kind, bytes) }.getOrDefault(false)) continue
           add(
             Candidate(
               scheduling = SchedulingCandidate(
@@ -500,6 +518,7 @@ class ReceiptQueue(
         }
       }
     }
+    if (eligible != null) saveScanCursor("inventory_row_id", scanned)
     val byIdentity = candidates.associateBy { it.scheduling.objectKind to it.scheduling.objectId }
     return ReceiptTransferScheduler().order(candidates.map { it.scheduling })
       .take(limit)
@@ -556,6 +575,8 @@ class ReceiptQueue(
     peerId: String,
     nowMs: Long,
     maxObjects: Int = ReceiptTransferScheduler.MAX_CONTACT_OBJECTS,
+    eligible: ((ObjectKind, ByteArray) -> Boolean)? = null,
+    custodyTimeMs: Long = nowMs,
   ): List<TransferLease> {
     require(peerId.isNotBlank()) { "peerId must not be blank" }
     require(nowMs >= 0L) { "nowMs must not be negative" }
@@ -575,10 +596,12 @@ class ReceiptQueue(
         db.setTransactionSuccessful()
         return emptyList()
       }
+      val after = if (eligible != null) scanCursor("lease_row_id") else 0L
+      var scanned = after
       val stored = db.rawQuery(
         """
           SELECT ro.object_kind,ro.object_id,ro.object_digest,ro.object_bytes,ro.report_id,
-                 ro.custody_accepted_at_ms,COALESCE(ps.attempt_count,0)
+                 ro.custody_accepted_at_ms,COALESCE(ps.attempt_count,0),ro.rowid
           FROM relay_objects ro
           LEFT JOIN relay_peer_object_state ps
             ON ps.peer_id=? AND ps.object_kind=ro.object_kind AND ps.object_id=ro.object_id
@@ -592,15 +615,18 @@ class ReceiptQueue(
                 AND active.object_id=ro.object_id
                 AND active.state='ACTIVE'
             )
-          ORDER BY ro.custody_accepted_at_ms ASC,ro.object_kind ASC,ro.object_id ASC
+          ORDER BY CASE WHEN ro.rowid>? THEN 0 ELSE 1 END,ro.rowid
           LIMIT ?
         """.trimIndent(),
-        arrayOf(peerId, TRANSPORT_READY, nowMs.toString(), nowMs.toString(), limits.activeObjects.toString()),
+        arrayOf(peerId, TRANSPORT_READY, custodyTimeMs.toString(), nowMs.toString(), after.toString(),
+          minOf(limits.activeObjects, if (eligible == null) limits.activeObjects else MAX_TRUST_SCAN).toString()),
       ).use { cursorResult ->
         buildList {
           while (cursorResult.moveToNext()) {
+            scanned = cursorResult.getLong(7)
             val kind = objectKind(cursorResult.getInt(0))
             val bytes = cursorResult.getBlob(3).copyOf()
+            if (eligible != null && !runCatching { eligible(kind, bytes) }.getOrDefault(false)) continue
             add(
               LeaseCandidate(
                 scheduling = SchedulingCandidate(
@@ -618,6 +644,7 @@ class ReceiptQueue(
           }
         }
       }
+      if (eligible != null) saveScanCursor("lease_row_id", scanned)
       val selected = ReceiptTransferScheduler().select(
         stored.map { it.scheduling },
         minOf(maxObjects, contactAllowance),
@@ -1075,6 +1102,17 @@ class ReceiptQueue(
     return tombstone != null && MessageDigest.isEqual(tombstone, digest)
   }
 
+  private fun scanCursor(column: String): Long = database.readableDatabase.rawQuery(
+    "SELECT " + column + " FROM receipt_return_replay_state WHERE singleton=1", null,
+  ).use { if (it.moveToFirst()) it.getLong(0) else 0L }
+
+  private fun saveScanCursor(column: String, rowId: Long) {
+    database.writableDatabase.execSQL(
+      "INSERT INTO receipt_return_replay_state(singleton," + column + ") VALUES(1,?) " +
+        "ON CONFLICT(singleton) DO UPDATE SET " + column + "=excluded." + column, arrayOf(rowId),
+    )
+  }
+
   private enum class IdentityState { ABSENT, DUPLICATE, CONFLICT }
 
   private fun identityStateLocked(db: SQLiteDatabase, candidate: Candidate): IdentityState {
@@ -1288,6 +1326,7 @@ class ReceiptQueue(
     if (value > Long.MAX_VALUE - delta) Long.MAX_VALUE else value + delta
 
   companion object {
+    private const val MAX_TRUST_SCAN = 32
     private const val SHA256_BYTES = 32
     private const val MAX_PROTOCOL_TIME = 9_007_199_254_740_991L
     private const val MAX_INVENTORY_ENTRIES = 32

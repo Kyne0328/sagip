@@ -148,7 +148,9 @@ export default function App() {
   const latestVerifiedReceipt = latest?.verifiedReceipt;
   const latestVerifiedEventId = latestVerifiedReceipt?.eventId;
   const latestVerifiedHeadline = latestVerifiedReceipt
-    ? verifiedResponderHeadline(latestVerifiedReceipt, latest?.revision ?? 1)
+    ? latest?.providerConflict
+      ? 'Responder updates disagree about whether this SOS is resolved. Your SOS stays active.'
+      : verifiedResponderHeadline(latestVerifiedReceipt, latest?.revision ?? 1)
     : null;
 
   useEffect(() => {
@@ -252,6 +254,7 @@ export default function App() {
         <>
           <Text style={styles.savedText}>Saved on this device</Text>
           <StatusFreshness report={latest} syncing={syncing} />
+          {latest.providerConflict ? <Text style={styles.pendingText}>Responder updates disagree about whether this SOS is resolved. Your SOS stays active while the conflict is unresolved.</Text> : null}
           {!hasActiveSos ? <Text style={styles.statusDetailText}>This SOS is resolved. You can view its history or send a new SOS. Optional details are closed.</Text> : null}
           {latest.serverStatus ? <AuthenticatedServerStatus status={latest.serverStatus} /> : null}
           {latest.verifiedReceipt ? (

@@ -283,6 +283,12 @@ class SagipSurvivalCoreModule(
           status.note?.let { putString("note",it) } ?: putNull("note")
         })
       }
+      putString("receiptReturnState", when {
+        runtime.receiptReturn == null -> "DISABLED"
+        runtime.receiptReturn?.baseContext() == null -> "WAITING_FOR_QUALIFICATION"
+        else -> "READY"
+      })
+      putBoolean("providerConflict", victimStatusStore.providerConflict(summary.reportId, summary.latestRevision))
       putString("reportId", summary.reportId)
       putDouble("createdAt", summary.createdAt.toDouble())
       putString("emergencyType", summary.emergencyType.name)

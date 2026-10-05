@@ -89,6 +89,32 @@ describe('verified receipt bridge', () => {
     );
   });
 
+  it('preserves native provider conflict without inventing it for legacy summaries', async () => {
+    nativeCore.listEmergencyReports.mockResolvedValue([{...baseSummary, providerConflict: true}]);
+    const [result] = await SurvivalCore.listEmergencyReports();
+    expect(result.providerConflict).toBe(true);
+  });
+
+  it.each(['false', 0, null, {}])('rejects malformed provider conflict %p', async providerConflict => {
+    nativeCore.listEmergencyReports.mockResolvedValue([{...baseSummary, providerConflict}]);
+    await expect(SurvivalCore.listEmergencyReports()).rejects.toThrow(
+      'Invalid emergency report response from native core',
+    );
+  });
+
+  it.each(['DISABLED', 'WAITING_FOR_QUALIFICATION', 'READY'])('preserves receipt return state %s', async receiptReturnState => {
+    nativeCore.listEmergencyReports.mockResolvedValue([{...baseSummary, receiptReturnState}]);
+    const [result] = await SurvivalCore.listEmergencyReports();
+    expect(result.receiptReturnState).toBe(receiptReturnState);
+  });
+
+  it.each(['DELIVERED', true, null])('rejects unknown receipt return state %p', async receiptReturnState => {
+    nativeCore.listEmergencyReports.mockResolvedValue([{...baseSummary, receiptReturnState}]);
+    await expect(SurvivalCore.listEmergencyReports()).rejects.toThrow(
+      'Invalid emergency report response from native core',
+    );
+  });
+
   it('keeps absent legacy verified evidence absent', async () => {
     nativeCore.createEmergencyReport.mockResolvedValue(baseSummary);
 

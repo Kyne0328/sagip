@@ -25,6 +25,42 @@ class SurvivalCoreRuntime private constructor(context: Context) {
   val receiptQueue = ReceiptQueue(database)
   private val deliveryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private val deliveryMutex = Mutex()
+  @Volatile private var returnDeployment: TrustedReceiptReturnConfig? = null
+  @Volatile var receiptReturn: TrustedReceiptReturnService? = null
+    private set
+  private fun receiptReturnClock(): MonotonicClock {
+    val verifier = requireNotNull(returnDeployment).verifierId
+    val boot = android.provider.Settings.Global.getInt(appContext.contentResolver,
+      android.provider.Settings.Global.BOOT_COUNT, -1)
+    check(boot >= 0) { "BOOT_ID_UNAVAILABLE" }
+    return MonotonicClock(java.util.UUID.nameUUIDFromBytes(verifier +
+      boot.toString().toByteArray(Charsets.US_ASCII)).toString(), android.os.SystemClock.elapsedRealtime())
+  }
+  val receiptReturnWorker = ReceiptReturnWorker(database, { receiptReturn },
+    { returnDeployment?.feed }, ::receiptReturnClock)
+
+  /** Native operator integration only. Reapply approved configuration after restart; no persistent credentials. */
+  @Synchronized fun configureReceiptReturn(config: TrustedReceiptReturnConfig) {
+    val bound = config.copy(verifierId=config.verifierId.copyOf(),
+      roots=config.roots.mapValues { it.value.copyOf() }, scopes=config.scopes.toSet(),
+      feed=config.feed?.let { it.copy(reportIds=it.reportIds.toSet()) })
+    val service = TrustedReceiptReturnService(database, receiptQueue, bound, ::receiptReturnClock,
+      active={ returnDeployment === bound })
+    returnDeployment = bound
+    receiptReturn = service
+  }
+  @Synchronized fun disableReceiptReturn() { returnDeployment = null; receiptReturn = null }
+  internal fun receiptForwardAllowed(kind: ObjectKind, bytes: ByteArray): Boolean =
+    kind == ObjectKind.SOS || receiptReturn?.canForward(kind, bytes) == true
+  private fun onDurableRelayReceived() {
+    deliveryScope.launch { runCatching { receiptReturn?.retryPending() } }
+    triggerImmediateDeliveryIfConnected()
+  }
+  private val returnSync by lazy {
+    StatusSyncDispatcher(deliveryScope) {
+      if (hasValidatedInternet()) runCatching { receiptReturnWorker.runOnce() }
+    }
+  }
   private val statusSync by lazy {
     StatusSyncDispatcher(deliveryScope) {
       VictimStatusWorker(VictimStatusStore(database),
@@ -121,6 +157,8 @@ class SurvivalCoreRuntime private constructor(context: Context) {
     // Informational history reads must never hold up a newly committed SOS upload.
     statusSync.trigger()
     runGatewaySync(nowMs)
+    runCatching { receiptReturn?.retryPending() }
+    returnSync.trigger()
     // Do not let a local signing/preparation failure block an already-durable
     // relayed envelope from reaching the server. Scheduled delivery still
     // receives the failure so Android can retry the pending local preparation.
@@ -131,14 +169,17 @@ class SurvivalCoreRuntime private constructor(context: Context) {
   val bleRelay = BleRelayRuntime(
     readinessProvider = { BleRelayReadinessChecker.evaluate(appContext) },
     activityTimestampProvider = { repository.newestActiveRelayTimestamp() },
-    central = BleCentralManager(appContext, repository, receiptQueue),
-    // Receipt-v2 receive capability stays absent until a qualified runtime VerificationContext provider is wired.
-    // Legacy SOS/SGA1 characteristics remain unchanged in that state.
+    central = BleCentralManager(appContext, repository, receiptQueue, canForwardObject = ::receiptForwardAllowed,
+      custodyTimeProvider = { receiptReturn?.trustedTime()?.latestMs }),
+    // Default-off. Qualified time and explicit trust configuration are required for v2 capability.
     peripheral = BlePeripheralManager(
       appContext,
       repository,
       receiptQueue,
-      onDurableRelayReceived = ::triggerImmediateDeliveryIfConnected,
+      verificationContextProvider = { receiptReturn?.baseContext() },
+      objectContextProvider = { kind, bytes -> receiptReturn?.contextFor(kind, bytes) },
+      canForwardObject = ::receiptForwardAllowed,
+      onDurableRelayReceived = ::onDurableRelayReceived,
     ),
   )
 

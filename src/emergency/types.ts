@@ -139,6 +139,10 @@ export interface ServerStatusInfo {
 }
 
 export interface EmergencyReportSummary {
+  /** Independently verified current providers disagree about incident closure. */
+  providerConflict?: boolean;
+  /** Qualified delegated receipt capability; READY does not imply an available contact path. */
+  receiptReturnState?: 'DISABLED' | 'WAITING_FOR_QUALIFICATION' | 'READY';
   serverStatus?: ServerStatusInfo;
   history?: EmergencyHistoryEvent[];
   statusSync?: StatusSyncInfo;

@@ -106,9 +106,11 @@ class VictimStatusInstrumentedTest {
     db.writableDatabase.execSQL("UPDATE reports SET lifecycle_state='RESPONDER_ACKNOWLEDGED'")
     db.writableDatabase.execSQL("DROP TABLE victim_server_acks")
     db.writableDatabase.execSQL("DROP TABLE victim_status_sync")
-    db.writableDatabase.version=17
+    db.writableDatabase.execSQL("DROP TABLE receipt_return_sync")
+    db.writableDatabase.execSQL("DROP TABLE receipt_return_replay_state")
+    db.writableDatabase.version = 17
     reopen()
-    assertEquals(18,db.readableDatabase.version)
+    assertEquals(Schema.VERSION,db.readableDatabase.version)
     assertEquals("DELIVERY_PENDING",repository.getReportSummary(r.reportId).deliveryState)
     assertEquals(r.reportId,report().reportId)
     assertEquals(1,store.history(r.reportId).count { it.provenance=="UNVERIFIED" })
@@ -125,7 +127,9 @@ class VictimStatusInstrumentedTest {
     db.writableDatabase.execSQL("UPDATE reports SET lifecycle_state='RESPONDER_ACKNOWLEDGED'")
     db.writableDatabase.execSQL("DROP TABLE victim_server_acks")
     db.writableDatabase.execSQL("DROP TABLE victim_status_sync")
-    db.writableDatabase.version=17
+    db.writableDatabase.execSQL("DROP TABLE receipt_return_sync")
+    db.writableDatabase.execSQL("DROP TABLE receipt_return_replay_state")
+    db.writableDatabase.version = 17
     reopen()
     val restored=repository.listReports().single()
     assertEquals("LOCALLY_COMMITTED",restored.lifecycleState)

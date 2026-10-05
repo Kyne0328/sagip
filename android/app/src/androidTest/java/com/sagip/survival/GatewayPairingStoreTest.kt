@@ -176,6 +176,15 @@ class GatewayPairingStoreTest {
     db.writableDatabase.execSQL("DROP TABLE gateway_admission_sources")
     db.writableDatabase.execSQL("DROP TABLE gateway_time_requests")
     db.writableDatabase.execSQL("ALTER TABLE receipt_time_checkpoints DROP COLUMN proof_bytes")
+    // Reconstruct pre-v17 fixture schema before replaying its actual upgrade path.
+    db.writableDatabase.execSQL("DROP TABLE detail_operations")
+    listOf("message", "latitude", "longitude", "accuracy_meters", "captured_at", "source", "freshness").forEach {
+      db.writableDatabase.execSQL("ALTER TABLE report_revisions DROP COLUMN $it")
+    }
+    db.writableDatabase.execSQL("DROP TABLE victim_server_acks")
+    db.writableDatabase.execSQL("DROP TABLE victim_status_sync")
+    db.writableDatabase.execSQL("DROP TABLE receipt_return_sync")
+    db.writableDatabase.execSQL("DROP TABLE receipt_return_replay_state")
     db.writableDatabase.version = 12
     db.close(); db = SagipDatabase(context)
     assertEquals(Schema.VERSION, db.readableDatabase.version)

@@ -43,7 +43,13 @@ export function StatusFreshness({report, syncing = false}: {
       {sync?.state === 'FAILED' ? (
         <Text style={styles.warning}>Last server check failed at {historyDate(sync.lastAttemptAt)}. Showing saved status; it may be out of date.</Text>
       ) : null}
-      <Text style={styles.detail}>Saved status remains available offline. Verified responder updates over nearby relay are not enabled in this build. Connect to the internet to check for new responder updates.</Text>
+      <Text style={styles.detail}>Saved status remains available offline.{' '}
+        {report.receiptReturnState === 'READY'
+          ? 'Signed updates from approved offline responders can arrive through a compatible nearby relay. Delivery needs relay contact; no new update can arrive without a connection path. Connect to the internet to check cloud responder status.'
+          : report.receiptReturnState === 'WAITING_FOR_QUALIFICATION'
+            ? 'Nearby signed updates are waiting for valid authority and trusted-time evidence. New relay updates cannot be verified yet. Connect to the internet to check for new responder updates.'
+            : 'Verified responder updates over nearby relay are not enabled in this build. Connect to the internet to check for new responder updates.'}
+      </Text>
     </View>
   );
 }
@@ -90,6 +96,7 @@ function HistoryReport({report}: {report: EmergencyReportSummary}) {
       {expanded ? (
         <View style={styles.timeline}>
           <StatusFreshness report={report} />
+          {report.providerConflict ? <Text style={styles.warning}>Responder updates disagree about whether this SOS is resolved. Your SOS stays active while the conflict is unresolved.</Text> : null}
           {report.serverStatus ? <AuthenticatedServerStatus status={report.serverStatus} /> : null}
           {receipt ? (
             <View style={styles.event}>

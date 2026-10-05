@@ -190,6 +190,10 @@ class ResponderGatewayServiceTest {
     listOf("message", "latitude", "longitude", "accuracy_meters", "captured_at", "source", "freshness").forEach {
       db.writableDatabase.execSQL("ALTER TABLE report_revisions DROP COLUMN $it")
     }
+    db.writableDatabase.execSQL("DROP TABLE victim_server_acks")
+    db.writableDatabase.execSQL("DROP TABLE victim_status_sync")
+    db.writableDatabase.execSQL("DROP TABLE receipt_return_sync")
+    db.writableDatabase.execSQL("DROP TABLE receipt_return_replay_state")
     db.writableDatabase.version = 11
     db.close(); db = SagipDatabase(context)
     assertEquals(Schema.VERSION, db.readableDatabase.version)

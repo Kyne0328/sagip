@@ -567,6 +567,7 @@ class ReceiptRepository(
       FROM receipt_projections p JOIN receipt_records r ON r.event_id=p.event_id WHERE p.report_id=?""",
     arrayOf(reportId),
   ).use { c ->
+    if (!hasConsistentReportOrigin(database.readableDatabase, reportId)) return null
     val candidates = mutableListOf<Pair<ReceiptProjection,Int>>()
     while(c.moveToNext()) {
       val fields = runCatching { ReceiptV2Codec.decode(c.getBlob(9)).fields as? ReceiptFields.Responder }.getOrNull() ?: continue
@@ -603,11 +604,20 @@ class ReceiptRepository(
     createdAtMs: Long,
   ) {
     require(verifierId.size == 32 && nonce.size == 32)
-    val highWater = database.readableDatabase.rawQuery(
+    val db = database.writableDatabase
+    db.beginTransaction()
+    try {
+      val total = db.rawQuery("SELECT COUNT(*) FROM receipt_time_challenges", null).use { it.moveToFirst(); it.getLong(0) }
+      val outstanding = db.rawQuery(
+        "SELECT COUNT(*) FROM receipt_time_challenges WHERE lower(hex(verifier_id))=? AND consumed_at_ms IS NULL",
+        arrayOf(hex(verifierId)),
+      ).use { it.moveToFirst(); it.getLong(0) }
+      check(total < 10_000L && outstanding < 128L) { "CAPACITY_FULL" }
+    val highWater = db.rawQuery(
       "SELECT earliest_ms FROM receipt_time_high_water WHERE lower(hex(verifier_id))=?",
       arrayOf(hex(verifierId)),
     ).use { cursor -> if (cursor.moveToFirst()) cursor.getLong(0) else null }
-    database.writableDatabase.insertOrThrow(
+    db.insertOrThrow(
       "receipt_time_challenges",
       null,
       ContentValues().apply {
@@ -620,6 +630,8 @@ class ReceiptRepository(
         put("created_at_ms", createdAtMs)
       },
     )
+      db.setTransactionSuccessful()
+    } finally { db.endTransaction() }
   }
 
   fun commitTimeCheckpoint(
@@ -790,8 +802,10 @@ class ReceiptRepository(
     "SELECT report_protocol_version,payload_digest,origin_key_id,origin_public_key_der FROM receipt_report_identities WHERE report_id=? AND revision=?",
     arrayOf(reportId, revision.toString()),
   ).use { c -> if (!c.moveToFirst()) null else ReportIdentity(reportId, c.getInt(0), revision, c.getBlob(1), c.getBlob(2), c.getBlob(3)) }
+    .takeIf { hasConsistentReportOrigin(db, reportId) }
 
-  private fun reportIdentity(reportId: String, revision: Int) = reportIdentity(database.readableDatabase, reportId, revision)
+  /** Identity was bound only after verification of an immutable locally retained SOS envelope. */
+  fun reportIdentity(reportId: String, revision: Int) = reportIdentity(database.readableDatabase, reportId, revision)
 
   private fun latestIdentity(db: SQLiteDatabase, reportId: String): ReportIdentity? = db.rawQuery(
     "SELECT revision,report_protocol_version,payload_digest,origin_key_id,origin_public_key_der FROM receipt_report_identities WHERE report_id=? ORDER BY revision DESC LIMIT 1",
@@ -805,7 +819,7 @@ class ReceiptRepository(
       cursor.getBlob(3),
       cursor.getBlob(4),
     )
-  }
+  }.takeIf { hasConsistentReportOrigin(db, reportId) }
 
   private fun latestRevision(db: SQLiteDatabase, reportId: String): Int = db.rawQuery(
     "SELECT MAX(revision) FROM receipt_report_identities WHERE report_id=?", arrayOf(reportId),
@@ -1062,6 +1076,12 @@ class ReceiptRepository(
 
     internal fun persistReportIdentity(db: SQLiteDatabase, bytes: ByteArray, now: Long): Boolean {
       val identity = decodeReportIdentity(bytes)
+      val originConflict = db.rawQuery(
+        "SELECT 1 FROM receipt_report_identities WHERE report_id=? AND " +
+          "(lower(hex(origin_key_id))!=? OR lower(hex(origin_public_key_der))!=?) LIMIT 1",
+        arrayOf(identity.reportId, hexStatic(identity.originKeyId), hexStatic(identity.originPublicKeyDer)),
+      ).use { it.moveToFirst() }
+      check(!originConflict) { "report origin conflict" }
       val existing = db.rawQuery(
         "SELECT report_protocol_version,payload_digest,origin_key_id,origin_public_key_der FROM receipt_report_identities WHERE report_id=? AND revision=?",
         arrayOf(identity.reportId, identity.revision.toString()),
@@ -1099,6 +1119,18 @@ class ReceiptRepository(
       )
       return true
     }
+
+    internal fun hasConsistentReportOrigin(db: SQLiteDatabase, reportId: String): Boolean = db.rawQuery(
+      "SELECT COUNT(DISTINCT hex(origin_key_id)),COUNT(DISTINCT hex(origin_public_key_der)) FROM receipt_report_identities WHERE report_id=?",
+      arrayOf(reportId),
+    ).use { it.moveToFirst(); it.getInt(0) == 1 && it.getInt(1) == 1 }
+
+    internal fun hasConflictingReportOrigins(db: SQLiteDatabase, reportId: String): Boolean = db.rawQuery(
+      "SELECT COUNT(DISTINCT hex(origin_key_id)),COUNT(DISTINCT hex(origin_public_key_der)) FROM receipt_report_identities WHERE report_id=?",
+      arrayOf(reportId),
+    ).use { it.moveToFirst(); it.getInt(0) > 1 || it.getInt(1) > 1 }
+
+    private fun hexStatic(bytes: ByteArray) = bytes.joinToString("") { "%02x".format(it.toInt() and 255) }
 
     private fun decodeReportIdentity(bytes: ByteArray): ReportIdentity {
       require(bytes.size >= 4)

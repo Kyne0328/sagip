@@ -1,7 +1,13 @@
 package com.sagip.survival
 
 object Schema {
-  const val VERSION = 18
+  const val VERSION = 19
+
+  private val RECEIPT_RETURN_CREATE_STATEMENTS = listOf(
+    "CREATE TABLE receipt_return_replay_state (singleton INTEGER PRIMARY KEY CHECK(singleton=1), quarantine_row_id INTEGER NOT NULL DEFAULT 0, signed_row_id INTEGER NOT NULL DEFAULT 0, inventory_row_id INTEGER NOT NULL DEFAULT 0, lease_row_id INTEGER NOT NULL DEFAULT 0)",
+    "CREATE TABLE receipt_return_sync (source_id TEXT NOT NULL, report_id TEXT NOT NULL, cursor TEXT, next_attempt_ms INTEGER NOT NULL DEFAULT 0, boot_id TEXT, lease_token TEXT, lease_until_ms INTEGER, PRIMARY KEY(source_id,report_id))",
+  )
+  val MIGRATE_18_TO_19 = RECEIPT_RETURN_CREATE_STATEMENTS
 
   private val ACTION_API_CREATE_STATEMENTS = listOf(
     "CREATE TABLE gateway_api_actions (action_id TEXT PRIMARY KEY NOT NULL REFERENCES gateway_work(action_id), responder_id TEXT NOT NULL, provider_id TEXT NOT NULL, action_digest TEXT NOT NULL, intent_json TEXT NOT NULL)",
@@ -494,7 +500,7 @@ object Schema {
     "CREATE INDEX idx_relay_receipts_message ON relay_receipts(message_id)",
     "CREATE INDEX idx_responder_acks_report ON responder_acks(report_id)",
     "CREATE INDEX idx_relay_responder_acks_report ON relay_responder_acks(report_id, acknowledged_at DESC)",
-  ) + RECEIPT_CREATE_STATEMENTS + RELAY_CREATE_STATEMENTS + TRANSFER_CREATE_STATEMENTS + CONTACT_CREATE_STATEMENTS + GATEWAY_CREATE_STATEMENTS + PAIRING_CREATE_STATEMENTS + ADMISSION_CREATE_STATEMENTS + TIME_PROOF_CREATE_STATEMENTS + ACTION_API_CREATE_STATEMENTS + VICTIM_STATUS_CREATE_STATEMENTS
+  ) + RECEIPT_CREATE_STATEMENTS + RELAY_CREATE_STATEMENTS + TRANSFER_CREATE_STATEMENTS + CONTACT_CREATE_STATEMENTS + GATEWAY_CREATE_STATEMENTS + PAIRING_CREATE_STATEMENTS + ADMISSION_CREATE_STATEMENTS + TIME_PROOF_CREATE_STATEMENTS + ACTION_API_CREATE_STATEMENTS + VICTIM_STATUS_CREATE_STATEMENTS + RECEIPT_RETURN_CREATE_STATEMENTS
 
   val MIGRATE_1_TO_2 = listOf(
     "ALTER TABLE outbound_envelopes ADD COLUMN envelope_bytes BLOB",

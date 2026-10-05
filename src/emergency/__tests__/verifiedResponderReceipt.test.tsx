@@ -180,6 +180,22 @@ test('offline authority evidence names unavailable live revocation knowledge', a
   expect(rendered).toContain('Current revocation status is unavailable');
 });
 
+test('conflicting providers keep the SOS active and qualify accessibility announcements', async () => {
+  setReports([{...reportWithVerifiedReceipt({status: 'RESOLVED'}), providerConflict: true}]);
+  core.claimVerifiedReceiptNotification.mockResolvedValueOnce(true);
+  const announce = jest.spyOn(AccessibilityInfo, 'announceForAccessibility');
+  const renderer = await renderApp();
+  const text = JSON.stringify(renderer.toJSON());
+  expect(text).toContain('Active SOS status');
+  expect(text).toContain('Your SOS stays active while the conflict is unresolved.');
+  expect(text).not.toContain('This SOS is resolved. You can view its history or send a new SOS.');
+  expect(announce).toHaveBeenCalledWith(
+    'Responder updates disagree about whether this SOS is resolved. Your SOS stays active.',
+  );
+  expect(announce).not.toHaveBeenCalledWith('Responder reports this incident is resolved');
+  act(() => renderer.unmount());
+});
+
 test('durable notification claim prevents replay and restart announcements', async () => {
   const report = reportWithVerifiedReceipt();
   setReports([report]);

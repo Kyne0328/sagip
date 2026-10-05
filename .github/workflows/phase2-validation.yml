@@ -1,0 +1,73 @@
+name: Phase 2 Validation Only
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'phase2/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sagip-phase2-validation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate without deployment
+    if: startsWith(github.ref, 'refs/heads/phase2/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            backend/package-lock.json
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm --prefix backend ci
+
+      - name: Validate requester code and backend package
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm test -- --runInBand
+          npx tsc --noEmit
+          npm run lint
+          npm --prefix backend run typecheck
+          npm --prefix backend run lint
+          npm --prefix backend run build:neon
+          test -s backend/.generated/neon-api/index.mjs
+
+      - name: Start isolated PostgreSQL validation database
+        run: bash scripts/start-test-postgres.sh
+
+      - name: Validate backend and PostgreSQL acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset DATABASE_URL
+          : "${SAGIP_TEST_DATABASE_URL:?Isolated test database is required}"
+          npm --prefix backend test
+          (
+            cd backend
+            SAGIP_ACCEPTANCE_DATABASE_URL="$SAGIP_TEST_DATABASE_URL" npx tsx --test acceptance/receiptImport.postgres.test.ts
+          )
+
+      - name: Stop isolated PostgreSQL validation database
+        if: ${{ always() }}
+        run: docker rm --force sagip-test-postgres || true

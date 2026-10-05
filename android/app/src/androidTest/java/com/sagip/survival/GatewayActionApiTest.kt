@@ -295,7 +295,11 @@ class GatewayActionApiTest {
     listOf("message", "latitude", "longitude", "accuracy_meters", "captured_at", "source", "freshness").forEach {
       db.writableDatabase.execSQL("ALTER TABLE report_revisions DROP COLUMN $it")
     }
-    db.writableDatabase.version=15;db.close();db=SagipDatabase(context);setupGateway()
+    db.writableDatabase.execSQL("DROP TABLE victim_server_acks")
+    db.writableDatabase.execSQL("DROP TABLE victim_status_sync")
+    db.writableDatabase.execSQL("DROP TABLE receipt_return_sync")
+    db.writableDatabase.execSQL("DROP TABLE receipt_return_replay_state")
+    db.writableDatabase.version = 15;db.close();db=SagipDatabase(context);setupGateway()
     assertEquals(Schema.VERSION, db.readableDatabase.version)
     assertArrayEquals(original,gateway.getGatewayAction(intent.actionId).bytes)
   }
