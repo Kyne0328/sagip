@@ -21,7 +21,11 @@ import {
   type SagipRateLimiters,
 } from './rateLimiter.js';
 
+import type {OriginAuthorityTimeService} from '../responder/originAuthorityTimeService.js';
+
 export interface SagipServerDependencies {
+  refreshAuthorityTime?: () => Promise<void>;
+  originAuthorityTimeService?: OriginAuthorityTimeService;
   ingestEnvelope(bytes: Buffer): Promise<ServerReceipt>;
   responderService?: ResponderService;
   receiptService?: ReceiptService;
@@ -129,6 +133,7 @@ export async function handleSagipRequest(
         discardRequestBody(context);
         return jsonResponse(401, {error: 'SESSION_REQUIRED'});
       }
+      await deps.refreshAuthorityTime?.();
       if (pathname === AUTHORITY_GRANTS_PATH) {
         if (method !== 'POST') {
           discardRequestBody(context);
@@ -184,8 +189,24 @@ export async function handleSagipRequest(
           return jsonResponse(415, {error: 'UNSUPPORTED_MEDIA_TYPE'});
         }
         const challenge = parseTimeChallenge(await readBoundedBody(request, 4096));
+        await deps.refreshAuthorityTime?.();
         return binaryResponse(200, await deps.authorityService.issueAuthorityTimeProof(challenge, responder));
       }
+    }
+    const originTimeMatch = new RegExp('^/v2/reports/(' + UUID_SEGMENT + ')/authority/time$', 'u').exec(pathname);
+    if (originTimeMatch) {
+      if (method !== 'POST') { discardRequestBody(context); return jsonResponse(405, {error:'METHOD_NOT_ALLOWED'}, {allow:'POST'}); }
+      if (!deps.originAuthorityTimeService) { discardRequestBody(context); return jsonResponse(501, {error:'NOT_IMPLEMENTED'}); }
+      if (parsedUrl.searchParams.size !== 0) { discardRequestBody(context); return jsonResponse(400, {error:'INVALID_FIELDS'}); }
+      if ((request.headers.get('content-type') ?? '').split(';')[0]?.trim().toLowerCase() !== 'application/json') {
+        discardRequestBody(context); return jsonResponse(415, {error:'UNSUPPORTED_MEDIA_TYPE'});
+      }
+      const body = await readBoundedBody(request, 4096), reportId = originTimeMatch[1]!.toLowerCase();
+      const signature = request.headers.get('x-sagip-origin-time-signature');
+      if (!await deps.originAuthorityTimeService.authenticate(reportId, body, signature))
+        return jsonResponse(401, {error:'ORIGIN_PROOF_REQUIRED'});
+      await deps.refreshAuthorityTime?.();
+      return binaryResponse(200, await deps.originAuthorityTimeService.issue(reportId, body, signature));
     }
     const gatewayReceiptMatch = GATEWAY_RECEIPT_PAGE_RE.exec(pathname);
     if (gatewayReceiptMatch) {
@@ -201,6 +222,7 @@ export async function handleSagipRequest(
       if (parsedUrl.searchParams.size > (cursor === null ? 0 : 1) ||
           (cursor !== null && !/^[0-9a-f]{64}$/u.test(cursor)))
         return jsonResponse(400, {error: 'INVALID_CURSOR'});
+      await deps.refreshAuthorityTime?.();
       return jsonResponse(200, await deps.gatewayReceiptFeed.list(
         (gatewayReceiptMatch[1] as string).toLowerCase(), cursor, responder,
       ));
@@ -221,6 +243,7 @@ export async function handleSagipRequest(
       if (!proof || !await deps.responderService.authenticateReportStatusAccess(reportId, proof, null)) {
         return jsonResponse(401, {error: 'ORIGIN_PROOF_REQUIRED'});
       }
+      await deps.refreshAuthorityTime?.();
       const challenge = await deps.receiptService.createReceiptAccessChallenge(reportId);
       return jsonResponse(201, {
         ...challenge,
@@ -314,6 +337,7 @@ export async function handleSagipRequest(
         } catch {
           return jsonResponse(400, {error: 'INVALID_FIELDS'});
         }
+        await deps.refreshAuthorityTime?.();
         const allocation = await deps.receiptService.allocateActionResult(intent, responder);
         const committed = await deps.receiptService.prepareReceipt(intent.actionId);
         return jsonResponse(allocation.created ? 201 : 200, actionResultJson(committed));
@@ -620,7 +644,11 @@ export async function handleSagipRequest(
         return jsonResponse(404, {error: code});
       }
       if (code === 'SNAPSHOT_EXPIRED') return jsonResponse(410, {error: code});
-      if (code === 'CAPACITY_FULL') return jsonResponse(429, {error: code});
+      if (code === 'CAPACITY_FULL' || code === 'OFFLINE_ROOT_CAPACITY') return jsonResponse(429, {error: code});
+      if (code === 'ROOT_AUTHORITY_REVOKED') return jsonResponse(403, {error: code});
+      if (code === 'ORIGIN_PROOF_REQUIRED') return jsonResponse(401, {error: code});
+      if (code.startsWith('ROUGHTIME_') || code.startsWith('OFFLINE_ROOT_') || code === 'AUTHORITY_UNAVAILABLE')
+        return jsonResponse(503, {error: 'AUTHORITY_UNAVAILABLE'});
       if (code === 'SIGNER_UNAVAILABLE' || code === 'TIME_UNAVAILABLE' || code === 'STORAGE_UNAVAILABLE') {
         return jsonResponse(503, {error: code});
       }

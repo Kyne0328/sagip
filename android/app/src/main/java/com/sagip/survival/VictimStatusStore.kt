@@ -120,11 +120,11 @@ class VictimStatusStore(private val database: SagipDatabase) {
     db.rawQuery("""
       SELECT event_id,object_bytes,revision,verification_kind,received_at_ms FROM receipt_records
       WHERE report_id=? AND object_kind='RESPONDER'
-        AND verification_kind IN ('VERIFIED_CURRENT','VERIFIED_OFFLINE_AUTHORITY')
+        AND verification_kind IN ('VERIFIED_CURRENT','VERIFIED_OFFLINE_AUTHORITY','VERIFIED_OFFLINE_ROOT_SNAPSHOT')
     """.trimIndent(), arrayOf(reportId)).use { c -> while(c.moveToNext()) {
       val f = runCatching { ReceiptV2Codec.decode(c.getBlob(1)).fields as? ReceiptFields.Responder }.getOrNull() ?: continue
       if(f.reportId != reportId || f.actionId != c.getString(0) || f.revision != c.getInt(2)) continue
-      events += VictimHistoryEvent("receipt:" + f.actionId,"RESPONDER_UPDATE",c.getLong(4),f.revision,
+      events += VictimHistoryEvent("receipt:" + f.actionId,"RESPONDER_UPDATE",f.issuedAtMs,f.revision,
         statusName(f.status),c.getString(3),f.callsign,f.note)
     } }
     return events.sortedWith(compareBy<VictimHistoryEvent> { it.occurredAt }.thenBy { it.id })
@@ -143,8 +143,8 @@ class VictimStatusStore(private val database: SagipDatabase) {
         SELECT p.event_id,p.sequence,r.object_bytes,p.issuer_provider_id
         FROM receipt_projections p JOIN receipt_records r ON r.event_id=p.event_id
         WHERE p.report_id=? AND p.revision=?
-          AND p.verification_kind IN ('VERIFIED_CURRENT','VERIFIED_OFFLINE_AUTHORITY')
-          AND r.verification_kind IN ('VERIFIED_CURRENT','VERIFIED_OFFLINE_AUTHORITY')
+          AND p.verification_kind IN ('VERIFIED_CURRENT','VERIFIED_OFFLINE_AUTHORITY','VERIFIED_OFFLINE_ROOT_SNAPSHOT')
+          AND r.verification_kind IN ('VERIFIED_CURRENT','VERIFIED_OFFLINE_AUTHORITY','VERIFIED_OFFLINE_ROOT_SNAPSHOT')
       """.trimIndent(), arrayOf(reportId, revision.toString())).use { c ->
         if (!ReceiptRepository.hasConsistentReportOrigin(db, reportId)) return emptyList()
         buildList {
@@ -166,6 +166,9 @@ class VictimStatusStore(private val database: SagipDatabase) {
     }
 
     internal fun isResolved(db: SQLiteDatabase, reportId: String, revision: Int): Boolean {
+      // Root snapshots never authorize automatic closure, including alongside legacy server RESOLVED.
+      if(db.rawQuery("SELECT 1 FROM receipt_projections WHERE report_id=? AND revision=? AND verification_kind='VERIFIED_OFFLINE_ROOT_SNAPSHOT' LIMIT 1",
+        arrayOf(reportId,revision.toString())).use { it.moveToFirst() }) return false
       // Independent provider streams have no shared ordering or implicit supersession.
       if (providerConflict(db, reportId, revision)) return false
       if (serverStatus(db, reportId)?.status == "RESOLVED") return true

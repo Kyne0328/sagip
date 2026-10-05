@@ -163,12 +163,12 @@ export class GrantProvisioningService {
     )
       throw new Error('ROLE_REQUIRED');
   }
-  private async sign(fields: ReceiptFields): Promise<Buffer> {
+  private async sign(fields: ReceiptFields, c: PoolClient): Promise<Buffer> {
     let bytes: Buffer;
     try {
       bytes = encodeReceipt(
         fields,
-        await this.signer.sign(receiptSigningInput(fields, Buffer.alloc(0))),
+        await this.signer.sign(receiptSigningInput(fields, Buffer.alloc(0)), c),
         Buffer.alloc(0),
       );
     } catch {
@@ -238,6 +238,7 @@ export class GrantProvisioningService {
       ),
     );
     return transaction(this.pool, async c => {
+      await this.signer.assertActive?.(c);
       await this.actor(c, operator, true);
       await c.query('SELECT pg_advisory_xact_lock($1)', [
         hash(Buffer.from(r.requestId)).readBigInt64BE().toString(),
@@ -304,7 +305,7 @@ export class GrantProvisioningService {
         notBeforeMs: start,
         expiresAtMs: start + WEEK,
       };
-      const bytes = await this.sign(fields);
+      const bytes = await this.sign(fields, c);
       await c.query(
         `INSERT INTO receipt_authority_grants(grant_id,provisioning_request_id,request_digest,issuer_provider_id,issuer_key_id,root_key_id,object_bytes,not_before_ms,expires_at_ms) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
         [
@@ -390,6 +391,9 @@ export class GrantProvisioningService {
   }> {
     responder = { ...responder };
     return transaction(this.pool, async c => {
+      let rootRevoked = false;
+      try { await this.signer.assertActive?.(c); }
+      catch (error) { if (error instanceof Error && error.message === 'ROOT_AUTHORITY_REVOKED') rootRevoked = true; else throw error; }
       await this.actor(c, responder);
       const row = (
         await c.query<GrantRow>(
@@ -403,7 +407,7 @@ export class GrantProvisioningService {
       return {
         grantId,
         state:
-          row.revoked_at_ms !== null
+          rootRevoked || row.revoked_at_ms !== null
             ? 'REVOKED'
             : now + t.uncertaintyMs >= Number(row.expires_at_ms) ||
               now - t.uncertaintyMs < Number(row.not_before_ms)
@@ -447,6 +451,7 @@ export class GrantProvisioningService {
     };
     receiptSigningInput(skeleton, Buffer.alloc(0));
     return transaction(this.pool, async c => {
+      await this.signer.assertActive?.(c);
       await this.actor(c, responder);
       // Quota admission serializes across verifiers and process replicas.
       // Protected nonce history is never evicted to make a new proof fit.
@@ -509,7 +514,7 @@ export class GrantProvisioningService {
         uncertaintyMs: t.uncertaintyMs,
         validUntilMs: t.timeMs + t.validForMs,
       };
-      const bytes = await this.sign(fields);
+      const bytes = await this.sign(fields, c);
       if (
         Number(budget.bytes) +
           Number(state.count) * TIME_HIGH_WATER_BYTES +

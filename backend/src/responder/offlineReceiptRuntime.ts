@@ -7,7 +7,9 @@ import {
   type QualifiedAuthorityTime,
 } from './grantProvisioning.js';
 import {GatewayReceiptFeed, type GatewayReceiptAccess} from './gatewayReceiptFeed.js';
+import {OriginAuthorityTimeService} from './originAuthorityTimeService.js';
 import {ReceiptService, type AuthoritySigner} from './receiptService.js';
+import {OfflineRootSnapshotService, type OfflineRootSnapshotAdapter} from './offlineRootSnapshotService.js';
 
 const WEEK = 604800000;
 
@@ -20,12 +22,16 @@ export interface OfflineReceiptRuntimeAdapter {
   isQualified(): boolean;
   authorityPolicy: AuthorityPolicy;
   gatewayAccess: GatewayReceiptAccess;
+  offlineRoot?: OfflineRootSnapshotAdapter;
 }
 
 export interface OfflineReceiptRuntime {
+  refreshAuthorityTime?: () => Promise<void>;
   receiptService?: ReceiptService;
   authorityService?: GrantProvisioningService;
+  originAuthorityTimeService?: OriginAuthorityTimeService;
   gatewayReceiptFeed?: GatewayReceiptFeed;
+  offlineRootSnapshotService?: OfflineRootSnapshotService;
 }
 
 export function offlineReceiptRuntimeMode(
@@ -37,20 +43,21 @@ export function offlineReceiptRuntimeMode(
   return mode;
 }
 
-// Both shipping entrypoints call this without an adapter. Thus an environment
-// toggle alone can never activate authority. ADAPTER requires a separate,
-// approved custody/time/access integration supplied by its caller.
+// Shipping entrypoints use the explicit public manifest and configured custody/time
+// adapter. A mode toggle alone cannot supply keys, enroll registry trust, or qualify
+// a clock. Lazy construction keeps optional authority outages separate from SOS ingestion.
 export function createOfflineReceiptRuntime(
   pool: Pick<Pool, 'connect'>,
   env: Readonly<Record<string, string | undefined>>,
   adapter?: OfflineReceiptRuntimeAdapter,
+  deferClockQualification = false,
 ): OfflineReceiptRuntime {
   if (offlineReceiptRuntimeMode(env) === 'DISABLED') return {};
   if (!adapter) throw new Error('OFFLINE_RECEIPTS_ADAPTER_REQUIRED');
   const requireQualified = (): void => {
     if (!adapter.isQualified()) throw new Error('AUTHORITY_UNAVAILABLE');
   };
-  requireQualified();
+  if (!deferClockQualification) requireQualified();
   const publicKeyDer = Buffer.from(adapter.signer.publicKeyDer);
   validateReceiptPublicKey(publicKeyDer);
   const keyId = createHash('sha256').update(publicKeyDer).digest('hex');
@@ -68,27 +75,34 @@ export function createOfflineReceiptRuntime(
       throw new Error('TIME_UNAVAILABLE');
     return {...t};
   };
-  time();
+  if (!deferClockQualification) time();
   const signer: AuthoritySigner = {
     publicKeyDer,
-    sign: async bytes => {
+    assertActive: async c => { if (snapshots) await snapshots.assertRootActive(c); },
+    sign: async (bytes, c) => {
       requireQualified();
-      return adapter.signer.sign(bytes);
+      return snapshots ? snapshots.signWithRootAuthority(bytes, adapter.signer, c) : adapter.signer.sign(bytes, c);
     },
   };
   const interval = () => {
     const t = time();
     return {earliestMs: t.timeMs - t.uncertaintyMs, latestMs: t.timeMs + t.uncertaintyMs};
   };
+  const snapshots = adapter.offlineRoot ?
+    new OfflineRootSnapshotService(pool, publicKeyDer, adapter.offlineRoot, time) : undefined;
   return {
-    receiptService: new ReceiptService(pool, signer, () => time().timeMs, interval),
+    ...(snapshots ? {offlineRootSnapshotService: snapshots} : {}),
+    receiptService: new ReceiptService(pool, signer, () => {
+      const t = time(); return snapshots ? t.timeMs - t.uncertaintyMs : t.timeMs;
+    }, interval, snapshots ? eventId => snapshots.issueCommitted(eventId) : undefined),
     authorityService: new GrantProvisioningService(pool, signer, time, adapter.authorityPolicy),
+    originAuthorityTimeService: new OriginAuthorityTimeService(pool, signer, time),
     gatewayReceiptFeed: new GatewayReceiptFeed(pool, publicKeyDer, interval, {
       allowedRoles: adapter.gatewayAccess.allowedRoles,
       isReportAuthorized: (actor, reportId) => {
         requireQualified();
         return adapter.gatewayAccess.isReportAuthorized(actor, reportId);
       },
-    }),
+    }, snapshots),
   };
 }

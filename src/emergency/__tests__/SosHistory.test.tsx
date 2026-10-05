@@ -32,11 +32,11 @@ test('history pages every saved report and expands all persisted events without 
   await act(async () => renderer.root.findByProps({accessibilityLabel: 'SOS history for saved-0'}).props.onPress());
   const text = JSON.stringify(renderer.toJSON());
   expect(text).toContain('SOS saved on this device');
-  expect(text).toContain('Optional details saved');
-  expect(text).toContain('Responder reports they are on the way');
-  expect(text).toContain('Authenticated server record');
+  expect(text).toContain('Details saved');
+  expect(text).toContain('Responder says they are on the way');
+  expect(text).toContain('Server verified');
   expect(text).toContain('Report-wide');
-  expect(text).toContain('Reading this history does not contact the server.');
+  expect(text).toContain('Saved timeline · newest first');
   expect(reports[0].reportId).toBe('saved-0');
 });
 
@@ -44,37 +44,32 @@ test('failed check keeps last successful check and warns cached status can be st
   await act(async () => {renderer = ReactTestRenderer.create(<StatusFreshness report={{...base,
     statusSync: {historyPending: false, state: 'FAILED', lastSuccessAt: 2000, lastAttemptAt: 3000}}} />);});
   const text = JSON.stringify(renderer.toJSON());
-  expect(text).toContain('Last successful server check:');
+  expect(text).toContain('Last server check:');
   expect(text).toContain('Last server check failed at');
-  expect(text).toContain('Showing saved status; it may be out of date.');
-  expect(text).toContain('Saved status remains available offline.');
-  expect(text).toContain('Verified responder updates over nearby relay are not enabled in this build.');
-  expect(text).toContain('Connect to the internet to check for new responder updates.');
+  expect(text).toContain('Status may be out of date.');
+  expect(text).toContain('Connect to the internet for new responder updates.');
 });
 
 test('qualified relay capability names the contact requirement without promising cloud-root return', async () => {
   await act(async () => {renderer = ReactTestRenderer.create(<StatusFreshness report={{...base, receiptReturnState: 'READY'}} />);});
   const text = JSON.stringify(renderer.toJSON());
-  expect(text).toContain('Signed updates from approved offline responders can arrive through a compatible nearby relay.');
-  expect(text).toContain('no new update can arrive without a connection path.');
-  expect(text).toContain('Connect to the internet to check cloud responder status.');
+  expect(text).toContain('A nearby SAGIP phone must connect before a new responder update can arrive.');
   expect(text).not.toContain('not enabled in this build');
 });
 
 test('unqualified relay state keeps saved history visible and makes new verification pending', async () => {
   await act(async () => {renderer = ReactTestRenderer.create(<StatusFreshness report={{...base, receiptReturnState: 'WAITING_FOR_QUALIFICATION'}} />);});
   const text = JSON.stringify(renderer.toJSON());
-  expect(text).toContain('Saved status remains available offline.');
-  expect(text).toContain('New relay updates cannot be verified yet.');
-  expect(text).not.toContain('can arrive through a compatible nearby relay');
+  expect(text).toContain('Nearby responder updates cannot be verified yet.');
+  expect(text).not.toContain('can arrive through relay');
 });
 
 test('an absent server check is never inferred from a local history read', async () => {
   await act(async () => {renderer = ReactTestRenderer.create(<StatusFreshness report={base} syncing />);});
   const text = JSON.stringify(renderer.toJSON());
-  expect(text).toContain('No successful server status check recorded.');
-  expect(text).toContain('Checking delivery and saved status');
-  expect(text).not.toContain('Last successful server check:');
+  expect(text).toContain('No server check yet.');
+  expect(text).toContain('Checking for updates');
+  expect(text).not.toContain('Last server check:');
 });
 
 test('only authenticated report-wide or matching-version verified closure ends active polling', () => {
@@ -109,7 +104,7 @@ test('resolved reports keep syncing incomplete history and outstanding details d
 test('incomplete history is clearly distinguished from the saved timeline', async () => {
   await act(async () => {renderer = ReactTestRenderer.create(<StatusFreshness report={{...base,
     statusSync: {state: 'SUCCESS', lastAttemptAt: 3000, lastSuccessAt: 3000, historyPending: true}}} />);});
-  expect(JSON.stringify(renderer.toJSON())).toContain('More server history is waiting to sync.');
+  expect(JSON.stringify(renderer.toJSON())).toContain('More history is syncing.');
 });
 
 test('large timelines render bounded pages while every saved event remains reachable', async () => {
@@ -141,11 +136,11 @@ test('conflicting current providers preserve the active SOS and show uncertainty
   expect(reportIsResolved({...conflict, providerConflict: false})).toBe(true);
   await act(async () => {renderer = ReactTestRenderer.create(<SosHistory reports={[conflict]} />);});
   await act(async () => renderer.root.findByProps({accessibilityLabel: 'SOS history for saved-1'}).props.onPress());
-  expect(JSON.stringify(renderer.toJSON())).toContain('Responder updates disagree about whether this SOS is resolved.');
-  expect(JSON.stringify(renderer.toJSON())).toContain('Your SOS stays active while the conflict is unresolved.');
+  expect(JSON.stringify(renderer.toJSON())).toContain('Responder updates conflict. SOS stays active.');
+  expect(JSON.stringify(renderer.toJSON())).toContain('Responder updates conflict. SOS stays active.');
 });
 
 test('empty history has an offline-readable explanation', async () => {
   await act(async () => {renderer = ReactTestRenderer.create(<SosHistory reports={[]} />);});
-  expect(JSON.stringify(renderer.toJSON())).toContain('No saved SOS reports yet.');
+  expect(JSON.stringify(renderer.toJSON())).toContain('No saved SOS yet.');
 });

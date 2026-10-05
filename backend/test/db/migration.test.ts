@@ -86,6 +86,12 @@ test('applies ingestion v1 migration and database identity constraints', async (
         'incident_snapshot_pages',
         'incident_snapshots',
         'incidents',
+        'offline_root_domains',
+        'offline_root_registry_audit',
+        'offline_root_revocations',
+        'offline_root_snapshots',
+        'offline_root_subjects',
+        'origin_authority_time_proofs',
         'origin_keys',
         'receipt_access_challenges',
         'receipt_access_sessions',
@@ -110,7 +116,7 @@ test('applies ingestion v1 migration and database identity constraints', async (
     const migrations = await pool.query<{name: string; checksum_sha256: string}>(
       'SELECT name, checksum_sha256 FROM schema_migrations ORDER BY name',
     );
-    assert.equal(migrations.rowCount, 10);
+    assert.equal(migrations.rowCount, 12);
     assert.equal(migrations.rows[0]?.name, '001_ingestion_v1.sql');
     assert.match(migrations.rows[0]?.checksum_sha256 ?? '', /^[0-9a-f]{64}$/);
     assert.equal(migrations.rows[1]?.name, '002_responder_v1.sql');
@@ -129,6 +135,10 @@ test('applies ingestion v1 migration and database identity constraints', async (
     assert.match(migrations.rows[7]?.checksum_sha256 ?? '', /^[0-9a-f]{64}$/);
     assert.equal(migrations.rows[8]?.name, '009_incident_messages.sql');
     assert.equal(migrations.rows[9]?.name, '010_unspecified_sos_metadata.sql');
+    assert.equal(migrations.rows[10]?.name, '011_offline_root_snapshots.sql');
+    assert.equal(migrations.rows[11]?.name, '012_origin_authority_time.sql');
+    assert.match(migrations.rows[10]?.checksum_sha256 ?? '', /^[0-9a-f]{64}$/);
+    assert.match(migrations.rows[11]?.checksum_sha256 ?? '', /^[0-9a-f]{64}$/);
     assert.match(migrations.rows[9]?.checksum_sha256 ?? '', /^[0-9a-f]{64}$/);
     assert.match(migrations.rows[8]?.checksum_sha256 ?? '', /^[0-9a-f]{64}$/);
 

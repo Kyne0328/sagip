@@ -7,7 +7,7 @@ import {createPostgresSagipRateLimiters} from './http/rateLimiter.js';
 import {IngestionService} from './ingestion/service.js';
 import {ResponderService} from './responder/service.js';
 import {IncidentSnapshotService} from './responder/incidentSnapshot.js';
-import {createOfflineReceiptRuntime} from './responder/offlineReceiptRuntime.js';
+import {loadConfiguredOfflineReceiptRuntime} from './responder/offlineReceiptConfiguration.js';
 
 const MIGRATIONS_DIR = fileURLToPath(new URL('../migrations/', import.meta.url));
 
@@ -20,7 +20,7 @@ async function main(): Promise<void> {
   const port = parsePort(process.env.PORT);
   const pool = createPool(databaseUrl);
   try {
-    const offlineRuntime = createOfflineReceiptRuntime(pool, process.env);
+    const offlineRuntime = await loadConfiguredOfflineReceiptRuntime(pool, process.env);
     await applyMigrations(pool, MIGRATIONS_DIR);
     const ingestion = new IngestionService(pool);
     const responderService = new ResponderService(pool);

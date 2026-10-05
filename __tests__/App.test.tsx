@@ -3,7 +3,12 @@ import ReactTestRenderer, {act} from 'react-test-renderer';
 import {ScrollView} from 'react-native';
 
 import App from '../App';
+import {prepareSosLocation} from '../src/emergency/prepareSosLocation';
 import {SurvivalCore} from '../src/emergency/SurvivalCore';
+
+jest.mock('../src/emergency/prepareSosLocation', () => ({
+  prepareSosLocation: jest.fn().mockResolvedValue('STARTED'),
+}));
 
 jest.mock('../src/emergency/SurvivalCore', () => ({
   SurvivalCore: {
@@ -19,6 +24,7 @@ jest.mock('../src/emergency/SurvivalCore', () => ({
 }));
 
 const core = SurvivalCore as jest.Mocked<typeof SurvivalCore>;
+const prepareLocation = prepareSosLocation as jest.MockedFunction<typeof prepareSosLocation>;
 const report = {
   reportId: 'report-1',
   createdAt: 1234,
@@ -69,18 +75,85 @@ test('shows SAGIP branding and an offline-safe SOS entry point with accessibilit
       accessibilityLabel: 'SAGIP locator pin with medical plus logo',
     }),
   ).toBeTruthy();
-  expect(JSON.stringify(renderer.toJSON())).toContain('Save an SOS even without internet.');
+  expect(JSON.stringify(renderer.toJSON())).toContain('SOS saves even without internet.');
   expect(JSON.stringify(renderer.toJSON())).not.toContain(
-    'If internet works, SAGIP sends directly to the server.',
+    'With internet, SAGIP sends to the server. Without internet, nearby SAGIP phones can relay it.',
   );
-  const sosBtn = renderer.root.findByProps({accessibilityLabel: 'Create emergency SOS report'});
+  const sosBtn = renderer.root.findByProps({accessibilityLabel: 'Save emergency SOS'});
   expect(sosBtn).toBeTruthy();
   expect(sosBtn.props.accessibilityRole).toBe('button');
-  expect(sosBtn.props.accessibilityHint).toContain('save SOS locally');
+  expect(sosBtn.props.accessibilityHint).toContain('Saves the SOS on this phone');
   expect(
     renderer.root.findAllByProps({accessibilityLiveRegion: 'polite'}).length,
   ).toBeGreaterThan(0);
+  expect(prepareLocation).toHaveBeenCalledWith(false);
 });
+
+test('requests location permission only after the SOS is durably saved', async () => {
+  let resolveSave!: (value: typeof report) => void;
+  core.createEmergencyReport.mockReturnValueOnce(new Promise(resolve => {
+    resolveSave = resolve;
+  }));
+  core.listEmergencyReports.mockResolvedValueOnce([]).mockResolvedValue([report]);
+  const renderer = await renderApp();
+  try {
+    expect(prepareLocation).toHaveBeenCalledWith(false);
+    prepareLocation.mockClear();
+
+    const sos = renderer.root.findByProps({accessibilityLabel: 'Save emergency SOS'});
+    await act(async () => {
+      sos.props.onPress();
+    });
+
+    expect(core.createEmergencyReport).toHaveBeenCalledTimes(1);
+    expect(sos.props.accessibilityState.busy).toBe(true);
+    expect(prepareLocation).not.toHaveBeenCalled();
+    expect(JSON.stringify(renderer.toJSON())).not.toContain(
+      'SOS saved on this device.',
+    );
+
+    await act(async () => {
+      resolveSave(report);
+    });
+
+    expect(prepareLocation).toHaveBeenCalledTimes(1);
+    expect(prepareLocation).toHaveBeenCalledWith(true);
+    expect(JSON.stringify(renderer.toJSON())).toContain(
+      'SOS saved on this device.',
+    );
+  } finally {
+    act(() => renderer.unmount());
+  }
+});
+
+test.each(['DENIED', 'UNAVAILABLE'] as const)(
+  'keeps the SOS saved and delivery active when location preparation returns %s',
+  async outcome => {
+    core.listEmergencyReports.mockResolvedValueOnce([]).mockResolvedValue([report]);
+    const renderer = await renderApp();
+    try {
+      prepareLocation.mockClear();
+      prepareLocation.mockResolvedValueOnce(outcome);
+
+      await act(async () => {
+        renderer.root.findByProps({accessibilityLabel: 'Save emergency SOS'}).props.onPress();
+      });
+
+      expect(core.createEmergencyReport).toHaveBeenCalledTimes(1);
+      expect(core.createEmergencyReport).toHaveBeenCalledWith({});
+      expect(prepareLocation).toHaveBeenCalledTimes(1);
+      expect(prepareLocation).toHaveBeenCalledWith(true);
+      expect(core.triggerDelivery).toHaveBeenCalled();
+      const rendered = JSON.stringify(renderer.toJSON());
+      expect(rendered).toContain('SOS saved on this device.');
+      expect(rendered).toContain('Waiting to send');
+      expect(rendered).not.toContain('Could not save SOS. Try again.');
+      expect(renderer.root.findAllByProps({accessibilityRole: 'alert'})).toHaveLength(0);
+    } finally {
+      act(() => renderer.unmount());
+    }
+  },
+);
 
 test('keeps delivery and location explanations available behind Help', async () => {
   const renderer = await renderApp();
@@ -88,15 +161,15 @@ test('keeps delivery and location explanations available behind Help', async () 
   expect(help.props.accessibilityState.expanded).toBe(false);
   await act(async () => help.props.onPress());
   expect(JSON.stringify(renderer.toJSON())).toContain(
-    'If internet works, SAGIP sends directly to the server.',
+    'With internet, SAGIP sends to the server. Without internet, nearby SAGIP phones can relay it.',
   );
   expect(JSON.stringify(renderer.toJSON())).toContain(
-    'Your SOS still saves if location permission or GPS is unavailable.',
+    'SAGIP adds location when available. SOS saving does not depend on location.',
   );
   expect(help.props.accessibilityState.expanded).toBe(true);
   await act(async () => help.props.onPress());
   expect(JSON.stringify(renderer.toJSON())).not.toContain(
-    'If internet works, SAGIP sends directly to the server.',
+    'With internet, SAGIP sends to the server. Without internet, nearby SAGIP phones can relay it.',
   );
 });
 
@@ -126,29 +199,48 @@ test('creates a local SOS and tells the user it is pending delivery', async () =
   core.listEmergencyReports.mockResolvedValueOnce([]).mockResolvedValue([report]);
   const renderer = await renderApp();
 
-  await act(async () => renderer.root.findByProps({accessibilityLabel: 'Create emergency SOS report'}).props.onPress());
+  await act(async () => renderer.root.findByProps({accessibilityLabel: 'Save emergency SOS'}).props.onPress());
 
   expect(core.createEmergencyReport).toHaveBeenCalledWith({});
-  expect(JSON.stringify(renderer.toJSON())).toContain('SOS saved on this device. You do not need internet.');
+  expect(JSON.stringify(renderer.toJSON())).toContain('SOS saved on this device.');
   const rendered = JSON.stringify(renderer.toJSON());
-  expect(rendered).toContain('Pending delivery');
-  expect(rendered).toContain('Saved on your phone; waiting to send.');
-  expect(rendered.indexOf('SOS already active. Check delivery status')).toBeLessThan(
+  expect(rendered).toContain('Waiting to send');
+  expect(rendered).toContain('SOS is saved. SAGIP will keep trying.');
+  expect(rendered.indexOf('SOS already active')).toBeLessThan(
     rendered.indexOf('Saved on this device'),
   );
   expect(renderer.root.findAllByProps({accessibilityRole: 'alert'})).toHaveLength(0);
 });
 
-test('does not claim success when persistence fails', async () => {
-  core.createEmergencyReport.mockRejectedValue(new Error('disk full'));
+test('does not request location permission or claim success when persistence fails', async () => {
+  let rejectSave!: (reason: Error) => void;
+  core.createEmergencyReport.mockReturnValueOnce(new Promise((_resolve, reject) => {
+    rejectSave = reject;
+  }));
   const renderer = await renderApp();
+  try {
+    prepareLocation.mockClear();
 
-  await act(async () => renderer.root.findByProps({accessibilityLabel: 'Create emergency SOS report'}).props.onPress());
+    await act(async () => {
+      renderer.root.findByProps({accessibilityLabel: 'Save emergency SOS'}).props.onPress();
+    });
 
-  expect(JSON.stringify(renderer.toJSON())).toContain('SOS was not saved. Please try again.');
-  expect(JSON.stringify(renderer.toJSON())).not.toContain('SOS saved on this device. You do not need internet.');
-  const alert = renderer.root.findByProps({accessibilityRole: 'alert'});
-  expect(alert.props.accessibilityLiveRegion).toBe('assertive');
+    expect(core.createEmergencyReport).toHaveBeenCalledTimes(1);
+    expect(prepareLocation).not.toHaveBeenCalled();
+
+    await act(async () => {
+      rejectSave(new Error('disk full'));
+    });
+
+    expect(prepareLocation).not.toHaveBeenCalled();
+    expect(core.triggerDelivery).not.toHaveBeenCalled();
+    expect(JSON.stringify(renderer.toJSON())).toContain('Could not save SOS. Try again.');
+    expect(JSON.stringify(renderer.toJSON())).not.toContain('SOS saved on this device.');
+    const alert = renderer.root.findByProps({accessibilityRole: 'alert'});
+    expect(alert.props.accessibilityLiveRegion).toBe('assertive');
+  } finally {
+    act(() => renderer.unmount());
+  }
 });
 
 
@@ -157,9 +249,9 @@ test('restores a pending local report on launch', async () => {
   const renderer = await renderApp();
 
   expect(JSON.stringify(renderer.toJSON())).toContain('Saved on this device');
-  expect(JSON.stringify(renderer.toJSON())).toContain('Pending delivery');
+  expect(JSON.stringify(renderer.toJSON())).toContain('Waiting to send');
   const rendered = JSON.stringify(renderer.toJSON());
-  expect(rendered.indexOf('SOS already active. Check delivery status')).toBeLessThan(
+  expect(rendered.indexOf('SOS already active')).toBeLessThan(
     rendered.indexOf('Saved on this device'),
   );
 });
@@ -174,8 +266,8 @@ test('renders server accepted delivery state when report is accepted', async () 
   const rendered = JSON.stringify(renderer.toJSON());
   expect(rendered).toContain('Saved on this device');
   expect(rendered).toContain('Server accepted');
-  expect(rendered).toContain('Server acceptance does not by itself prove responder acknowledgement');
-  expect(rendered).not.toContain('Pending delivery');
+  expect(rendered).toContain('Responder acknowledgement is not confirmed yet.');
+  expect(rendered).not.toContain('Waiting to send');
 });
 
 test('reconciles a server-accepted report even when delivery processes no new envelope', async () => {
@@ -211,7 +303,7 @@ test('reconciles a server-accepted report even when delivery processes no new en
 
     expect(core.triggerDelivery).toHaveBeenCalled();
     expect(core.listEmergencyReports).toHaveBeenCalledTimes(2);
-    expect(JSON.stringify(renderer.toJSON())).toContain('Responders report they are on the way');
+    expect(JSON.stringify(renderer.toJSON())).toContain('Responders say they are on the way');
   } finally {
     if (renderer) {
       act(() => renderer?.unmount());
@@ -229,9 +321,9 @@ test('renders relayed to nearby SAGIP device when report is relayed to peer', as
 
   const rendered = JSON.stringify(renderer.toJSON());
   expect(rendered).toContain('Saved on this device');
-  expect(rendered).toContain('Relayed to another SAGIP device');
-  expect(rendered).toContain('does not yet mean the server or a responder received it');
-  expect(rendered).not.toContain('Pending delivery');
+  expect(rendered).toContain('Relayed to another SAGIP phone');
+  expect(rendered).toContain('Server receipt is not confirmed yet.');
+  expect(rendered).not.toContain('Waiting to send');
 });
 
 test('shows relay permission as separate from local SOS persistence', async () => {
@@ -251,7 +343,7 @@ test('shows relay permission as separate from local SOS persistence', async () =
 
   const rendered = JSON.stringify(renderer.toJSON());
   expect(rendered).toContain('Nearby relay needs permission');
-  expect(rendered).toContain('SOS saving still works without it');
+  expect(rendered).toContain('Allow nearby-device access to relay SOS messages when internet is unavailable.');
   expect(
     renderer.root.findByProps({accessibilityLabel: 'Allow nearby relay'}),
   ).toBeTruthy();
@@ -293,8 +385,8 @@ test('shows gateway custody without exposing another persons incident contents',
   const renderer = await renderApp();
 
   const rendered = JSON.stringify(renderer.toJSON());
-  expect(rendered).toContain('safely carrying 1 relayed SOS message');
-  expect(rendered).toContain('waiting to forward it to the SAGIP server');
+  expect(rendered).toContain('1 relayed SOS message saved here.');
+  expect(rendered).toContain('Waiting to forward.');
 });
 
 test('shows battery-saving relay pause as active rather than failed', async () => {
@@ -314,7 +406,7 @@ test('shows battery-saving relay pause as active rather than failed', async () =
 
   const rendered = JSON.stringify(renderer.toJSON());
   expect(rendered).toContain('Nearby relay active');
-  expect(rendered).toContain('conserving battery');
+  expect(rendered).toContain('paused to save battery');
   expect(rendered).not.toContain('Nearby relay not active');
 });
 
@@ -338,9 +430,9 @@ test('renders responder acknowledged delivery state with callsign and note', asy
   expect(rendered).toContain('Saved on this device');
   expect(rendered).toContain('Unverified responder update');
   expect(rendered).toContain(
-    'Responder has acknowledged your SOS · RESCUE-ALPHA-1 (Boat team deployed). This legacy acknowledgement is not cryptographically verified.',
+    'Responder acknowledged your SOS · RESCUE-ALPHA-1 (Boat team deployed). This update is not verified.',
   );
-  expect(rendered).not.toContain('Responders report they are on the way');
+  expect(rendered).not.toContain('Responders say they are on the way');
 });
 
 test('uses persisted responder status before saying responders are on the way', async () => {
@@ -360,7 +452,7 @@ test('uses persisted responder status before saying responders are on the way', 
   const renderer = await renderApp();
 
   expect(JSON.stringify(renderer.toJSON())).toContain(
-    'Responders report they are on the way · RESCUE-ALPHA-1 (Boat team dispatched). This legacy acknowledgement is not cryptographically verified.',
+    'Responders say they are on the way · RESCUE-ALPHA-1 (Boat team dispatched). This update is not verified.',
   );
 });
 
@@ -374,7 +466,7 @@ test('keeps a permanent delivery failure distinct from local persistence', async
   const failureRendered = JSON.stringify(renderer.toJSON());
   expect(failureRendered).toContain('Saved on this device');
   expect(failureRendered).toContain('Delivery failed permanently');
-  expect(failureRendered).toContain('automatic delivery cannot continue for this initial SOS version');
+  expect(failureRendered).toContain('Automatic delivery cannot continue.');
 });
 
 test('skipping optional details leaves the persisted SOS and delivery active', async () => {
@@ -383,11 +475,11 @@ test('skipping optional details leaves the persisted SOS and delivery active', a
   await act(async () => renderer.root.findByProps({accessibilityLabel: 'Add optional SOS details'}).props.onPress());
   await act(async () => renderer.root.findByProps({accessibilityLabel: 'Medical'}).props.onPress());
   const skip = renderer.root.findByProps({accessibilityLabel: 'Skip optional SOS details'});
-  expect(skip.props.accessibilityHint).toContain('Keeps your saved SOS');
+  expect(skip.props.accessibilityHint).toContain('Keeps the SOS');
   await act(async () => skip.props.onPress());
   expect(core.createEmergencyReport).not.toHaveBeenCalled();
   expect(core.appendEmergencyReportDetails).not.toHaveBeenCalled();
-  expect(JSON.stringify(renderer.toJSON())).toContain('Pending delivery');
+  expect(JSON.stringify(renderer.toJSON())).toContain('Waiting to send');
 });
 
 test('one tap persists without category, urgency or a permission prompt and no mobile responder entry remains', async () => {
@@ -395,12 +487,12 @@ test('one tap persists without category, urgency or a permission prompt and no m
   core.createEmergencyReport.mockResolvedValue(unspecified);
   core.listEmergencyReports.mockResolvedValueOnce([]).mockResolvedValue([unspecified]);
   const renderer = await renderApp();
-  await act(async () => renderer.root.findByProps({accessibilityLabel: 'Create emergency SOS report'}).props.onPress());
+  await act(async () => renderer.root.findByProps({accessibilityLabel: 'Save emergency SOS'}).props.onPress());
   expect(core.createEmergencyReport).toHaveBeenCalledTimes(1);
   expect(core.createEmergencyReport).toHaveBeenCalledWith({});
   expect(core.triggerDelivery).toHaveBeenCalled();
   const rendered = JSON.stringify(renderer.toJSON());
-  expect(rendered).toContain('Emergency type not specified');
+  expect(rendered).toContain('Type not specified');
   expect(rendered).toContain('Urgency not specified');
   expect(rendered).not.toContain('Responder workspace');
   expect(rendered).not.toContain('Open responder workspace');
@@ -412,7 +504,7 @@ test('rapid SOS taps issue only one request while storage is pending', async () 
   core.createEmergencyReport.mockReturnValue(new Promise(done => {resolve = done;}));
   core.listEmergencyReports.mockResolvedValueOnce([]).mockResolvedValue([report]);
   const renderer = await renderApp();
-  const button = renderer.root.findByProps({accessibilityLabel: 'Create emergency SOS report'});
+  const button = renderer.root.findByProps({accessibilityLabel: 'Save emergency SOS'});
   await act(async () => {button.props.onPress(); button.props.onPress();});
   expect(core.createEmergencyReport).toHaveBeenCalledTimes(1);
   expect(button.props.accessibilityState.busy).toBe(true);
@@ -426,7 +518,7 @@ test('failed optional details preserve the SOS and reuse operation identity on a
   await act(async () => renderer.root.findByProps({accessibilityLabel: 'Add optional SOS details'}).props.onPress());
   await act(async () => renderer.root.findByProps({accessibilityLabel: 'Need assistance'}).props.onPress());
   await act(async () => renderer.root.findByProps({accessibilityLabel: 'Save optional SOS details'}).props.onPress());
-  expect(JSON.stringify(renderer.toJSON())).toContain('Your original SOS remains saved');
+  expect(JSON.stringify(renderer.toJSON())).toContain('SOS is still saved');
   await act(async () => renderer.root.findByProps({accessibilityLabel: 'Save optional SOS details'}).props.onPress());
   expect(core.appendEmergencyReportDetails).toHaveBeenCalledTimes(2);
   expect(core.appendEmergencyReportDetails.mock.calls[1]).toEqual(core.appendEmergencyReportDetails.mock.calls[0]);
@@ -441,8 +533,8 @@ test('older SOS acknowledgement does not claim appended details were delivered',
   }]);
   const renderer = await renderApp();
   const rendered = JSON.stringify(renderer.toJSON());
-  expect(rendered).toContain('Responders report they are on the way');
-  expect(rendered).toContain('Latest details saved here and waiting to send.');
+  expect(rendered).toContain('Responders say they are on the way');
+  expect(rendered).toContain('Latest details are saved here. Waiting to send.');
 });
 
 test('details choices cannot change while operation identity or persistence is pending', async () => {
@@ -468,7 +560,7 @@ test('conflicting edit keeps choices and requires explicit refresh before retryi
   core.listEmergencyReports.mockResolvedValue([{...report, revision: 2}]);
   await act(async () => renderer.root.findByProps({accessibilityLabel: 'Save optional SOS details'}).props.onPress());
   expect(renderer.root.findByProps({accessibilityLabel: 'Flood'}).props.accessibilityState.selected).toBe(true);
-  await act(async () => renderer.root.findByProps({accessibilityLabel: 'Refresh SOS version and keep choices'}).props.onPress());
+  await act(async () => renderer.root.findByProps({accessibilityLabel: 'Refresh SOS and keep choices'}).props.onPress());
   expect(renderer.root.findByProps({accessibilityLabel: 'Flood'}).props.accessibilityState.selected).toBe(true);
   await act(async () => renderer.root.findByProps({accessibilityLabel: 'Save optional SOS details'}).props.onPress());
   expect(core.appendEmergencyReportDetails.mock.calls[1][1]).toMatchObject({expectedRevision: 2, emergencyType: 'FLOOD'});
@@ -477,7 +569,7 @@ test('conflicting edit keeps choices and requires explicit refresh before retryi
 test('active SOS action refreshes delivery instead of promising another send', async () => {
   core.listEmergencyReports.mockResolvedValue([report]);
   const renderer = await renderApp();
-  await act(async () => renderer.root.findByProps({accessibilityLabel: 'SOS already active. Check delivery status'}).props.onPress());
+  await act(async () => renderer.root.findByProps({accessibilityLabel: 'Active SOS. Check status'}).props.onPress());
   expect(core.createEmergencyReport).not.toHaveBeenCalled();
   expect(core.triggerDelivery).toHaveBeenCalled();
 });
@@ -487,21 +579,21 @@ test('authenticated report-wide status is qualified and resolved allows a new SO
     serverStatus: {status: 'RESOLVED', revision: null, statusScope: 'REPORT', updatedAt: 2000, callsign: 'TEST-UNIT', note: null}}]);
   const renderer = await renderApp();
   const text = JSON.stringify(renderer.toJSON());
-  expect(text).toContain('Server-confirmed responder update');
-  expect(text).toContain('Report-wide status');
-  expect(text).toContain('does not confirm acknowledgement of a particular details version');
+  expect(text).toContain('Responder update');
+  expect(text).toContain('Applies to the whole SOS.');
+  expect(text).toContain('Applies to the whole SOS.');
   expect(renderer.root.findAllByProps({children: 'Verified responder update'})).toHaveLength(0);
-  expect(text).toContain('Optional details are closed.');
+  expect(text).toContain('Resolved. You can send a new SOS.');
   expect(renderer.root.findAllByProps({accessibilityLabel: 'Add optional SOS details'})).toHaveLength(0);
-  expect(renderer.root.findByProps({accessibilityLabel: 'Create emergency SOS report'})).toBeTruthy();
+  expect(renderer.root.findByProps({accessibilityLabel: 'Save emergency SOS'})).toBeTruthy();
 });
 
 test('legacy resolved acknowledgement does not unlock a new SOS', async () => {
   core.listEmergencyReports.mockResolvedValue([{...report, deliveryState: 'RESPONDER_ACKNOWLEDGED',
     responderAck: {ackId: 'unverified', responderId: 'unknown', status: 'RESOLVED', callsign: null, note: null, acknowledgedAt: 2000}}]);
   const renderer = await renderApp();
-  expect(renderer.root.findByProps({accessibilityLabel: 'SOS already active. Check delivery status'})).toBeTruthy();
-  expect(renderer.root.findAllByProps({accessibilityLabel: 'Create emergency SOS report'})).toHaveLength(0);
+  expect(renderer.root.findByProps({accessibilityLabel: 'Active SOS. Check status'})).toBeTruthy();
+  expect(renderer.root.findAllByProps({accessibilityLabel: 'Save emergency SOS'})).toHaveLength(0);
   expect(renderer.root.findByProps({accessibilityLabel: 'Add optional SOS details'})).toBeTruthy();
 });
 
@@ -514,13 +606,13 @@ test.each(['DELIVERY_PENDING', 'RELAYED_TO_PEER', 'PERMANENT_FAILURE'] as const)
       serverStatus: {status: 'EN_ROUTE', revision: null, statusScope: 'REPORT', updatedAt: 2000, callsign: 'TEST-UNIT', note: null}}]);
     const renderer = await renderApp();
     const text = JSON.stringify(renderer.toJSON());
-    expect(text).toContain('Responder reports they are on the way');
-    expect(text).toContain(deliveryState === 'PERMANENT_FAILURE' ? 'Original transport confirmation unavailable' : 'Original transport confirmation pending');
-    expect(text).toContain('The server has a record of this incident.');
-    expect(text).toContain('does not have a delivery receipt for the original SOS message');
-    expect(text).toContain('Latest details saved here and waiting to send.');
-    expect(text).not.toContain('Saved on your phone; waiting to send.');
-    expect(text).not.toContain('This does not yet mean the server or a responder received it.');
+    expect(text).toContain('Responder says they are on the way');
+    expect(text).toContain(deliveryState === 'PERMANENT_FAILURE' ? 'Original delivery receipt unavailable' : 'Original delivery receipt pending');
+    expect(text).toContain('The server has this SOS.');
+    expect(text).toContain('is still missing the original delivery receipt');
+    expect(text).toContain('Latest details are saved here. Waiting to send.');
+    expect(text).not.toContain('SOS is saved. SAGIP will keep trying.');
+    expect(text).not.toContain('Server receipt is not confirmed yet.');
     expect(text).not.toContain('Delivery failed permanently');
     expect(core.createEmergencyReport).not.toHaveBeenCalled();
   },
@@ -542,7 +634,7 @@ test('trusted resolution arriving during an edit disables saving without discard
     expect(save.props.disabled).toBe(true);
     await act(async () => save.props.onPress());
     expect(core.appendEmergencyReportDetails).not.toHaveBeenCalled();
-    expect(JSON.stringify(app.toJSON())).toContain('This SOS was resolved while you were editing.');
+    expect(JSON.stringify(app.toJSON())).toContain('This SOS was resolved. Close these unsaved details.');
   } finally {
     act(() => renderer?.unmount());
     jest.useRealTimers();
@@ -552,9 +644,9 @@ test('trusted resolution arriving during an edit disables saving without discard
 test('expanding saved history never calls remote delivery', async () => {
   core.listEmergencyReports.mockResolvedValue([report]);
   const renderer = await renderApp();
-  await act(async () => renderer.root.findByProps({accessibilityLabel: 'Your SOS history'}).props.onPress());
+  await act(async () => renderer.root.findByProps({accessibilityLabel: 'SOS history'}).props.onPress());
   await act(async () => renderer.root.findByProps({accessibilityLabel: 'SOS history for report-1'}).props.onPress());
-  expect(JSON.stringify(renderer.toJSON())).toContain('Reading this history does not contact the server.');
+  expect(JSON.stringify(renderer.toJSON())).toContain('Saved timeline · newest first');
   expect(core.triggerDelivery).not.toHaveBeenCalled();
 });
 
@@ -565,7 +657,7 @@ test('optional details keep a compact SOS action without losing choices or creat
   await act(async () => renderer.root.findByProps({accessibilityLabel: 'Add optional SOS details'}).props.onPress());
   await act(async () => renderer.root.findByProps({accessibilityLabel: 'Medical'}).props.onPress());
   const compact = renderer.root.findByProps({testID: 'compact-sos-button'});
-  expect(compact.props.accessibilityLabel).toBe('Active SOS. Check saved delivery status');
+  expect(compact.props.accessibilityLabel).toBe('Active SOS. Check status');
   let ancestor = compact.parent;
   while (ancestor) {
     expect(ancestor.type).not.toBe('RCTScrollView');
@@ -601,10 +693,10 @@ test('large SOS stays above status and expanded saved history', async () => {
   const button = renderer.root.findByProps({testID: 'primary-sos-button'});
   const flattened = button.props.style({pressed: false}).filter(Boolean);
   expect(flattened[0].minHeight).toBeGreaterThanOrEqual(190);
-  await act(async () => renderer.root.findByProps({accessibilityLabel: 'Your SOS history'}).props.onPress());
+  await act(async () => renderer.root.findByProps({accessibilityLabel: 'SOS history'}).props.onPress());
   const text = JSON.stringify(renderer.toJSON());
-  expect(text.indexOf('primary-sos-button')).toBeLessThan(text.indexOf('Active SOS status'));
-  expect(text.indexOf('primary-sos-button')).toBeLessThan(text.indexOf('Your saved SOS history'));
+  expect(text.indexOf('primary-sos-button')).toBeLessThan(text.indexOf('Active SOS'));
+  expect(text.indexOf('primary-sos-button')).toBeLessThan(text.indexOf('SOS history'));
   expect(text).toContain('SOS already active');
   expect(text).not.toContain('Tap to send a new SOS');
 });
@@ -616,8 +708,8 @@ test('newer resolved history does not hide an older active SOS or unlock another
     report,
   ]);
   const renderer = await renderApp();
-  expect(renderer.root.findByProps({accessibilityLabel: 'SOS already active. Check delivery status'})).toBeTruthy();
-  expect(renderer.root.findAllByProps({accessibilityLabel: 'Create emergency SOS report'})).toHaveLength(0);
+  expect(renderer.root.findByProps({accessibilityLabel: 'Active SOS. Check status'})).toBeTruthy();
+  expect(renderer.root.findAllByProps({accessibilityLabel: 'Save emergency SOS'})).toHaveLength(0);
   await act(async () => renderer.root.findByProps({accessibilityLabel: 'Add optional SOS details'}).props.onPress());
   await act(async () => renderer.root.findByProps({accessibilityLabel: 'Flood'}).props.onPress());
   await act(async () => renderer.root.findByProps({accessibilityLabel: 'Save optional SOS details'}).props.onPress());
@@ -628,7 +720,7 @@ test('newer resolved history does not hide an older active SOS or unlock another
 test('a captured SOS handler cannot create again after an awaited save', async () => {
   core.listEmergencyReports.mockResolvedValueOnce([]).mockResolvedValue([report]);
   const renderer = await renderApp();
-  const stalePress = renderer.root.findByProps({accessibilityLabel: 'Create emergency SOS report'}).props.onPress;
+  const stalePress = renderer.root.findByProps({accessibilityLabel: 'Save emergency SOS'}).props.onPress;
   await act(async () => {await stalePress();});
   await act(async () => {await stalePress(); await stalePress();});
   expect(core.createEmergencyReport).toHaveBeenCalledTimes(1);
@@ -642,9 +734,9 @@ test('confirmed resolution permits one new SOS and rapid repeats keep the new in
   core.listEmergencyReports.mockResolvedValueOnce([resolved]).mockResolvedValue([next, resolved]);
   core.createEmergencyReport.mockResolvedValue(next);
   const renderer = await renderApp();
-  const press = renderer.root.findByProps({accessibilityLabel: 'Create emergency SOS report'}).props.onPress;
+  const press = renderer.root.findByProps({accessibilityLabel: 'Save emergency SOS'}).props.onPress;
   await act(async () => {await press();});
   await act(async () => {await press();});
   expect(core.createEmergencyReport).toHaveBeenCalledTimes(1);
-  expect(renderer.root.findByProps({accessibilityLabel: 'SOS already active. Check delivery status'})).toBeTruthy();
+  expect(renderer.root.findByProps({accessibilityLabel: 'Active SOS. Check status'})).toBeTruthy();
 });

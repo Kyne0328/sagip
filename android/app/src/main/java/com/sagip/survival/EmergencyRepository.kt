@@ -159,6 +159,85 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
     }
   }
 
+  /**
+   * Adds a best-effort device location to the current active SOS without delaying creation.
+   * A missing fix can be attached once, and one stale fix can be upgraded to a later fresh fix.
+   * Repeated equivalent/current fixes are idempotent and produce no duplicate revision.
+   */
+  fun attachLocationToActiveReportIfBetter(
+    location: LocationSnapshot,
+    now: Long = System.currentTimeMillis(),
+  ): Boolean {
+    require(location.latitude.isFinite() && location.latitude in -90.0..90.0)
+    require(location.longitude.isFinite() && location.longitude in -180.0..180.0)
+    require(location.accuracyMeters == null || (location.accuracyMeters.isFinite() && location.accuracyMeters >= 0.0))
+    require(location.capturedAt >= 0L)
+    require(location.source == "GPS" || location.source == "NETWORK")
+    require(location.freshness == "FRESH" || location.freshness == "STALE")
+
+    val db = database.writableDatabase
+    db.beginTransaction()
+    try {
+      val reportId = findActiveReportId(db)
+      if (reportId == null) {
+        db.setTransactionSuccessful()
+        return false
+      }
+      val current = readRevisionSummary(db, reportId)
+      val existing = current.location
+      val improvesLocation = existing == null || (
+        existing.freshness == "STALE" && location.freshness == "FRESH" && location.capturedAt > existing.capturedAt
+      )
+      if (!improvesLocation || current.latestRevision == Int.MAX_VALUE) {
+        db.setTransactionSuccessful()
+        return false
+      }
+
+      val revision = current.latestRevision + 1
+      val messageId = UUID.randomUUID().toString()
+      insertOrThrow(db, "report_revisions", ContentValues().apply {
+        put("report_id", reportId)
+        put("revision", revision)
+        put("created_at", now)
+        put("emergency_type", current.emergencyType.name)
+        put("urgency", current.urgency.name)
+        put("message", current.message)
+        putLocationSnapshot(this, location)
+      })
+      val locationRow = ContentValues().apply {
+        put("report_id", reportId)
+        put("latitude", location.latitude)
+        put("longitude", location.longitude)
+        location.accuracyMeters?.let { put("accuracy_meters", it) }
+        put("captured_at", location.capturedAt)
+        put("source", location.source)
+        put("freshness", location.freshness)
+      }
+      val updatedLocationRows = db.update("locations", locationRow, "report_id = ?", arrayOf(reportId))
+      if (updatedLocationRows == 0) {
+        insertOrThrow(db, "locations", locationRow)
+      } else {
+        check(updatedLocationRows == 1) { "Unexpected duplicate location rows for report" }
+      }
+      insertOrThrow(db, "outbound_envelopes", ContentValues().apply {
+        put("message_id", messageId)
+        put("report_id", reportId)
+        put("revision", revision)
+        put("priority", priorityFor(current.urgency))
+        put("created_at", now)
+        put("next_attempt_at", now)
+        put("attempt_count", 0)
+        put("delivery_state", DELIVERY_PENDING)
+        put("preparation_state", PREPARATION_NEEDS)
+      })
+      insertDeliveryEvent(db, reportId, messageId, EVENT_LOCAL_COMMIT, now)
+      db.setTransactionSuccessful()
+      return true
+    } finally {
+      db.endTransaction()
+    }
+  }
+
   /** Commits a full immutable snapshot; signing and transport happen after this returns. */
   fun appendEmergencyDetails(
     input: AppendEmergencyDetailsInput,
@@ -188,8 +267,19 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
       }
 
       val current = readRevisionSummary(db, request.reportId)
-      if (VictimStatusStore.isResolved(db, request.reportId, current.latestRevision) || current.latestRevision != request.expectedRevision) {
+      if (VictimStatusStore.isResolved(db, request.reportId, current.latestRevision)) {
         throw EmergencyDetailsException("DETAILS_CONFLICT", "Report resolved or details changed; restore before editing")
+      }
+      if (current.latestRevision != request.expectedRevision) {
+        if (request.expectedRevision > current.latestRevision) {
+          throw EmergencyDetailsException("DETAILS_CONFLICT", "Report resolved or details changed; restore before editing")
+        }
+        val expected = readRevisionSummary(db, request.reportId, request.expectedRevision)
+        val detailsChangedSinceExpected = expected.emergencyType != current.emergencyType ||
+          expected.urgency != current.urgency || expected.message != current.message
+        if (detailsChangedSinceExpected) {
+          throw EmergencyDetailsException("DETAILS_CONFLICT", "Report resolved or details changed; restore before editing")
+        }
       }
       val category = request.emergencyType ?: current.emergencyType
       val urgency = request.urgency ?: current.urgency

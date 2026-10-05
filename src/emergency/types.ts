@@ -58,6 +58,7 @@ export interface ResponderAckInfo {
 export const VERIFIED_RECEIPT_KINDS = [
   'VERIFIED_CURRENT',
   'VERIFIED_OFFLINE_AUTHORITY',
+  'VERIFIED_OFFLINE_ROOT_SNAPSHOT',
 ] as const;
 export type VerifiedReceiptKind = (typeof VERIFIED_RECEIPT_KINDS)[number];
 
@@ -83,6 +84,10 @@ export interface VerifiedReceiptInfo {
   callsign: string;
   note: string;
   requesterDeliveryState: RequesterDeliveryState;
+  // Required by the native bridge for historical root snapshots only.
+  issuedAt?: number;
+  authorityExpiresAt?: number;
+  offlineEvidenceState?: 'VALID_AT_LAST_CHECK' | 'EXPIRED' | 'TIME_UNAVAILABLE' | 'REVOKED' | 'CONFLICT';
 }
 
 export interface LocationSnapshot {
@@ -116,7 +121,7 @@ export interface EmergencyHistoryEvent {
   occurredAt: number;
   revision: number | null;
   status: string | null;
-  provenance: 'LOCAL' | 'SERVER_AUTHENTICATED' | 'UNVERIFIED' | 'VERIFIED_CURRENT' | 'VERIFIED_OFFLINE_AUTHORITY';
+  provenance: 'LOCAL' | 'SERVER_AUTHENTICATED' | 'UNVERIFIED' | 'VERIFIED_CURRENT' | 'VERIFIED_OFFLINE_AUTHORITY' | 'VERIFIED_OFFLINE_ROOT_SNAPSHOT';
   callsign: string | null;
   note: string | null;
 }
@@ -141,6 +146,8 @@ export interface ServerStatusInfo {
 export interface EmergencyReportSummary {
   /** Independently verified current providers disagree about incident closure. */
   providerConflict?: boolean;
+  /** Native report-wide closure hold, even when another provider's receipt is selected. */
+  offlineSnapshotClosureHold?: boolean;
   /** Qualified delegated receipt capability; READY does not imply an available contact path. */
   receiptReturnState?: 'DISABLED' | 'WAITING_FOR_QUALIFICATION' | 'READY';
   serverStatus?: ServerStatusInfo;

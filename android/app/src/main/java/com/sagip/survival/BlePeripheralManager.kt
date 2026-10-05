@@ -27,6 +27,8 @@ class BlePeripheralManager(
   private val onDurableRelayReceived: () -> Unit = {},
   private val objectContextProvider: ((ObjectKind, ByteArray) -> VerificationContext?)? = null,
   private val canForwardObject: ((ObjectKind, ByteArray) -> Boolean)? = null,
+  private val admitObject: ((ObjectKind, ByteArray) -> CustodyResult)? = null,
+  private val extensionActiveProvider: () -> Boolean = { false },
 ) : BlePeripheralController {
   private val bluetoothManager: BluetoothManager? =
     context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
@@ -45,6 +47,7 @@ class BlePeripheralManager(
   private data class ExtensionSnapshot(
     val snapshotId: String,
     val entries: List<InventoryEntry>,
+    val objectMask: Int,
     var lastActivityAtMs: Long,
   )
   private val extensionControlResponses = ConcurrentHashMap<String, ByteArray>()
@@ -113,7 +116,9 @@ class BlePeripheralManager(
       characteristic: BluetoothGattCharacteristic,
     ) {
       if (characteristic.uuid == BleProtocolConstants.CHARACTERISTIC_EXTENSION_CAPABILITY_UUID) {
-        val encoded = if (extensionEnabled()) BleReceiptExchangeCodec.encodeCapability() else ByteArray(0)
+        val encoded = if (extensionEnabled()) BleReceiptExchangeCodec.encodeCapability(
+          if (admitObject != null) BleReceiptExchangeCodec.SUPPORTED_OBJECT_MASK else BleReceiptExchangeCodec.LEGACY_OBJECT_MASK,
+        ) else ByteArray(0)
         sendLongReadResponse(device, requestId, offset, encoded)
         return
       }
@@ -224,7 +229,9 @@ class BlePeripheralManager(
     }
   }
 
-  private fun extensionEnabled(): Boolean = receiptQueue != null && runCatching { verificationContextProvider()?.trustedTime != null }.getOrDefault(false)
+  private fun extensionEnabled(): Boolean = receiptQueue != null && runCatching {
+    verificationContextProvider()?.trustedTime != null || (admitObject != null && extensionActiveProvider())
+  }.getOrDefault(false)
 
   private fun canAdvertiseEntry(entry: InventoryEntry): Boolean = runCatching {
     val stored = receiptQueue?.getObject(entry.objectId, entry.digest) ?: return false
@@ -232,6 +239,7 @@ class BlePeripheralManager(
   }.getOrDefault(false)
 
   private fun forwardAllowed(kind: ObjectKind, bytes: ByteArray): Boolean = runCatching {
+    if (!BleReceiptExchangeCodec.canTransferWithoutTime(kind) && verificationContextProvider()?.trustedTime == null) return false
     canForwardObject?.invoke(kind, bytes) ?: run {
       val context = verificationContextProvider() ?: return false
       if (kind == ObjectKind.SOS) context.trustedTime != null
@@ -288,9 +296,16 @@ class BlePeripheralManager(
   private fun admitExtensionObject(kind: ObjectKind, bytes: ByteArray): CustodyResult {
     val queue = receiptQueue
       ?: return CustodyResult(CustodyResultKind.PENDING_VERIFICATION, reason = "RECEIPT_EXTENSION_DISABLED")
-    val context = if (objectContextProvider != null) objectContextProvider.invoke(kind, bytes) else verificationContextProvider()
-    if (context == null) return CustodyResult(CustodyResultKind.PENDING_VERIFICATION, reason = "VERIFICATION_CONTEXT_UNAVAILABLE")
-    val result = queue.admitObject(bytes, kind, context)
+    val result = if (admitObject != null) {
+      admitObject.invoke(kind, bytes)
+    } else {
+      if (kind == ObjectKind.OFFLINE_ROOT_BUNDLE || kind == ObjectKind.OFFLINE_ROOT_REVOCATION) {
+        return CustodyResult(CustodyResultKind.PENDING_VERIFICATION, reason = "OFFLINE_ROOT_BUNDLE_DISABLED")
+      }
+      val context = if (objectContextProvider != null) objectContextProvider.invoke(kind, bytes) else verificationContextProvider()
+      if (context == null) return CustodyResult(CustodyResultKind.PENDING_VERIFICATION, reason = "VERIFICATION_CONTEXT_UNAVAILABLE")
+      queue.admitObject(bytes, kind, context)
+    }
     if (result.kind == CustodyResultKind.COMMITTED || result.kind == CustodyResultKind.DUPLICATE) {
       runCatching { onDurableRelayReceived() }
     }
@@ -298,6 +313,16 @@ class BlePeripheralManager(
   }
 
   private fun extensionPreflightDecision(entry: InventoryEntry): BleDecisionCode? {
+    if (!BleReceiptExchangeCodec.canTransferWithoutTime(entry.objectKind) && verificationContextProvider()?.trustedTime == null) {
+      return BleDecisionCode.UNVERIFIED_AUTHORITY
+    }
+    if (entry.objectKind == ObjectKind.OFFLINE_ROOT_BUNDLE || entry.objectKind == ObjectKind.OFFLINE_ROOT_REVOCATION) {
+      if (admitObject == null) return BleDecisionCode.UNSUPPORTED
+      val stored = receiptQueue?.getObject(entry.objectId, entry.digest)
+      if (stored != null && !forwardAllowed(entry.objectKind, stored.bytes)) return BleDecisionCode.UNVERIFIED_AUTHORITY
+      // Expired/evicted custody has no exact bytes to reverify. Do not ACK a tombstone alone.
+      if (stored == null) return null
+    }
     val known = receiptQueue?.knownVerifiedDigest(entry.objectKind, entry.objectId) ?: return null
     return if (java.security.MessageDigest.isEqual(known, entry.digest)) {
       BleDecisionCode.ALREADY_HAVE_VERIFIED
@@ -313,8 +338,11 @@ class BlePeripheralManager(
   }
 
   private fun alreadyHaveVerifiedExtensionObject(entry: InventoryEntry): Boolean {
+    if (!BleReceiptExchangeCodec.canTransferWithoutTime(entry.objectKind) && verificationContextProvider()?.trustedTime == null) return false
     val queue = receiptQueue ?: return false
-    return queue.getObject(entry.objectId, entry.digest) != null
+    val stored = queue.getObject(entry.objectId, entry.digest) ?: return false
+    return (entry.objectKind != ObjectKind.OFFLINE_ROOT_BUNDLE && entry.objectKind != ObjectKind.OFFLINE_ROOT_REVOCATION) ||
+      forwardAllowed(entry.objectKind, stored.bytes)
   }
 
   private fun handleExtensionControlWrite(
@@ -358,14 +386,17 @@ class BlePeripheralManager(
     }
     if (request.snapshotId == null) {
       if (snapshot == null) {
-        val entries = requireNotNull(receiptQueue).contactInventory(BleReceiptExchangeCodec.MAX_INVENTORY_ENTRIES, ::forwardAllowed)
-        snapshot = ExtensionSnapshot(UUID.randomUUID().toString(), entries.map { it.copy(digest = it.digest.copyOf()) }, now)
+        val entries = requireNotNull(receiptQueue).contactInventory(BleReceiptExchangeCodec.MAX_INVENTORY_ENTRIES) { kind, bytes ->
+          BleReceiptExchangeCodec.supportsObject(request.objectMask, kind) && forwardAllowed(kind, bytes)
+        }
+        snapshot = ExtensionSnapshot(UUID.randomUUID().toString(), entries.map { it.copy(digest = it.digest.copyOf()) }, request.objectMask, now)
         extensionSnapshots[peerId] = snapshot
       }
     } else {
       require(snapshot != null && snapshot.snapshotId == request.snapshotId) { "unknown inventory snapshot" }
     }
     val active = requireNotNull(snapshot)
+    require(active.objectMask == request.objectMask) { "inventory capabilities changed" }
     require(active.entries.all(::canAdvertiseEntry)) { "inventory authority changed" }
     active.lastActivityAtMs = now
     val from = request.pageIndex * BleReceiptExchangeCodec.MAX_INVENTORY_PAGE_ENTRIES

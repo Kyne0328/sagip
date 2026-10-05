@@ -266,6 +266,16 @@ class ReceiptRepository(
   fun getReceipt(actionId:String):ByteArray?=getReceiptLocked(database.readableDatabase,actionId)?.copyOf()
 
   fun applyToReport(bytes:ByteArray, context:VerificationContext):ReceiptApplication {
+    if(context.offlineRoot != null) return ReceiptApplication.REJECTED
+    return applyToReportInternal(bytes,context)
+  }
+
+  internal fun applyOfflineRootToReport(bytes:ByteArray, context:VerificationContext):ReceiptApplication {
+    if(!OfflineRootSnapshotStore.preparedEvidenceExists(database,bytes,context)) return ReceiptApplication.REJECTED
+    return applyToReportInternal(bytes,context)
+  }
+
+  private fun applyToReportInternal(bytes:ByteArray, context:VerificationContext):ReceiptApplication {
     if(bytes.size !in 1..8192)return ReceiptApplication.REJECTED
     val decoded=try{ReceiptV2Codec.decode(bytes)}catch(_:Exception){return ReceiptApplication.REJECTED}
     val reportId:String;val revision:Int;val eventId:String;val expiry:Long
@@ -806,6 +816,8 @@ class ReceiptRepository(
 
   /** Identity was bound only after verification of an immutable locally retained SOS envelope. */
   fun reportIdentity(reportId: String, revision: Int) = reportIdentity(database.readableDatabase, reportId, revision)
+
+  fun reportIdentity(reportId: String): ReportIdentity? = latestIdentity(database.readableDatabase, reportId)
 
   private fun latestIdentity(db: SQLiteDatabase, reportId: String): ReportIdentity? = db.rawQuery(
     "SELECT revision,report_protocol_version,payload_digest,origin_key_id,origin_public_key_der FROM receipt_report_identities WHERE report_id=? ORDER BY revision DESC LIMIT 1",

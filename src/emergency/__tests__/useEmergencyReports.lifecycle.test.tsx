@@ -106,7 +106,7 @@ test('an older startup read cannot erase a newly committed SOS', async () => {
 test('successful foreground restoration clears an obsolete load error', async () => {
   core.listEmergencyReports.mockRejectedValueOnce(new Error('Temporary database failure'));
   await mount();
-  expect(current.message).toBe('Saved SOS reports could not be loaded.');
+  expect(current.message).toBe('Could not load saved SOS reports.');
   const listener = (AppState.addEventListener as jest.Mock).mock.calls[0][1];
   await act(async () => {listener('active');});
   expect(current.message).toBeNull();

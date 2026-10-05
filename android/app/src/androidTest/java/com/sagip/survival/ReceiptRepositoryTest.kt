@@ -1104,88 +1104,10 @@ class ReceiptRepositoryTest {
   }
 
   private fun createVersion7Database(reportId: String, envelopeBytes: ByteArray) {
-    val path = context.getDatabasePath(SagipDatabase.DATABASE_NAME)
-    path.parentFile?.mkdirs()
-    FrameworkSQLiteDatabase.openOrCreateDatabase(path, null).use { raw ->
-      raw.execSQL(
-        """
-          CREATE TABLE reports (
-            report_id TEXT PRIMARY KEY NOT NULL,
-            created_at INTEGER NOT NULL,
-            emergency_type TEXT NOT NULL,
-            urgency TEXT NOT NULL,
-            lifecycle_state TEXT NOT NULL
-          )
-        """.trimIndent(),
-      )
-      raw.execSQL(
-        """
-          CREATE TABLE report_revisions (
-            report_id TEXT NOT NULL,
-            revision INTEGER NOT NULL,
-            created_at INTEGER NOT NULL,
-            emergency_type TEXT NOT NULL,
-            urgency TEXT NOT NULL,
-            PRIMARY KEY (report_id, revision)
-          )
-        """.trimIndent(),
-      )
-      raw.execSQL(
-        """
-          CREATE TABLE outbound_envelopes (
-            message_id TEXT PRIMARY KEY NOT NULL,
-            report_id TEXT NOT NULL UNIQUE,
-            revision INTEGER NOT NULL,
-            envelope_bytes BLOB,
-            priority INTEGER NOT NULL DEFAULT 100,
-            created_at INTEGER NOT NULL,
-            expires_at INTEGER,
-            next_attempt_at INTEGER NOT NULL,
-            attempt_count INTEGER NOT NULL DEFAULT 0,
-            delivery_state TEXT NOT NULL,
-            preparation_state TEXT NOT NULL DEFAULT 'NEEDS_PREPARATION'
-          )
-        """.trimIndent(),
-      )
-      raw.insertOrThrow(
-        "reports",
-        null,
-        ContentValues().apply {
-          put("report_id", reportId)
-          put("created_at", 100L)
-          put("emergency_type", "MEDICAL")
-          put("urgency", "NEED_ASSISTANCE")
-          put("lifecycle_state", "LOCALLY_COMMITTED")
-        },
-      )
-      raw.insertOrThrow(
-        "report_revisions",
-        null,
-        ContentValues().apply {
-          put("report_id", reportId)
-          put("revision", 1)
-          put("created_at", 100L)
-          put("emergency_type", "MEDICAL")
-          put("urgency", "NEED_ASSISTANCE")
-        },
-      )
-      raw.insertOrThrow(
-        "outbound_envelopes",
-        null,
-        ContentValues().apply {
-          put("message_id", "receipt-migration-message")
-          put("report_id", reportId)
-          put("revision", 1)
-          put("envelope_bytes", envelopeBytes)
-          put("priority", 10)
-          put("created_at", 100L)
-          put("next_attempt_at", 100L)
-          put("attempt_count", 0)
-          put("delivery_state", "DELIVERY_PENDING")
-          put("preparation_state", "READY")
-        },
-      )
-      raw.version = 7
+    // Use the complete historical schema, then restore this test's signed/ready-envelope precondition.
+    createLegacyDatabase(7, reportId, "receipt-migration-message", envelopeBytes)
+    FrameworkSQLiteDatabase.openOrCreateDatabase(context.getDatabasePath(SagipDatabase.DATABASE_NAME), null).use { raw ->
+      raw.execSQL("UPDATE outbound_envelopes SET preparation_state='READY' WHERE report_id=?", arrayOf(reportId))
     }
   }
 

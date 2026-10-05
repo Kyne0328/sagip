@@ -124,16 +124,16 @@ test('requester assurance requires current verified receipt evidence', async () 
 
   const legacy = await renderApp();
   const legacyText = JSON.stringify(legacy.toJSON());
-  expect(legacyText).not.toContain('Responder acknowledged your current SOS');
+  expect(legacyText).not.toContain('Responder acknowledged this SOS');
   expect(legacyText).toContain('Unverified responder update');
   act(() => legacy.unmount());
 
   setReports([reportWithVerifiedReceipt()]);
   const verified = await renderApp();
   const verifiedText = JSON.stringify(verified.toJSON());
-  expect(verifiedText).toContain('Responder acknowledged your current SOS');
+  expect(verifiedText).toContain('Responder acknowledged this SOS');
   expect(verifiedText).toContain('TAGUM-1');
-  expect(verifiedText).toContain('Requester return confirmation not yet received');
+  expect(verifiedText).not.toContain('Requester return confirmation');
 });
 
 test('verified responder action text stays qualified and visible when return signing is unavailable', async () => {
@@ -147,9 +147,9 @@ test('verified responder action text stays qualified and visible when return sig
 
   const renderer = await renderApp();
   const rendered = JSON.stringify(renderer.toJSON());
-  expect(rendered).toContain('Responder reports they are on the way');
+  expect(rendered).toContain('Responder says they are on the way');
   expect(rendered).toContain('Unit dispatched');
-  expect(rendered).toContain('Requester return confirmation not yet received');
+  expect(rendered).not.toContain('Requester return confirmation');
   expect(rendered).not.toContain('Responder received your return confirmation');
 });
 
@@ -158,9 +158,9 @@ test('historical receipt names its version and does not imply current authority 
   const renderer = await renderApp();
   const text = JSON.stringify(renderer.toJSON());
   expect(text).toContain('Responder acknowledged SOS version 1');
-  expect(text).not.toContain('Responder acknowledged your current SOS');
-  expect(text).toContain('Authority last checked:');
-  expect(text).toContain('was verified when this receipt was accepted');
+  expect(text).not.toContain('Responder acknowledged this SOS');
+  expect(text).not.toContain('Current revocation status is unavailable');
+  expect(text).not.toContain('Requester return confirmation');
 });
 
 test('offline authority evidence names unavailable live revocation knowledge', async () => {
@@ -175,9 +175,9 @@ test('offline authority evidence names unavailable live revocation knowledge', a
 
   const renderer = await renderApp();
   const rendered = JSON.stringify(renderer.toJSON());
-  expect(rendered).toContain('Responder reports they are on scene');
-  expect(rendered).toContain('Verified using offline responder credentials');
-  expect(rendered).toContain('Current revocation status is unavailable');
+  expect(rendered).toContain('Responder says they are on scene');
+  expect(rendered).toContain('Responder approval was verified offline');
+  expect(rendered).toContain('Current approval cannot be checked');
 });
 
 test('conflicting providers keep the SOS active and qualify accessibility announcements', async () => {
@@ -186,13 +186,29 @@ test('conflicting providers keep the SOS active and qualify accessibility announ
   const announce = jest.spyOn(AccessibilityInfo, 'announceForAccessibility');
   const renderer = await renderApp();
   const text = JSON.stringify(renderer.toJSON());
-  expect(text).toContain('Active SOS status');
-  expect(text).toContain('Your SOS stays active while the conflict is unresolved.');
-  expect(text).not.toContain('This SOS is resolved. You can view its history or send a new SOS.');
+  expect(text).toContain('Active SOS');
+  expect(text).toContain('Responder updates conflict. SOS stays active.');
+  expect(text).not.toContain('Resolved. You can send a new SOS.');
   expect(announce).toHaveBeenCalledWith(
-    'Responder updates disagree about whether this SOS is resolved. Your SOS stays active.',
+    'Responder updates conflict. SOS stays active.',
   );
-  expect(announce).not.toHaveBeenCalledWith('Responder reports this incident is resolved');
+  expect(announce).not.toHaveBeenCalledWith('Responder marked this resolved');
+  act(() => renderer.unmount());
+});
+
+test('offline root snapshot resolution stays active and qualifies its accessibility announcement', async () => {
+  setReports([reportWithVerifiedReceipt({verificationKind: 'VERIFIED_OFFLINE_ROOT_SNAPSHOT',
+    status: 'RESOLVED', note: '', issuedAt: 1788565000000, authorityExpiresAt: 1788565900000,
+    offlineEvidenceState: 'VALID_AT_LAST_CHECK'})]);
+  core.claimVerifiedReceiptNotification.mockResolvedValueOnce(true);
+  const announce = jest.spyOn(AccessibilityInfo, 'announceForAccessibility');
+  const renderer = await renderApp();
+  const text = JSON.stringify(renderer.toJSON());
+  expect(text).toContain('Active SOS');
+  expect(text).toContain('Saved responder update');
+  expect(text).toContain('Current responder approval cannot be confirmed offline');
+  expect(announce).toHaveBeenCalledWith('Saved responder update says resolved. SOS stays active until confirmed.');
+  expect(text).not.toContain('Resolved. You can send a new SOS.');
   act(() => renderer.unmount());
 });
 
@@ -213,7 +229,7 @@ test('durable notification claim prevents replay and restart announcements', asy
     report.verifiedReceipt?.eventId,
   );
   expect(announce).toHaveBeenCalledTimes(1);
-  expect(announce).toHaveBeenCalledWith('Responder acknowledged your current SOS');
+  expect(announce).toHaveBeenCalledWith('Responder acknowledged this SOS');
   act(() => first.unmount());
 
   const reopened = await renderApp();
@@ -222,5 +238,5 @@ test('durable notification claim prevents replay and restart announcements', asy
   });
   expect(core.claimVerifiedReceiptNotification).toHaveBeenCalledTimes(2);
   expect(announce).toHaveBeenCalledTimes(1);
-  expect(JSON.stringify(reopened.toJSON())).toContain('Responder acknowledged your current SOS');
+  expect(JSON.stringify(reopened.toJSON())).toContain('Responder acknowledged this SOS');
 });

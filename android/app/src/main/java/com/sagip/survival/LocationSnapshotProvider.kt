@@ -41,7 +41,7 @@ class LocationSnapshotProvider(private val context: Context) {
     return candidates[bestIndex].toSnapshot(now)
   }
 
-  fun primeBestEffortLocation(): Boolean {
+  fun primeBestEffortLocation(onLocationAvailable: (() -> Unit)? = null): Boolean {
     if (!hasLocationPermission()) return false
     val manager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return false
 
@@ -57,11 +57,13 @@ class LocationSnapshotProvider(private val context: Context) {
             CancellationSignal(),
             ContextCompat.getMainExecutor(context),
           ) { location ->
-            location?.takeIf(::isUsable)?.let(::rememberLocation)
+            location?.takeIf(::isUsable)?.let {
+              if (rememberLocation(it)) onLocationAvailable?.invoke()
+            }
           }
         }.isSuccess
       } else {
-        requestSingleUpdate(manager, provider)
+        requestSingleUpdate(manager, provider, onLocationAvailable)
       }
       started = started || providerStarted
     }
@@ -87,10 +89,14 @@ class LocationSnapshotProvider(private val context: Context) {
   }
 
   @Suppress("DEPRECATION")
-  private fun requestSingleUpdate(manager: LocationManager, provider: String): Boolean {
+  private fun requestSingleUpdate(
+    manager: LocationManager,
+    provider: String,
+    onLocationAvailable: (() -> Unit)?,
+  ): Boolean {
     val listener = object : LocationListener {
       override fun onLocationChanged(location: Location) {
-        if (isUsable(location)) rememberLocation(location)
+        if (isUsable(location) && rememberLocation(location)) onLocationAvailable?.invoke()
       }
 
       override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) = Unit
@@ -103,21 +109,25 @@ class LocationSnapshotProvider(private val context: Context) {
     }.isSuccess
   }
 
-  private fun rememberLocation(location: Location) {
+  private fun rememberLocation(location: Location): Boolean {
     val candidate = Location(location)
     val now = System.currentTimeMillis()
-    synchronized(locationLock) {
+    return synchronized(locationLock) {
       val existing = primedLocation
       if (existing == null) {
         primedLocation = candidate
-        return
-      }
-      val bestIndex = selectBestIndex(
-        listOf(existing.toRank(), candidate.toRank()),
-        now,
-      )
-      if (bestIndex == 1) {
-        primedLocation = candidate
+        true
+      } else {
+        val bestIndex = selectBestIndex(
+          listOf(existing.toRank(), candidate.toRank()),
+          now,
+        )
+        if (bestIndex == 1) {
+          primedLocation = candidate
+          true
+        } else {
+          false
+        }
       }
     }
   }

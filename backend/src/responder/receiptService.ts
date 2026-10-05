@@ -84,7 +84,8 @@ export interface ReceiptPage {
 // sign returns a canonical low-S P1363 signature over the supplied domain bytes.
 export interface AuthoritySigner {
   publicKeyDer: Uint8Array;
-  sign(input: Uint8Array): Promise<Uint8Array>;
+  sign(input: Uint8Array, client?: PoolClient): Promise<Uint8Array>;
+  assertActive?(client?: PoolClient): Promise<void>;
 }
 type StoredFields = Omit<
   ResponderReceiptFields,
@@ -202,6 +203,7 @@ export class ReceiptService {
     private readonly signer: AuthoritySigner,
     private readonly now: () => number = Date.now,
     private readonly qualifiedInterval?: () => TimeInterval,
+    private readonly afterCommitted?: (eventId: string) => Promise<Uint8Array | null>,
   ) {
     validateReceiptPublicKey(signer.publicKeyDer);
     this.key = Buffer.from(signer.publicKeyDer);
@@ -283,6 +285,7 @@ export class ReceiptService {
     if (!same(actionDigest(fields), intent.actionDigest))
       throw new Error('DIGEST_CONFLICT');
     return transaction(this.pool, async c => {
+      await this.signer.assertActive?.(c);
       const registered = (
         await c.query<{ callsign: string; role: string }>(
           'SELECT callsign,role FROM responder_identities WHERE responder_id=$1 FOR SHARE',
@@ -467,9 +470,22 @@ export class ReceiptService {
     };
   }
   async prepareReceipt(actionId: string): Promise<ActionCommitResult> {
+    const result = await this.prepareReceiptOnly(actionId);
+    if (result.state === 'SIGNED' && this.afterCommitted) {
+      try {
+        if (!await this.afterCommitted(actionId)) return {...result, reason: 'OFFLINE_SNAPSHOT_UNAVAILABLE'};
+      } catch {
+        // The committed online status survives checkpoint outage. Feed retry is idempotent.
+        return {...result, reason: 'OFFLINE_SNAPSHOT_PENDING'};
+      }
+    }
+    return result;
+  }
+  private async prepareReceiptOnly(actionId: string): Promise<ActionCommitResult> {
     const token = randomUUID(),
       now = this.clock();
     const claim = await transaction(this.pool, async c => {
+      await this.signer.assertActive?.(c);
       const row = (
         await c.query<ActionRow>(
           'SELECT * FROM receipt_actions WHERE action_id=$1 FOR UPDATE',
@@ -519,7 +535,8 @@ export class ReceiptService {
       return this.result(f, 'PREPARING', null, 'SIGNER_UNAVAILABLE');
     }
     return transaction(this.pool, async c => {
-      // Same incident-first order as ingestion/allocation avoids lock inversion.
+      await this.signer.assertActive?.(c);
+      // Registry first, then the existing incident-first order as ingestion/allocation avoids lock inversion.
       await c.query(
         'SELECT report_id FROM incidents WHERE report_id=$1 FOR UPDATE',
         [f.reportId],
@@ -736,6 +753,9 @@ export class ReceiptService {
                AND (recorded_at_ms>$2 OR (recorded_at_ms=$2 AND event_id>$3))
              ORDER BY recorded_at_ms,event_id LIMIT 33`, [reportId, afterTime, afterEvent])).rows;
       const entries: ReceiptPageEntry[] = [];
+      let rootAuthority = 'ACTIVE';
+      try { await this.signer.assertActive?.(c); }
+      catch (error) { rootAuthority = error instanceof Error && error.message === 'ROOT_AUTHORITY_REVOKED' ? 'REVOKED' : 'UNAVAILABLE'; }
       let last: Row | null = null;
       for (const row of rows.slice(0, 32)) {
         const entry: ReceiptPageEntry = {
@@ -744,7 +764,8 @@ export class ReceiptService {
           bytesBase64: Buffer.from(row.object_bytes).toString('base64'),
           kind: row.object_kind,
           revision: Number(row.revision),
-          verification: row.verification,
+          verification: rootAuthority === 'ACTIVE' ? row.verification :
+            rootAuthority === 'REVOKED' ? 'HISTORICAL_REVOKED_AUTHORITY' : 'UNVERIFIED_AUTHORITY',
         };
         const candidate = [...entries, entry];
         if (Buffer.byteLength(JSON.stringify({entries: candidate, nextCursor: null}), 'utf8') > 262144) break;
@@ -864,6 +885,7 @@ export class ReceiptService {
     }
     const receipt = decoded.fields;
     return transaction(this.pool, async c => {
+      await this.signer.assertActive?.(c);
       const registered = (
         await c.query<{callsign: string; role: string}>(
           'SELECT callsign,role FROM responder_identities WHERE responder_id=$1',

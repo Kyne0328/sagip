@@ -142,9 +142,20 @@ function parseVerifiedReceipt(value: unknown): VerifiedReceiptInfo | undefined {
     return invalidEmergencyReport();
   }
 
+  const snapshot = verificationKind === 'VERIFIED_OFFLINE_ROOT_SNAPSHOT';
+  if (snapshot && (
+    !Number.isSafeInteger(value.issuedAt) || (value.issuedAt as number) < 0 ||
+    !Number.isSafeInteger(value.authorityExpiresAt) || (value.authorityExpiresAt as number) <= (value.issuedAt as number) ||
+    authorityCheckedAt === null || authorityCheckedAt < (value.issuedAt as number) ||
+    authorityCheckedAt >= (value.authorityExpiresAt as number) || note !== '' ||
+    !['VALID_AT_LAST_CHECK', 'EXPIRED', 'TIME_UNAVAILABLE', 'REVOKED', 'CONFLICT'].includes(value.offlineEvidenceState as string)
+  )) return invalidEmergencyReport();
+
   return {
     eventId,
     revision,
+    ...(snapshot ? {issuedAt: value.issuedAt as number, authorityExpiresAt: value.authorityExpiresAt as number,
+      offlineEvidenceState: value.offlineEvidenceState as VerifiedReceiptInfo['offlineEvidenceState']} : {}),
     verificationKind: verificationKind as VerifiedReceiptInfo['verificationKind'],
     authorityCheckedAt,
     status: status as VerifiedReceiptInfo['status'],
@@ -177,7 +188,7 @@ function parseHistory(value: unknown): EmergencyHistoryEvent[] | undefined {
         !Number.isSafeInteger(event.occurredAt) || (event.occurredAt as number) < 0 ||
         (event.revision !== null && (!Number.isSafeInteger(event.revision) || (event.revision as number) < 1)) ||
         (event.status !== null && !VERIFIED_RESPONDER_STATUSES.includes(event.status as never)) ||
-        !['LOCAL', 'SERVER_AUTHENTICATED', 'UNVERIFIED', 'VERIFIED_CURRENT', 'VERIFIED_OFFLINE_AUTHORITY'].includes(event.provenance as string) ||
+        !['LOCAL', 'SERVER_AUTHENTICATED', 'UNVERIFIED', 'VERIFIED_CURRENT', 'VERIFIED_OFFLINE_AUTHORITY', 'VERIFIED_OFFLINE_ROOT_SNAPSHOT'].includes(event.provenance as string) ||
         (event.callsign !== null && typeof event.callsign !== 'string') ||
         (event.note !== null && typeof event.note !== 'string')) return invalidEmergencyReport();
     ids.add(event.id);
@@ -236,6 +247,7 @@ function parseSummary(value: unknown): EmergencyReportSummary {
     typeof reportId !== 'string' ||
     reportId.length === 0 ||
     (value.providerConflict !== undefined && typeof value.providerConflict !== 'boolean') ||
+    (value.offlineSnapshotClosureHold !== undefined && typeof value.offlineSnapshotClosureHold !== 'boolean') ||
     (value.receiptReturnState !== undefined && !['DISABLED', 'WAITING_FOR_QUALIFICATION', 'READY'].includes(value.receiptReturnState as string)) ||
     typeof createdAt !== 'number' ||
     (revision !== undefined && (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 1)) ||
@@ -263,6 +275,7 @@ function parseSummary(value: unknown): EmergencyReportSummary {
     ...(ack ? {responderAck: ack} : {}),
     ...(verified ? {verifiedReceipt: verified} : {}),
     ...(value.providerConflict !== undefined ? {providerConflict: value.providerConflict as boolean} : {}),
+    ...(value.offlineSnapshotClosureHold !== undefined ? {offlineSnapshotClosureHold: value.offlineSnapshotClosureHold as boolean} : {}),
     ...(value.receiptReturnState !== undefined ? {receiptReturnState: value.receiptReturnState as EmergencyReportSummary['receiptReturnState']} : {}),
     ...(value.history !== undefined ? {history: parseHistory(value.history)} : {}),
     ...(value.statusSync !== undefined ? {statusSync: parseStatusSync(value.statusSync)} : {}),

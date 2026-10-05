@@ -54,6 +54,30 @@ class TrustedReceiptReturnTest {
     assertEquals(1, rowCount(origin, "receipt_records"))
   }
 
+  @Test fun plaintext_notes_and_requester_receipts_linked_to_private_notes_never_relay() {
+    val origin=node();val signer=node()
+    val envelope=envelope(origin.identity)
+    listOf(origin,signer).forEach { it.service.admit(ObjectKind.SOS,envelope) }
+    val privateReceipt=receipt(signer,envelope,note="Private medical detail")
+    val fields=ReceiptV2Codec.decode(privateReceipt).fields as ReceiptFields.Responder
+    assertEquals(CustodyResultKind.REJECTED,origin.service.admit(ObjectKind.RESPONDER_RECEIPT,privateReceipt).kind)
+    assertFalse(origin.service.canForward(ObjectKind.RESPONDER_RECEIPT,privateReceipt))
+    assertEquals(0,rowCount(origin,"receipt_records"))
+    val requester=origin.sign(ReceiptFields.Requester(UUID.randomUUID().toString(),fields.reportId,1,1,
+      origin.identity.keyId,origin.identity.publicKeyDer,fields.actionId,hash(privateReceipt),100_000L,400_000L),
+      ByteArray(0),origin.identity)
+    assertEquals(CustodyResultKind.REJECTED,origin.service.admit(ObjectKind.REQUESTER_RECEIPT,requester).kind)
+    // Simulate previously stored local history through the lower-level repository custody path.
+    assertEquals(CustodyResultKind.COMMITTED,origin.queue.admitObject(privateReceipt,ObjectKind.RESPONDER_RECEIPT,
+      origin.service.contextFor(ObjectKind.RESPONDER_RECEIPT,privateReceipt)!!).kind)
+    assertArrayEquals(privateReceipt,ReceiptRepository(origin.db).getReceipt(fields.actionId))
+    origin.reopen()
+    assertEquals(CustodyResultKind.REJECTED,origin.service.admit(ObjectKind.REQUESTER_RECEIPT,requester).kind)
+    assertFalse(origin.service.canForward(ObjectKind.REQUESTER_RECEIPT,requester))
+    assertFalse(origin.queue.contactInventory(eligible=origin.service::canForward).any { it.objectId==fields.actionId })
+    assertArrayEquals(privateReceipt,ReceiptRepository(origin.db).getReceipt(fields.actionId))
+  }
+
   @Test fun two_node_return_and_missing_path_do_not_fabricate_delivery() {
     val origin = node(); val gateway = node()
     val envelope = envelope(origin.identity)
@@ -257,11 +281,14 @@ class TrustedReceiptReturnTest {
     val node=node();val signer=node()
     val envelope=envelope(node.identity);node.service.admit(ObjectKind.SOS,envelope)
     val receipt=receipt(signer,envelope);node.service.admit(ObjectKind.RESPONDER_RECEIPT,receipt)
+    // Construct the older fixture: later-version tables must not survive a user_version downgrade.
+    for(table in listOf("offline_root_relay_scan","offline_root_evidence","offline_root_streams",
+      "offline_root_revocations","offline_root_domains")) node.db.writableDatabase.execSQL("DROP TABLE "+table)
     node.db.writableDatabase.execSQL("DROP TABLE receipt_return_sync")
     node.db.writableDatabase.execSQL("DROP TABLE receipt_return_replay_state")
     node.db.writableDatabase.version=18
     node.reopen()
-    assertEquals(19,node.db.readableDatabase.version)
+    assertEquals(Schema.VERSION,node.db.readableDatabase.version)
     assertArrayEquals(receipt,ReceiptRepository(node.db).getReceipt(entry(receipt).eventId))
     withIsolatedRuntime { runtime ->
     try {
@@ -290,6 +317,53 @@ class TrustedReceiptReturnTest {
     assertThrows(Exception::class.java) { transport.decodePage(json().put("verification","VERIFIED_CURRENT").toString().toByteArray()) }
     assertThrows(Exception::class.java) { transport.decodePage(byteArrayOf(0xff.toByte())) }
     assertThrows(IllegalArgumentException::class.java) { HttpReceiptReturnTransport("http://synthetic.invalid") { "UNUSED" } }
+  }
+
+  @Test fun root_time_http_body_is_exact_and_response_type_is_strict() {
+    val node=node()
+    val transport=HttpReceiptReturnTransport("https://synthetic.invalid") { "UNUSED_TEST_TOKEN" }
+    val challenge=node.service.beginTimeChallenge()
+    val body=org.json.JSONObject(String(transport.encodeTimeRequest(challenge),Charsets.UTF_8))
+    assertEquals(setOf("verifierId","verifierBootSessionId","nonce"),body.keys().asSequence().toSet())
+    assertEquals(android.util.Base64.encodeToString(challenge.verifierId,android.util.Base64.NO_WRAP),body.getString("verifierId"))
+    assertEquals(challenge.verifierBootSessionId,body.getString("verifierBootSessionId"))
+    assertEquals(android.util.Base64.encodeToString(challenge.nonce,android.util.Base64.NO_WRAP),body.getString("nonce"))
+    val receipt=receipt(node,envelope(node.identity))
+    assertThrows(Exception::class.java) { transport.decodeTimeResponse(receipt) }
+    assertThrows(Exception::class.java) { transport.decodeTimeResponse(ByteArray(8193)) }
+    assertThrows(Exception::class.java) { transport.decodeTimeResponse(ByteArray(0)) }
+    assertThrows(Exception::class.java) { transport.encodeTimeRequest(challenge.copy(nonce=ByteArray(31))) }
+  }
+
+  @Test fun optional_bundle_and_revocation_feed_fields_are_strict_and_bounded() {
+    val node=node(); val bytes=receipt(node,envelope(node.identity)); val item=entry(bytes)
+    val transport=HttpReceiptReturnTransport("https://synthetic.invalid") { "UNUSED_TEST_TOKEN" }
+    fun encoded(value:ByteArray)=android.util.Base64.encodeToString(value,android.util.Base64.NO_WRAP)
+    fun page()=org.json.JSONObject().put("entries",org.json.JSONArray().put(org.json.JSONObject()
+      .put("eventId",item.eventId).put("eventDigest",item.eventDigest).put("bytesBase64",encoded(bytes))))
+      .put("nextCursor",org.json.JSONObject.NULL)
+    val revocation=byteArrayOf(83,79,86,49,1)
+    val parsed=transport.decodePage(page().put("revocationsBase64",org.json.JSONArray().put(encoded(revocation)))
+      .toString().toByteArray())
+    assertArrayEquals(revocation,parsed.revocations.single()) // Signature is checked before durable ingestion.
+    assertNull(parsed.entries.single().offlineBundle)
+    for(value in listOf<Any>(org.json.JSONObject.NULL,"",encoded(bytes),"not-base64")) {
+      val invalid=page()
+      invalid.getJSONArray("entries").getJSONObject(0).put("offlineBundleBase64",value)
+      assertThrows(Exception::class.java) { transport.decodePage(invalid.toString().toByteArray()) }
+    }
+    assertThrows(Exception::class.java) {
+      transport.decodePage(page().put("revocationsBase64",org.json.JSONObject.NULL).toString().toByteArray())
+    }
+    val excessive=org.json.JSONArray()
+    repeat(193) { excessive.put(encoded(revocation)) }
+    assertThrows(Exception::class.java) {
+      transport.decodePage(page().put("revocationsBase64",excessive).toString().toByteArray())
+    }
+    assertThrows(Exception::class.java) {
+      transport.decodePage(page().put("revocationsBase64",org.json.JSONArray().put(encoded(ByteArray(4097))))
+        .toString().toByteArray())
+    }
   }
 
   @Test fun outstanding_challenge_admission_is_bounded_and_does_not_evict_nonce_history() {
@@ -385,7 +459,7 @@ class TrustedReceiptReturnTest {
     TransportEnvelopeV1.create(EnvelopeUnsignedInput(UUID.randomUUID().toString(),report,revision,90_000L,550_000L,0,
       EmergencyPayloadV1.encode(EmergencyType.MEDICAL,Urgency.NEED_ASSISTANCE,null)),identity)
 
-  private fun receipt(node:Node,envelope:ByteArray,status:Int=2,sequence:Long=1,cloud:Boolean=false):ByteArray {
+  private fun receipt(node:Node,envelope:ByteArray,status:Int=2,sequence:Long=1,cloud:Boolean=false,note:String=""):ByteArray {
     val report=TransportEnvelopeV1.decode(envelope)
     val grantId=if(cloud) NIL else UUID.nameUUIDFromBytes(node.identity.keyId).toString()
     val signer=if(cloud) root else node.identity
@@ -396,7 +470,7 @@ class TrustedReceiptReturnTest {
     val proof=if(cloud) ByteArray(0) else ByteBuffer.allocate(3+grant.size).put(1.toByte()).putShort(grant.size.toShort()).put(grant).array()
     val draft=ReceiptFields.Responder(if(cloud)1 else 2,provider,UUID.randomUUID().toString(),ByteArray(32),
       report.reportId,1,report.revision,report.payloadDigest,report.originKeyId,signer.keyId,grantId,responder,"TEST",
-      1,status,sequence,100_000L,400_000L,"Synthetic responder update")
+      1,status,sequence,100_000L,400_000L,note)
     return node.sign(draft.copy(actionDigest=ReceiptAuthority.actionDigest(draft)),proof,signer)
   }
   private fun transfer(from:Node,to:Node,id:String):BleCustodyCode {

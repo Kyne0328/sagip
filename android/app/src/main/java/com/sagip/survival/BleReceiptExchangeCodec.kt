@@ -17,6 +17,7 @@ data class BleReceiptCapability(
 data class BleInventoryRequest(
   val snapshotId: String?,
   val pageIndex: Int,
+  val objectMask: Int = BleReceiptExchangeCodec.LEGACY_OBJECT_MASK,
 )
 
 data class ObjectFrame(
@@ -86,6 +87,9 @@ object BleReceiptExchangeCodec {
   private const val NIL_UUID = "00000000-0000-0000-0000-000000000000"
   private const val MAX_PROTOCOL_TIME = 9_007_199_254_740_991L
 
+  const val LEGACY_OBJECT_MASK = 0x07
+  const val OFFLINE_ROOT_OBJECT_MASK = 0x08
+  const val SUPPORTED_OBJECT_MASK = LEGACY_OBJECT_MASK or OFFLINE_ROOT_OBJECT_MASK
   const val CAPABILITY_SIZE = 8
   const val INVENTORY_ENTRY_SIZE = 78
   const val INVENTORY_REQUEST_SIZE = 24
@@ -102,11 +106,18 @@ object BleReceiptExchangeCodec {
   const val MAX_CONTACT_TRANSFERS = 8
   const val MIN_EXTENSION_MTU = 85
 
-  fun encodeCapability(): ByteArray = ByteBuffer.allocate(CAPABILITY_SIZE)
+  fun supportsObject(objectMask: Int, kind: ObjectKind): Boolean {
+    val flag = if (kind == ObjectKind.OFFLINE_ROOT_REVOCATION) OFFLINE_ROOT_OBJECT_MASK else 1 shl (kind.wireCode - 1)
+    return (objectMask and flag) != 0
+  }
+
+  fun canTransferWithoutTime(kind: ObjectKind): Boolean = kind == ObjectKind.OFFLINE_ROOT_REVOCATION
+
+  fun encodeCapability(objectMask: Int = SUPPORTED_OBJECT_MASK): ByteArray = ByteBuffer.allocate(CAPABILITY_SIZE)
     .order(ByteOrder.BIG_ENDIAN)
     .put(CAPABILITY_MAGIC)
     .put(2.toByte())
-    .put(0x07.toByte())
+    .put(objectMask.also { require(it == LEGACY_OBJECT_MASK || it == SUPPORTED_OBJECT_MASK) }.toByte())
     .put(MAX_INVENTORY_ENTRIES.toByte())
     .put(MAX_CONTACT_TRANSFERS.toByte())
     .array()
@@ -123,7 +134,7 @@ object BleReceiptExchangeCodec {
     )
     require(
       capability.extensionVersion == 2 &&
-        capability.objectMask == 0x07 &&
+        capability.objectMask in setOf(LEGACY_OBJECT_MASK, SUPPORTED_OBJECT_MASK) &&
         capability.maxInventoryEntries == MAX_INVENTORY_ENTRIES &&
         capability.maxContactTransfers == MAX_CONTACT_TRANSFERS
     ) { "unsupported SGX2 profile" }
@@ -138,7 +149,8 @@ object BleReceiptExchangeCodec {
     buffer.put(1.toByte())
     putUuid(buffer, request.snapshotId ?: NIL_UUID, allowNil = true)
     buffer.put(request.pageIndex.toByte())
-    buffer.putShort(0)
+    require(request.objectMask == LEGACY_OBJECT_MASK || request.objectMask == SUPPORTED_OBJECT_MASK)
+    buffer.putShort((request.objectMask and OFFLINE_ROOT_OBJECT_MASK).toShort())
     return buffer.array()
   }
 
@@ -150,10 +162,11 @@ object BleReceiptExchangeCodec {
     val id = readUuid(buffer, allowNil = true)
     val page = buffer.u8()
     require(page in 0..7) { "SGQ2 page" }
-    require(buffer.short.toInt() == 0) { "SGQ2 reserved" }
+    val flags = buffer.short.toInt() and 0xffff
+    require(flags == 0 || flags == OFFLINE_ROOT_OBJECT_MASK) { "SGQ2 reserved" }
     val snapshot = id.takeUnless { it == NIL_UUID }
     if (snapshot == null) require(page == 0) { "new SGQ2 must start at page zero" }
-    return BleInventoryRequest(snapshot, page)
+    return BleInventoryRequest(snapshot, page, LEGACY_OBJECT_MASK or flags)
   }
 
   fun encodeInventory(page: InventoryPage): ByteArray {
@@ -223,7 +236,7 @@ object BleReceiptExchangeCodec {
   fun encodeOffer(entry: InventoryEntry, totalLength: Int): ByteArray {
     // The approved R01 SGO2 profile is fixed at 82 bytes and does not carry totalLength.
     // Bound the local object here and prove exact bytes by digest after SGC2 reassembly.
-    require(totalLength in 1..MAX_OBJECT_BYTES) { "SGO2 object length" }
+    require(totalLength in 1..if (entry.objectKind == ObjectKind.OFFLINE_ROOT_REVOCATION) 4096 else MAX_OBJECT_BYTES) { "SGO2 object length" }
     val out = ByteBuffer.allocate(OFFER_SIZE).order(ByteOrder.BIG_ENDIAN)
     out.put(OFFER_MAGIC)
     encodeInventoryEntry(out, entry)
@@ -337,6 +350,10 @@ object BleReceiptExchangeCodec {
     } else {
       require(entry.forwardingExpiresAtMs > 0L) { "receipt inventory expiry required" }
     }
+    if (entry.objectKind == ObjectKind.OFFLINE_ROOT_REVOCATION) {
+      require(entry.reportId == entry.objectId && entry.revision == 1 && entry.reportProtocolVersion == 1 &&
+        entry.forwardingExpiresAtMs == MAX_PROTOCOL_TIME) { "revocation routing metadata" }
+    }
     out.put(entry.objectKind.wireCode.toByte())
     putUuid(out, entry.objectId)
     out.put(entry.digest)
@@ -361,6 +378,11 @@ object BleReceiptExchangeCodec {
     require(expiry in 0..MAX_PROTOCOL_TIME) { "inventory expiry" }
     if (kind == ObjectKind.SOS) require(expiry == 0L) { "SOS inventory expiry must be zero" }
     else require(expiry > 0L) { "receipt inventory expiry required" }
+    if (kind == ObjectKind.OFFLINE_ROOT_REVOCATION) {
+      require(reportId == objectId && revision == 1L && protocol == 1 && expiry == MAX_PROTOCOL_TIME) {
+        "revocation routing metadata"
+      }
+    }
     return InventoryEntry(
       objectKind = kind,
       objectId = objectId,
@@ -464,7 +486,8 @@ class BleReceiptExchangeReceiver(
       sessions.remove(peerId)
       return failure(session.entry, BleCustodyCode.REJECTED)
     }
-    if (session.bytes.size() + chunk.data.size > BleReceiptExchangeCodec.MAX_OBJECT_BYTES) {
+    val objectLimit = if (session.entry.objectKind == ObjectKind.OFFLINE_ROOT_REVOCATION) 4096 else BleReceiptExchangeCodec.MAX_OBJECT_BYTES
+    if (session.bytes.size() + chunk.data.size > objectLimit) {
       sessions.remove(peerId)
       return failure(session.entry, BleCustodyCode.REJECTED)
     }

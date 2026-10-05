@@ -9,10 +9,11 @@ import type {
 } from './types';
 
 const STATUS_SYNC_INTERVAL_MS = 10_000;
-const LOAD_ERROR = 'Saved SOS reports could not be loaded.';
+const LOAD_ERROR = 'Could not load saved SOS reports.';
 
 export function reportIsResolved(report: EmergencyReportSummary): boolean {
-  if (report.providerConflict === true) return false;
+  if (report.providerConflict === true || report.offlineSnapshotClosureHold === true ||
+      report.verifiedReceipt?.verificationKind === 'VERIFIED_OFFLINE_ROOT_SNAPSHOT') return false;
   return report.serverStatus?.status === 'RESOLVED' ||
     (report.verifiedReceipt?.status === 'RESOLVED' && report.verifiedReceipt.revision === (report.revision ?? 1));
 }
@@ -115,7 +116,7 @@ export function useEmergencyReports() {
     if (saveInFlight.current) return null;
     const active = activeEmergencyReport(reportsRef.current);
     if (active) {
-      setMessage('SOS already active. Checking saved delivery status.');
+      setMessage('SOS already active. Checking status.');
       void syncFromNative();
       return active;
     }
@@ -130,9 +131,9 @@ export function useEmergencyReports() {
       setLoading(false);
       reportsRef.current = [savedReport, ...reportsRef.current.filter(item => item.reportId !== savedReport!.reportId)];
       setReports(reportsRef.current);
-      setMessage('SOS saved on this device. You do not need internet.');
+      setMessage('SOS saved on this device.');
     } catch {
-      setMessage('SOS was not saved. Please try again.');
+      setMessage('Could not save SOS. Try again.');
       return null;
     } finally {
       saveInFlight.current = false;
@@ -154,11 +155,11 @@ export function useEmergencyReports() {
       restoreGeneration.current += 1;
       reportsRef.current = reportsRef.current.map(item => item.reportId === reportId ? updated : item);
       setReports(reportsRef.current);
-      setMessage('Details saved on this device. Delivery will keep trying.');
+      setMessage('Details saved on this device.');
       void syncFromNative();
       return updated;
     } catch {
-      setMessage('Details were not saved. Your original SOS remains saved. Try again; if its version changed, refresh the version below.');
+      setMessage('Could not save details. SOS is still saved. Refresh the SOS and try again.');
       void syncFromNative();
       return null;
     } finally {

@@ -68,6 +68,10 @@ jobs:
             SAGIP_ACCEPTANCE_DATABASE_URL="$SAGIP_TEST_DATABASE_URL" npx tsx --test acceptance/receiptImport.postgres.test.ts
           )
 
+      - name: Verify packaged offline authority remains disabled
+        shell: bash
+        run: node backend/scripts/verify-packaged-offline-disabled.mjs
+
       - name: Stop isolated PostgreSQL validation database
         if: ${{ always() }}
         run: docker rm --force sagip-test-postgres || true

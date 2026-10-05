@@ -65,7 +65,7 @@ function fixture(reportId = randomUUID()) {
       payloadDigest: report.payload_digest, originKeyId: report.origin_key_id,
       responderId: actor.responderId, callsign: actor.callsign,
       observedIncidentVersion: 1n, sequence: BigInt(rows.length + 1), status: 1,
-      note: 'Synthetic private note', issuedAtMs: now, forwardingExpiresAtMs: now + 1000,
+      note: '', issuedAtMs: now, forwardingExpiresAtMs: now + 1000,
       actionDigest: Buffer.alloc(32), ...overrides,
     };
     fields.actionDigest = actionDigest(fields);
@@ -163,19 +163,19 @@ test('expiry during database reads and policy withdrawal fail closed', async () 
   f.deny();
   await assert.rejects(f.feed().list(f.reportId, null, f.actor), /SCOPE_DENIED/);
 });
-test('delegated receipts require known active grants, including final revocation read', async () => {
+test('delegated note-bearing receipts are withheld even with active grants', async () => {
   const golden = JSON.parse(readFileSync(new URL('../../../fixtures/receipts-v2/golden.json', import.meta.url), 'utf8'));
   const f = fixture(golden.trustedContext.reportId);
   const sample = f.delegated();
   const page = await f.feed().list(f.reportId, null, f.actor);
-  assert.equal(page.entries.length, 1);
-  assert.equal(page.entries[0]!.bytesBase64, sample.bytes.toString('base64'));
+  assert.equal(page.entries.length, 0);
+  assert.ok(sample.bytes.length > 0);
   f.revokeDuringRead();
   assert.equal((await f.feed().list(f.reportId, null, f.actor)).entries.length, 0);
   f.grants.clear();
   assert.equal((await f.feed().list(f.reportId, null, f.actor)).entries.length, 0);
 });
-test('requester receipts require the exact linked acknowledgement and inherit its revocation', async () => {
+test('requester receipts linked to note-bearing acknowledgements are withheld', async () => {
   const golden = JSON.parse(readFileSync(new URL('../../../fixtures/receipts-v2/golden.json', import.meta.url), 'utf8'));
   const f = fixture(golden.trustedContext.reportId);
   f.delegated();
@@ -185,8 +185,7 @@ test('requester receipts require the exact linked acknowledgement and inherit it
   f.rows.push({event_id: fields.eventId, report_id: f.reportId,
     event_digest: hash(bytes), object_bytes: bytes, recorded_at_ms: '2'});
   const page = await f.feed().list(f.reportId, null, f.actor);
-  assert.equal(page.entries.length, 2);
-  assert.equal(page.entries[1]!.bytesBase64, bytes.toString('base64'));
+  assert.equal(page.entries.length, 0);
   f.rows.shift();
   assert.equal((await f.feed().list(f.reportId, null, f.actor)).entries.length, 0);
 });

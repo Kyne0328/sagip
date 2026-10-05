@@ -19,7 +19,7 @@ class SagipSurvivalCoreModule(
   private val repository = runtime.repository
   private val receiptRepository = ReceiptRepository(database)
   private val victimStatusStore = VictimStatusStore(database)
-  private val locationProvider = LocationSnapshotProvider(reactContext.applicationContext)
+  private val locationProvider = runtime.locationProvider
   private val preparationService by lazy {
     EnvelopePreparationService(repository, AndroidKeystoreSigningIdentity())
   }
@@ -109,7 +109,8 @@ class SagipSurvivalCoreModule(
 
   @ReactMethod
   fun primeLocation(promise: Promise) {
-    promise.resolve(locationProvider.primeBestEffortLocation())
+    // Provider callbacks outlive this React bridge and must use the process-owned scope.
+    promise.resolve(runtime.primeLocation())
   }
 
   @ReactMethod
@@ -184,7 +185,13 @@ class SagipSurvivalCoreModule(
   fun claimVerifiedReceiptNotification(reportId: String, eventId: String, promise: Promise) {
     executor.execute {
       try {
-        promise.resolve(receiptRepository.claimVerifiedReceiptNotification(reportId, eventId))
+        val snapshot=database.readableDatabase.rawQuery(
+          "SELECT 1 FROM receipt_records WHERE report_id=? AND event_id=? AND verification_kind='VERIFIED_OFFLINE_ROOT_SNAPSHOT'",
+          arrayOf(reportId,eventId),
+        ).use { it.moveToFirst() }
+        if(snapshot && runtime.receiptReturn?.offlineEvidenceState(eventId)!="VALID_AT_LAST_CHECK") {
+          promise.resolve(false)
+        } else promise.resolve(receiptRepository.claimVerifiedReceiptNotification(reportId, eventId))
       } catch (_: IllegalArgumentException) {
         promise.reject(ERROR_INVALID_INPUT, "Report or receipt event ID is invalid")
       } catch (_: Exception) {
@@ -204,7 +211,12 @@ class SagipSurvivalCoreModule(
     }
   }
 
-  private fun withVerifiedReceipt(summary: EmergencyReportSummary): EmergencyReportSummary {
+  private fun withVerifiedReceipt(inputSummary: EmergencyReportSummary): EmergencyReportSummary {
+    val hold = database.readableDatabase.rawQuery(
+      "SELECT 1 FROM receipt_projections WHERE report_id=? AND revision=? AND verification_kind='VERIFIED_OFFLINE_ROOT_SNAPSHOT' LIMIT 1",
+      arrayOf(inputSummary.reportId,inputSummary.latestRevision.toString()),
+    ).use { it.moveToFirst() }
+    val summary = inputSummary.copy(offlineSnapshotClosureHold = hold)
     val projection = receiptRepository.projection(summary.reportId) ?: return summary
     if (projection.verificationKind !in VERIFIED_RECEIPT_KINDS) return summary
     if (projection.requesterDeliveryState !in REQUESTER_DELIVERY_STATES) return summary
@@ -242,6 +254,12 @@ class SagipSurvivalCoreModule(
         callsign = fields.callsign,
         note = fields.note,
         requesterDeliveryState = projection.requesterDeliveryState,
+        issuedAt = if(projection.verificationKind == OfflineRootSnapshotCodec.KIND) fields.issuedAtMs else null,
+        authorityExpiresAt = if(projection.verificationKind == OfflineRootSnapshotCodec.KIND) database.readableDatabase.rawQuery(
+          "SELECT MAX(expires_at_ms) FROM offline_root_evidence WHERE event_id=?", arrayOf(projection.eventId)
+        ).use { if(it.moveToFirst() && !it.isNull(0)) it.getLong(0) else 0L } else null,
+        offlineEvidenceState = if(projection.verificationKind == OfflineRootSnapshotCodec.KIND)
+          runtime.receiptReturn?.offlineEvidenceState(projection.eventId) ?: "TIME_UNAVAILABLE" else null,
       ),
     )
   }
@@ -290,6 +308,7 @@ class SagipSurvivalCoreModule(
       })
       putBoolean("providerConflict", victimStatusStore.providerConflict(summary.reportId, summary.latestRevision))
       putString("reportId", summary.reportId)
+      putBoolean("offlineSnapshotClosureHold", summary.offlineSnapshotClosureHold)
       putDouble("createdAt", summary.createdAt.toDouble())
       putString("emergencyType", summary.emergencyType.name)
       putString("urgency", summary.urgency.name)
@@ -343,6 +362,9 @@ class SagipSurvivalCoreModule(
             putString("callsign", receipt.callsign)
             putString("note", receipt.note)
             putString("requesterDeliveryState", receipt.requesterDeliveryState)
+            receipt.issuedAt?.let { putDouble("issuedAt", it.toDouble()) }
+            receipt.authorityExpiresAt?.let { putDouble("authorityExpiresAt", it.toDouble()) }
+            receipt.offlineEvidenceState?.let { putString("offlineEvidenceState", it) }
           },
         )
       }
@@ -350,7 +372,7 @@ class SagipSurvivalCoreModule(
   }
 
   companion object {
-    private val VERIFIED_RECEIPT_KINDS = setOf("VERIFIED_CURRENT", "VERIFIED_OFFLINE_AUTHORITY")
+    private val VERIFIED_RECEIPT_KINDS = setOf("VERIFIED_CURRENT", "VERIFIED_OFFLINE_AUTHORITY", OfflineRootSnapshotCodec.KIND)
     private val REQUESTER_DELIVERY_STATES = setOf("UNKNOWN", "RECEIVED")
     const val NAME = "SagipSurvivalCore"
     const val ERROR_INVALID_INPUT = "INVALID_INPUT"

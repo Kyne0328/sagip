@@ -59,6 +59,98 @@ class OneTapSosInstrumentedTest {
     assertEquals(Urgency.UNSPECIFIED, EmergencyPayload.decode(wire.payload).urgency)
   }
 
+  @Test fun lateLocationBecomesDurableRevisionAndFreshFixCanUpgradeStaleOnce() {
+    val first = repository.createReport(
+      CreateEmergencyReportInput(EmergencyType.FIRE, Urgency.NEED_ASSISTANCE),
+      null,
+      100,
+    )
+    assertNull(first.location)
+
+    val stale = LocationSnapshot(7.4471, 125.8078, 80.0, 120, "NETWORK", "STALE")
+    assertTrue(repository.attachLocationToActiveReportIfBetter(stale, 200))
+    var summary = repository.listReports().single()
+    assertEquals(2, summary.latestRevision)
+    assertEquals(stale, summary.location)
+
+    assertFalse(repository.attachLocationToActiveReportIfBetter(stale, 201))
+    assertEquals(2, repository.listReports().single().latestRevision)
+
+    val fresh = LocationSnapshot(7.4480, 125.8084, 8.0, 250, "GPS", "FRESH")
+    assertTrue(repository.attachLocationToActiveReportIfBetter(fresh, 300))
+    val newerFresh = LocationSnapshot(7.4481, 125.8085, 5.0, 260, "GPS", "FRESH")
+    assertFalse(repository.attachLocationToActiveReportIfBetter(newerFresh, 301))
+
+    reopen()
+    summary = repository.listReports().single()
+    assertEquals(first.reportId, summary.reportId)
+    assertEquals(3, summary.latestRevision)
+    assertEquals(fresh, summary.location)
+    assertEquals(PreparationBatchResult(3, 0), EnvelopePreparationService(repository, identity).preparePending())
+
+    val revisions = repository.listDueOutbound(400)
+    assertEquals(3, revisions.size)
+    assertNull(EmergencyPayload.decode(TransportEnvelopeV1.decode(revisions.single { it.revision == 1 }.envelopeBytes).payload).location)
+    assertEquals(stale, EmergencyPayload.decode(TransportEnvelopeV1.decode(revisions.single { it.revision == 2 }.envelopeBytes).payload).location)
+    val newest = EmergencyPayload.decode(TransportEnvelopeV1.decode(revisions.single { it.revision == 3 }.envelopeBytes).payload)
+    assertEquals(fresh, newest.location)
+    assertEquals(EmergencyType.FIRE, newest.emergencyType)
+    assertEquals(Urgency.NEED_ASSISTANCE, newest.urgency)
+  }
+
+  @Test fun lateFixIsAttemptedInSamePassWithoutBypassingExistingBackoff() = runBlocking {
+    repository.createReport(CreateEmergencyReportInput(), null, 100)
+    EnvelopePreparationService(repository, identity).preparePending()
+    val original = repository.listDueOutbound(100).single()
+    val retryAt = repository.scheduleRetry(original.messageId, now = 100, jitterUnit = 0.5,
+      minimumDelayMs = 60_000)
+    val passTime = 200L
+    var wallTime = passTime
+    val location = LocationSnapshot(7.4471, 125.8078, 8.0, passTime, "GPS", "FRESH")
+    assertTrue(attachLocationForDelivery(passTime, {
+      wallTime++ // Deterministic T/T+1 boundary between pass start and insertion.
+      location
+    }, repository::attachLocationToActiveReportIfBetter))
+    assertEquals(201L, wallTime)
+    EnvelopePreparationService(repository, identity).preparePending()
+    val newest = repository.listDueOutbound(passTime).single()
+    assertEquals(2, newest.revision)
+    assertEquals(passTime, newest.nextAttemptAt)
+    val sent = mutableListOf<String>()
+    val sender = object : EnvelopeSender {
+      override suspend fun send(envelope: OutboundEnvelope): DeliveryTransportResult {
+        sent += envelope.messageId
+        return DeliveryTransportResult.Accepted(receipt(newest))
+      }
+    }
+    assertEquals(1, DeliveryWorker(repository, sender, relayStore = null, ackStore = null).runOnce(passTime))
+    assertEquals(listOf(newest.messageId), sent)
+    assertTrue(repository.listDueOutbound(retryAt - 1).isEmpty())
+    val stillBackedOff = repository.listDueOutbound(retryAt).single()
+    assertEquals(original.messageId, stillBackedOff.messageId)
+    assertEquals(retryAt, stillBackedOff.nextAttemptAt)
+    reopen()
+    assertEquals(location, repository.listReports().single().location)
+    assertEquals(EmergencyRepository.DELIVERY_SERVER_ACCEPTED,
+      repository.listReports().single().latestDelivery?.deliveryState)
+  }
+
+  @Test fun locationOnlyRevisionDoesNotRejectDetailsFromPreviousRevision() {
+    val first = repository.createReport(CreateEmergencyReportInput(EmergencyType.FIRE, Urgency.NEED_ASSISTANCE), null, 100)
+    val location = LocationSnapshot(7.4471, 125.8078, 12.0, 150, "GPS", "FRESH")
+    assertTrue(repository.attachLocationToActiveReportIfBetter(location, 200))
+
+    val updated = repository.appendEmergencyDetails(
+      AppendEmergencyDetailsInput(first.reportId, 1, id(), EmergencyType.MEDICAL),
+      300,
+    )
+
+    assertEquals(3, updated.latestRevision)
+    assertEquals(EmergencyType.MEDICAL, updated.emergencyType)
+    assertEquals(Urgency.NEED_ASSISTANCE, updated.urgency)
+    assertEquals(location, updated.location)
+  }
+
   @Test fun optionalCategoryAndUrgencyKeepOriginalBytesAndListOnlyLatestRevision() {
     val first = repository.createReport(CreateEmergencyReportInput(), null, 100)
     EnvelopePreparationService(repository, identity).preparePending()

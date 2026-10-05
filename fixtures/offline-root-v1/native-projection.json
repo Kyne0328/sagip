@@ -1,0 +1,37 @@
+{
+  "summary": {
+    "reportId": "22222222-2222-2222-2222-222222222222",
+    "latestRevision": 1,
+    "offlineSnapshotClosureHold": true,
+    "verifiedReceipt": {
+      "eventId": "55555555-5555-4555-8555-555555555555",
+      "status": "EN_ROUTE",
+      "revision": 1,
+      "verificationKind": "VERIFIED_OFFLINE_ROOT_SNAPSHOT",
+      "authorityCheckedAt": 1700000000000,
+      "issuedAt": 1699999999990,
+      "authorityExpiresAt": 1700000899990,
+      "offlineEvidenceState": "VALID_AT_LAST_CHECK",
+      "callsign": "SYNTHETIC TEAM",
+      "note": "",
+      "requesterDeliveryState": "UNKNOWN"
+    }
+  },
+  "provenance": {
+    "kind": "DIRECT_DURABLE_NATIVE_PROJECTION_EXPORT",
+    "fixture": "fixtures\/offline-root-v1\/three-node.json",
+    "fixtureSha256": "b5be17e1d24f18f125b6752c893bcfa988e20fe828ae647a4178dcb6a4bc07d3",
+    "generatedBy": "ReceiptService -> OfflineRootSnapshotService -> GatewayReceiptFeed; authenticated HTTP time endpoints",
+    "storageBackend": "PG_MEM_TEST",
+    "timeSource": "SIMULATED_TEST_CLOCK",
+    "syntheticOnly": true,
+    "notLiveAssurance": true,
+    "receiptDigest": "0ed12277008a9dfd37f79e45086f42898d70b285be92c9e0a4a9814d6b326d55",
+    "proofDigest": "d793f952574ebfcef73ffe00f4e6b9e78a90437aef4e565d376024b2b36cc388",
+    "bundleDigest": "27a9f4caaa8562b3c92c5d50d4aa856624e3a935b2ad80366c68a6771fb78e49",
+    "threeIndependentSqlCipherStores": true,
+    "originReopened": true,
+    "activityRendered": false,
+    "physicalRadioQualified": false
+  }
+}

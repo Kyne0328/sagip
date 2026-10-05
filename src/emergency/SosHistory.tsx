@@ -7,17 +7,17 @@ const PAGE_SIZE = 10;
 const EVENT_PAGE_SIZE = 50;
 const eventLabels: Record<EmergencyHistoryEvent['kind'], string> = {
   LOCAL_COMMIT: 'SOS saved on this device',
-  DETAILS_SAVED: 'Optional details saved',
-  RELAYED_TO_PEER: 'Saved on a nearby relay device',
-  SERVER_ACCEPTED: 'Accepted by the server',
+  DETAILS_SAVED: 'Details saved',
+  RELAYED_TO_PEER: 'Relayed to a nearby phone',
+  SERVER_ACCEPTED: 'Server accepted SOS',
   DELIVERY_FAILED: 'Delivery failed',
   RESPONDER_UPDATE: 'Responder update',
 };
 const statusLabels: Record<string, string> = {
-  ACKNOWLEDGED: 'Responder acknowledged your SOS',
-  EN_ROUTE: 'Responder reports they are on the way',
-  ON_SCENE: 'Responder reports they are on scene',
-  RESOLVED: 'Responder reports this incident is resolved',
+  ACKNOWLEDGED: 'Responder acknowledged SOS',
+  EN_ROUTE: 'Responder says they are on the way',
+  ON_SCENE: 'Responder says they are on scene',
+  RESOLVED: 'Responder marked this resolved',
 };
 
 export function historyDate(timestamp: number | null | undefined): string {
@@ -33,22 +33,22 @@ export function StatusFreshness({report, syncing = false}: {
   const sync = report.statusSync;
   return (
     <View style={styles.freshness}>
-      {syncing ? <Text style={styles.detail} accessibilityLiveRegion="polite">Checking delivery and saved status…</Text> : null}
+      {syncing ? <Text style={styles.detail} accessibilityLiveRegion="polite">Checking for updates…</Text> : null}
       <Text style={styles.detail}>
         {sync?.lastSuccessAt !== null && sync?.lastSuccessAt !== undefined
-          ? `Last successful server check: ${historyDate(sync.lastSuccessAt)}`
-          : 'No successful server status check recorded.'}
+          ? `Last server check: ${historyDate(sync.lastSuccessAt)}`
+          : 'No server check yet.'}
       </Text>
-      {sync?.historyPending ? <Text style={styles.detail}>More server history is waiting to sync.</Text> : null}
+      {sync?.historyPending ? <Text style={styles.detail}>More history is syncing.</Text> : null}
       {sync?.state === 'FAILED' ? (
-        <Text style={styles.warning}>Last server check failed at {historyDate(sync.lastAttemptAt)}. Showing saved status; it may be out of date.</Text>
+        <Text style={styles.warning}>Last server check failed at {historyDate(sync.lastAttemptAt)}. Status may be out of date.</Text>
       ) : null}
-      <Text style={styles.detail}>Saved status remains available offline.{' '}
+      <Text style={styles.detail}>
         {report.receiptReturnState === 'READY'
-          ? 'Signed updates from approved offline responders can arrive through a compatible nearby relay. Delivery needs relay contact; no new update can arrive without a connection path. Connect to the internet to check cloud responder status.'
+          ? 'A nearby SAGIP phone must connect before a new responder update can arrive.'
           : report.receiptReturnState === 'WAITING_FOR_QUALIFICATION'
-            ? 'Nearby signed updates are waiting for valid authority and trusted-time evidence. New relay updates cannot be verified yet. Connect to the internet to check for new responder updates.'
-            : 'Verified responder updates over nearby relay are not enabled in this build. Connect to the internet to check for new responder updates.'}
+            ? 'Nearby responder updates cannot be verified yet.'
+            : 'Connect to the internet for new responder updates.'}
       </Text>
     </View>
   );
@@ -57,22 +57,37 @@ export function StatusFreshness({report, syncing = false}: {
 export function AuthenticatedServerStatus({status}: {status: ServerStatusInfo}) {
   return (
     <View style={styles.serverStatus}>
-      <Text style={styles.title}>Server-confirmed responder update</Text>
+      <Text style={styles.title}>Responder update</Text>
       <Text style={styles.body}>{statusLabels[status.status]}</Text>
       {status.callsign ? <Text style={styles.body}>{status.callsign}</Text> : null}
       {status.note ? <Text style={styles.body}>{status.note}</Text> : null}
-      <Text style={styles.detail}>Updated {historyDate(status.updatedAt)} · Report-wide status</Text>
-      <Text style={styles.detail}>Authenticated server status for this incident. It does not confirm acknowledgement of a particular details version.</Text>
+      <Text style={styles.detail}>Updated {historyDate(status.updatedAt)}</Text>
+      <Text style={styles.detail}>Applies to the whole SOS.</Text>
     </View>
   );
 }
 
+export function offlineSnapshotText(receipt: NonNullable<EmergencyReportSummary['verifiedReceipt']>): string {
+  const state = receipt.offlineEvidenceState;
+  const qualification = state === 'VALID_AT_LAST_CHECK'
+    ? 'Responder approval was valid at the last check.'
+    : state === 'EXPIRED' ? 'Offline responder proof expired.'
+      : state === 'REVOKED' ? 'Responder approval was revoked.'
+        : state === 'CONFLICT' ? 'Responder approval is uncertain.'
+          : 'Responder approval cannot be checked.';
+  const authority = state === 'REVOKED'
+    ? 'This saved update is not trusted.'
+    : 'Current responder approval cannot be confirmed offline.';
+  return `Saved signed responder update. ${qualification} ${authority} Issued: ${historyDate(receipt.issuedAt ?? null)}. Checked: ${historyDate(receipt.authorityCheckedAt)}. Valid until: ${historyDate(receipt.authorityExpiresAt ?? null)}. SOS stays active.`;
+}
+
 function provenanceText(event: EmergencyHistoryEvent): string {
   switch (event.provenance) {
-    case 'SERVER_AUTHENTICATED': return 'Authenticated server record';
-    case 'UNVERIFIED': return 'Unverified legacy update';
-    case 'VERIFIED_CURRENT': return 'Signed receipt; authority verified when received';
-    case 'VERIFIED_OFFLINE_AUTHORITY': return 'Signed receipt using offline authority; current revocation status unavailable';
+    case 'SERVER_AUTHENTICATED': return 'Server verified';
+    case 'UNVERIFIED': return 'Unverified update';
+    case 'VERIFIED_CURRENT': return 'Signed and verified when received';
+    case 'VERIFIED_OFFLINE_AUTHORITY': return 'Signed and verified offline. Current approval cannot be checked.';
+    case 'VERIFIED_OFFLINE_ROOT_SNAPSHOT': return 'Signed from an earlier approval check. Current approval cannot be checked. SOS stays active.';
     default: return 'Recorded on this device';
   }
 }
@@ -96,26 +111,29 @@ function HistoryReport({report}: {report: EmergencyReportSummary}) {
       {expanded ? (
         <View style={styles.timeline}>
           <StatusFreshness report={report} />
-          {report.providerConflict ? <Text style={styles.warning}>Responder updates disagree about whether this SOS is resolved. Your SOS stays active while the conflict is unresolved.</Text> : null}
+          {report.providerConflict ? <Text style={styles.warning}>Responder updates conflict. SOS stays active.</Text> : null}
+          {report.offlineSnapshotClosureHold ? <Text style={styles.warning}>Offline responder proof cannot confirm closure. SOS stays active.</Text> : null}
           {report.serverStatus ? <AuthenticatedServerStatus status={report.serverStatus} /> : null}
           {receipt ? (
             <View style={styles.event}>
-              <Text style={styles.title}>Verified responder receipt · Version {receipt.revision}</Text>
+              <Text style={styles.title}>{receipt.verificationKind === 'VERIFIED_OFFLINE_ROOT_SNAPSHOT' ? 'Saved responder update' : 'Responder receipt'} · Version {receipt.revision}</Text>
               <Text style={styles.body}>{statusLabels[receipt.status]}</Text>
               <Text style={styles.detail}>{receipt.callsign}{receipt.note ? ` · ${receipt.note}` : ''}</Text>
               <Text style={styles.detail}>
-                {receipt.verificationKind === 'VERIFIED_OFFLINE_AUTHORITY'
-                  ? 'Verified using offline authority; current revocation status unavailable.'
-                  : 'Authority verified when this receipt was accepted.'}
-                {' '}Authority last checked: {historyDate(receipt.authorityCheckedAt)}.
+                {receipt.verificationKind === 'VERIFIED_OFFLINE_ROOT_SNAPSHOT'
+                  ? offlineSnapshotText(receipt)
+                  : receipt.verificationKind === 'VERIFIED_OFFLINE_AUTHORITY'
+                    ? 'Verified offline. Current approval cannot be checked.'
+                    : 'Responder approval was checked when received.'}
+                {' '}Checked: {historyDate(receipt.authorityCheckedAt)}.
               </Text>
             </View>
           ) : null}
           {report.responderAck && !report.serverStatus ? (
-            <Text style={styles.warning}>Unverified legacy update: {statusLabels[report.responderAck.status] ?? report.responderAck.status}. This does not establish trusted incident closure.</Text>
+            <Text style={styles.warning}>Unverified responder update: {statusLabels[report.responderAck.status] ?? report.responderAck.status}. SOS stays active until verified.</Text>
           ) : null}
-          <Text style={styles.detail}>Saved timeline, newest first · Reading this history does not contact the server.</Text>
-          {events.length === 0 ? <Text style={styles.detail}>No detailed timeline was saved for this SOS.</Text> : events.slice(0, visibleEvents).map(event => (
+          <Text style={styles.detail}>Saved timeline · newest first</Text>
+          {events.length === 0 ? <Text style={styles.detail}>No detailed timeline.</Text> : events.slice(0, visibleEvents).map(event => (
             <View style={styles.event} key={event.id}>
               <Text style={styles.title}>{eventLabels[event.kind]}</Text>
               <Text style={styles.detail}>{historyDate(event.occurredAt)} · {event.revision === null ? 'Report-wide' : `Version ${event.revision}`}</Text>
@@ -142,9 +160,9 @@ export function SosHistory({reports}: {reports: EmergencyReportSummary[]}) {
   const ordered = [...reports].sort((a, b) => b.createdAt - a.createdAt || a.reportId.localeCompare(b.reportId));
   return (
     <View style={styles.history}>
-      <Text accessibilityRole="header" style={styles.heading}>Your saved SOS history</Text>
-      <Text style={styles.detail}>Stored on this device and readable offline.</Text>
-      {ordered.length === 0 ? <Text style={styles.body}>No saved SOS reports yet.</Text> : null}
+      <Text accessibilityRole="header" style={styles.heading}>SOS history</Text>
+      <Text style={styles.detail}>Available offline.</Text>
+      {ordered.length === 0 ? <Text style={styles.body}>No saved SOS yet.</Text> : null}
       {ordered.slice(0, visibleCount).map(report => <HistoryReport key={report.reportId} report={report} />)}
       {visibleCount < ordered.length ? (
         <Pressable accessibilityRole="button" accessibilityLabel="Show more SOS reports"

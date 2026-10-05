@@ -22,14 +22,20 @@ class SurvivalCoreRuntime private constructor(context: Context) {
 
   val database = SagipDatabase(appContext)
   val repository = EmergencyRepository(database)
+  val locationProvider = LocationSnapshotProvider(appContext)
   val receiptQueue = ReceiptQueue(database)
   private val deliveryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private val deliveryMutex = Mutex()
+  private val locationDelivery = LocationDeliveryDispatcher(
+    deliveryScope, { callback -> locationProvider.primeBestEffortLocation(callback) },
+  ) { runDeliveryPass() }
+
+  fun primeLocation(): Boolean = locationDelivery.primeLocation()
   @Volatile private var returnDeployment: TrustedReceiptReturnConfig? = null
   @Volatile var receiptReturn: TrustedReceiptReturnService? = null
     private set
-  private fun receiptReturnClock(): MonotonicClock {
-    val verifier = requireNotNull(returnDeployment).verifierId
+  private fun receiptReturnClock(): MonotonicClock = returnClockFor(requireNotNull(returnDeployment).verifierId)
+  private fun returnClockFor(verifier: ByteArray): MonotonicClock {
     val boot = android.provider.Settings.Global.getInt(appContext.contentResolver,
       android.provider.Settings.Global.BOOT_COUNT, -1)
     check(boot >= 0) { "BOOT_ID_UNAVAILABLE" }
@@ -50,6 +56,43 @@ class SurvivalCoreRuntime private constructor(context: Context) {
     receiptReturn = service
   }
   @Synchronized fun disableReceiptReturn() { returnDeployment = null; receiptReturn = null }
+
+  /** Only signed-APK public trust data can activate this bootstrap; absent assets leave it off. */
+  @Synchronized private fun installPackagedReceiptReturn() {
+    if(returnDeployment != null) return
+    val manifest=OfflineRootDeploymentManifest.load(appContext) ?: return
+    // A release manifest cannot expand the recipient of existing report identifiers.
+    val backend=java.net.URI(BackendEndpointConfig.envelopeUrl())
+    val destination=java.net.URI(manifest.endpoint)
+    require(backend.scheme=="https" && backend.host!=null && backend.rawUserInfo==null &&
+      backend.rawQuery==null && backend.rawFragment==null)
+    fun port(uri:java.net.URI)=if(uri.port<0)443 else uri.port
+    require(destination.scheme=="https" && destination.host.equals(backend.host,ignoreCase=true) &&
+      port(destination)==port(backend) && destination.rawUserInfo==null &&
+      destination.rawQuery==null && destination.rawFragment==null)
+    val identity=AndroidKeystoreSigningIdentity()
+    fun clockProfile()=manifest.clockQualification(android.os.Build.FINGERPRINT,android.os.Build.VERSION.SDK_INT,
+      returnClockFor(identity.keyId).bootId)
+    if(runCatching { clockProfile() }.getOrNull()==null) return
+    val transport=HttpOriginReceiptTimeTransport(manifest.endpoint,{
+      database.readableDatabase.rawQuery(
+        "SELECT r.report_id FROM reports r WHERE EXISTS(SELECT 1 FROM server_receipts s WHERE s.report_id=r.report_id) ORDER BY r.created_at DESC LIMIT 1",
+        null,
+      ).use { if(it.moveToFirst())it.getString(0) else null }
+    },identity)
+    val config=TrustedReceiptReturnConfig(identity.keyId,manifest.rootPins,manifest.policy.allowedScopes.toSet(),
+      qualified={ runCatching { clockProfile()!=null }.getOrDefault(false) },
+      offlineRoot=OfflineRootConfig(manifest.policy,manifest.checkpointSignerPins,::clockProfile),
+      timeTransport=transport)
+    configureReceiptReturn(config)
+    val owner=receiptReturn ?: return
+    if(!owner.ensureOfflineRootDomain(manifest.initialEpoch,manifest.initialAuthorityStateDigest)) {
+      disableReceiptReturn()
+      return
+    }
+    owner.retryPending()
+    returnSync.trigger()
+  }
   internal fun receiptForwardAllowed(kind: ObjectKind, bytes: ByteArray): Boolean =
     kind == ObjectKind.SOS || receiptReturn?.canForward(kind, bytes) == true
   private fun onDurableRelayReceived() {
@@ -58,7 +101,10 @@ class SurvivalCoreRuntime private constructor(context: Context) {
   }
   private val returnSync by lazy {
     StatusSyncDispatcher(deliveryScope) {
-      if (hasValidatedInternet()) runCatching { receiptReturnWorker.runOnce() }
+      if (hasValidatedInternet()) {
+        runCatching { receiptReturn?.refreshTime() }
+        runCatching { receiptReturnWorker.runOnce() }
+      }
     }
   }
   private val statusSync by lazy {
@@ -140,6 +186,15 @@ class SurvivalCoreRuntime private constructor(context: Context) {
   }
 
   suspend fun runDeliveryPass(nowMs: Long = System.currentTimeMillis()): Int = deliveryMutex.withLock {
+    // A current fix may arrive after the one-tap SOS commit. Persist it as a new
+    // immutable revision before preparation; location must never gate the first save.
+    val locationUpdated = runCatching {
+      attachLocationForDelivery(nowMs, locationProvider::getBestAvailableLocation,
+        repository::attachLocationToActiveReportIfBetter)
+    }.getOrDefault(false)
+    if (locationUpdated) {
+      runCatching { bleRelay.expediteForNewActivity() }
+    }
     val sender = HttpEnvelopeSender(BackendEndpointConfig.envelopeUrl())
     val worker = DeliveryWorker(
       repository = repository,
@@ -178,10 +233,18 @@ class SurvivalCoreRuntime private constructor(context: Context) {
       receiptQueue,
       verificationContextProvider = { receiptReturn?.baseContext() },
       objectContextProvider = { kind, bytes -> receiptReturn?.contextFor(kind, bytes) },
+      extensionActiveProvider = { receiptReturn?.feedActive() == true },
+      admitObject = { kind, bytes -> receiptReturn?.admit(kind, bytes)
+        ?: CustodyResult(CustodyResultKind.PENDING_VERIFICATION, reason = "RECEIPT_EXTENSION_DISABLED") },
       canForwardObject = ::receiptForwardAllowed,
       onDurableRelayReceived = ::onDurableRelayReceived,
     ),
   )
+
+  init {
+    // Trust/bootstrap failure cannot block local SOS creation or the normal upload worker.
+    deliveryScope.launch { runCatching { installPackagedReceiptReturn() } }
+  }
 
   companion object {
     @Volatile

@@ -9,6 +9,8 @@ enum class ObjectKind(val wireCode: Int) {
   SOS(1),
   RESPONDER_RECEIPT(2),
   REQUESTER_RECEIPT(3),
+  OFFLINE_ROOT_BUNDLE(4),
+  OFFLINE_ROOT_REVOCATION(5),
 }
 
 enum class CustodyResultKind {
@@ -130,6 +132,19 @@ class ReceiptQueue(
     kind: ObjectKind,
     context: VerificationContext,
   ): CustodyResult {
+    if(kind == ObjectKind.OFFLINE_ROOT_BUNDLE || kind == ObjectKind.OFFLINE_ROOT_REVOCATION)
+      return CustodyResult(CustodyResultKind.REJECTED,reason="STORE_OWNER_REQUIRED")
+    return admitObjectInternal(bytes,kind,context)
+  }
+
+  internal fun admitOfflineRootBundle(bytes:ByteArray,context:VerificationContext,expectedGeneration:Long):CustodyResult {
+    val receipt=OfflineRootSnapshotCodec.decodeBundle(bytes).receipt
+    if(!OfflineRootSnapshotStore.preparedEvidenceExists(database,receipt,context,expectedGeneration))
+      return CustodyResult(CustodyResultKind.REJECTED,reason="STORE_OWNER_REQUIRED")
+    return admitObjectInternal(bytes,ObjectKind.OFFLINE_ROOT_BUNDLE,context)
+  }
+
+  private fun admitObjectInternal(bytes:ByteArray,kind:ObjectKind,context:VerificationContext):CustodyResult {
     if (bytes.isEmpty() || bytes.size > ReceiptV2Codec.MAX_RECEIPT_BYTES) {
       return CustodyResult(CustodyResultKind.REJECTED, reason = "OBJECT_SIZE")
     }
@@ -225,7 +240,7 @@ class ReceiptQueue(
       }
 
     if (kind != ObjectKind.SOS) {
-      when (ReceiptRepository(database).applyToReport(bytes, context).also { localApplication = it }) {
+      when ((if (kind == ObjectKind.OFFLINE_ROOT_BUNDLE) ReceiptRepository(database).applyOfflineRootToReport(OfflineRootSnapshotCodec.decodeBundle(bytes).receipt, context) else ReceiptRepository(database).applyToReport(bytes, context)).also { localApplication = it }) {
         ReceiptApplication.APPLIED,
         ReceiptApplication.HISTORICAL,
         ReceiptApplication.DUPLICATE -> Unit
@@ -321,6 +336,48 @@ class ReceiptQueue(
       candidate.digest.copyOf(),
       localApplication = localApplication,
     )
+  }
+
+  /** A bounded dissemination copy; the non-expiring authenticated tombstone remains in offline_root_revocations. */
+  internal fun cacheOfflineRootRevocation(bytes:ByteArray,config:OfflineRootConfig):CustodyResult { return try {
+    val proof=OfflineRootSnapshotVerifier.verifyRevocation(bytes,config)
+    val id=proof["revocationId"]; val digest=sha256(bytes)
+    val db=database.writableDatabase
+    db.beginTransaction()
+    try {
+      val persisted=db.rawQuery("SELECT 1 FROM offline_root_revocations WHERE domain_id=? AND revocation_id=? AND digest=?",
+        arrayOf(proof["authorityDomainId"],id,hex(digest))).use { it.moveToFirst() }
+      if(!persisted) return CustodyResult(CustodyResultKind.REJECTED,reason="REVOCATION_NOT_COMMITTED")
+      val old=db.rawQuery("SELECT object_digest FROM relay_objects WHERE object_kind=5 AND object_id=?",arrayOf(id))
+        .use { if(it.moveToFirst())it.getBlob(0) else null }
+      if(old!=null) {
+        db.setTransactionSuccessful()
+        return CustodyResult(if(MessageDigest.isEqual(old,digest)) CustodyResultKind.DUPLICATE else CustodyResultKind.REJECTED,id,digest)
+      }
+      val accounted=bytes.size+1024L
+      while(true) {
+        val usage=db.rawQuery("SELECT COUNT(*),COALESCE(SUM(accounted_bytes),0) FROM relay_objects WHERE object_kind=5",null)
+          .use { it.moveToFirst(); it.getLong(0) to it.getLong(1) }
+        if(usage.first<128 && usage.second+accounted<=1024L*1024L && hasActiveCapacityLocked(db,accounted)) break
+        val evict=db.rawQuery("SELECT object_id FROM relay_objects WHERE object_kind=5 AND NOT EXISTS "+
+          "(SELECT 1 FROM relay_transfer_leases l WHERE l.object_kind=5 AND l.object_id=relay_objects.object_id AND l.state='ACTIVE') ORDER BY rowid LIMIT 1",null)
+          .use { if(it.moveToFirst())it.getString(0) else null }
+          ?: return CustodyResult(CustodyResultKind.CAPACITY_FULL,id,digest,"REVOCATION_DISSEMINATION_CAPACITY")
+        db.delete("relay_objects","object_kind=5 AND object_id=?",arrayOf(evict))
+      }
+      db.insertOrThrow("relay_objects",null,ContentValues().apply {
+        put("object_kind",5);put("object_id",id);put("object_digest",digest);put("object_bytes",bytes)
+        // Report-independent routing identity; these fields cannot project a report.
+        put("report_id",id);put("revision",1);put("signed_issued_at_ms",proof.number("revokedAtMs"))
+        // Protocol sentinel: SOV1 has no expiry. This is not a trusted current-time claim.
+        put("signed_expires_at_ms",MAX_PROTOCOL_TIME);put("custody_expires_at_ms",MAX_PROTOCOL_TIME)
+        put("custody_accepted_at_ms",0L);put("verification_class","VERIFIED_OFFLINE_ROOT_REVOCATION")
+        put("transport_state",TRANSPORT_READY);put("accounted_bytes",accounted)
+      })
+      db.setTransactionSuccessful()
+      CustodyResult(CustodyResultKind.COMMITTED,id,digest)
+    } finally { db.endTransaction() }
+  } catch(_:Exception) { CustodyResult(CustodyResultKind.REJECTED,reason="REVOCATION_CUSTODY_FAILED") }
   }
 
   fun getObject(id: String, digest: ByteArray): StoredObject? {
@@ -607,8 +664,8 @@ class ReceiptQueue(
             ON ps.peer_id=? AND ps.object_kind=ro.object_kind AND ps.object_id=ro.object_id
           WHERE ro.transport_state=?
             AND ro.custody_expires_at_ms>?
-            AND ps.terminal_outcome IS NULL
-            AND COALESCE(ps.next_attempt_at_ms,0)<=?
+            AND (ps.terminal_outcome IS NULL OR (ro.object_kind IN (4,5) AND ps.terminal_outcome='PENDING_VERIFICATION'))
+            AND COALESCE(ps.next_attempt_at_ms,0)<=CAST(? AS INTEGER)
             AND NOT EXISTS (
               SELECT 1 FROM relay_transfer_leases active
               WHERE active.object_kind=ro.object_kind
@@ -626,7 +683,9 @@ class ReceiptQueue(
             scanned = cursorResult.getLong(7)
             val kind = objectKind(cursorResult.getInt(0))
             val bytes = cursorResult.getBlob(3).copyOf()
-            if (eligible != null && !runCatching { eligible(kind, bytes) }.getOrDefault(false)) continue
+            // Expected ineligibility is false. Unexpected authority/DB failures must roll back
+            // this entire selection instead of returning lease IDs that never committed.
+            if (eligible != null && !eligible(kind, bytes)) continue
             add(
               LeaseCandidate(
                 scheduling = SchedulingCandidate(
@@ -736,8 +795,12 @@ class ReceiptQueue(
           outcome = if (cursorResult.isNull(6)) null else cursorResult.getString(6),
         )
       } ?: throw IllegalArgumentException("unknown transfer lease")
+      // An unqualified peer has promised no durable custody of a snapshot or revocation.
+      val completedOutcome = if (outcome == TransferOutcome.PENDING_VERIFICATION &&
+        lease.objectKind in setOf(ObjectKind.OFFLINE_ROOT_BUNDLE, ObjectKind.OFFLINE_ROOT_REVOCATION))
+        TransferOutcome.RETRYABLE else outcome
       if (lease.state == LEASE_COMPLETED) {
-        if (lease.outcome == outcome.name) {
+        if (lease.outcome == completedOutcome.name) {
           db.setTransactionSuccessful()
           return
         }
@@ -754,16 +817,16 @@ class ReceiptQueue(
       }
       db.execSQL(
         "UPDATE relay_transfer_leases SET state='COMPLETED',outcome=?,completed_at_ms=? WHERE lease_id=? AND state='ACTIVE'",
-        arrayOf<Any?>(outcome.name, nowMs, leaseId),
+        arrayOf<Any?>(completedOutcome.name, nowMs, leaseId),
       )
-      val terminalOutcome = when (outcome) {
+      val terminalOutcome = when (completedOutcome) {
         TransferOutcome.RETRYABLE -> null
         TransferOutcome.PEER_CUSTODY,
         TransferOutcome.ALREADY_HAVE_VERIFIED,
         TransferOutcome.PENDING_VERIFICATION,
-        TransferOutcome.PERMANENT_REJECTION -> outcome.name
+        TransferOutcome.PERMANENT_REJECTION -> completedOutcome.name
       }
-      val nextAttemptAt = if (outcome == TransferOutcome.RETRYABLE) {
+      val nextAttemptAt = if (completedOutcome == TransferOutcome.RETRYABLE) {
         safeAdd(
           nowMs,
           ReceiptTransferScheduler.retryDelayMs(
@@ -903,7 +966,9 @@ class ReceiptQueue(
   }
 
   private fun inventoryProtocolVersion(kind: ObjectKind, bytes: ByteArray): Int = when (kind) {
+    ObjectKind.OFFLINE_ROOT_REVOCATION -> 1
     ObjectKind.SOS -> TransportEnvelope.decodeAndVerify(bytes).protocolVersion
+    ObjectKind.OFFLINE_ROOT_BUNDLE -> (ReceiptV2Codec.decode(OfflineRootSnapshotCodec.decodeBundle(bytes).receipt).fields as ReceiptFields.Responder).reportProtocolVersion
     ObjectKind.RESPONDER_RECEIPT,
     ObjectKind.REQUESTER_RECEIPT -> when (val fields = ReceiptV2Codec.decode(bytes).fields) {
       is ReceiptFields.Responder -> fields.reportProtocolVersion
@@ -929,11 +994,31 @@ class ReceiptQueue(
     context: VerificationContext,
   ): ParseResult {
     return when (kind) {
+      ObjectKind.OFFLINE_ROOT_REVOCATION -> ParseResult(result=CustodyResult(CustodyResultKind.REJECTED,reason="STORE_OWNER_REQUIRED"))
       ObjectKind.SOS -> parseSos(bytes)
       ObjectKind.RESPONDER_RECEIPT,
       ObjectKind.REQUESTER_RECEIPT -> parseReceipt(bytes, kind, context)
+      ObjectKind.OFFLINE_ROOT_BUNDLE -> parseOfflineRootBundle(bytes, context)
     }
   }
+
+  private fun parseOfflineRootBundle(bytes: ByteArray, context: VerificationContext): ParseResult = try {
+    val bundle = OfflineRootSnapshotCodec.decodeBundle(bytes)
+    val proof = OfflineRootSnapshotCodec.decodeProof(bundle.proof)
+    val fields = ReceiptV2Codec.decode(bundle.receipt).fields as ReceiptFields.Responder
+    // A bundle is never accepted through a legacy caller that cannot own its durable trust state.
+    require(context.offlineRoot != null && MessageDigest.isEqual(context.offlineRoot.proofBytes, bundle.proof))
+    when (val verification = ReceiptAuthority.verifyReceipt(bundle.receipt, context)) {
+      is ReceiptVerification.Verified -> {
+        require(verification.kind == OfflineRootSnapshotCodec.KIND)
+        ParseResult(candidate = Candidate(ObjectKind.OFFLINE_ROOT_BUNDLE, proof["proofId"], sha256(bytes),
+          bytes.copyOf(), fields.reportId, fields.revision, fields.issuedAtMs,
+          OfflineRootSnapshotCodec.validUntil(proof,fields,context.offlineRoot.configuration.policy), verification.kind))
+      }
+      is ReceiptVerification.Unverified -> ParseResult(result = CustodyResult(CustodyResultKind.PENDING_VERIFICATION, reason = verification.reason))
+      is ReceiptVerification.Rejected -> ParseResult(result = CustodyResult(CustodyResultKind.REJECTED, reason = verification.reason))
+    }
+  } catch (_: Exception) { ParseResult(result = CustodyResult(CustodyResultKind.REJECTED, reason = "OFFLINE_ROOT_BUNDLE_INVALID")) }
 
   private fun parseSos(bytes: ByteArray): ParseResult {
     val verified = try {
@@ -1128,7 +1213,7 @@ class ReceiptQueue(
     ).use { cursor -> if (cursor.moveToFirst()) cursor.getBlob(0) else null }
     if (tombstone != null) return if (MessageDigest.isEqual(tombstone, candidate.digest)) IdentityState.DUPLICATE else IdentityState.CONFLICT
 
-    if (candidate.kind != ObjectKind.SOS) {
+    if (candidate.kind != ObjectKind.SOS && candidate.kind != ObjectKind.OFFLINE_ROOT_BUNDLE) {
       val evidenceDigest = db.rawQuery(
         "SELECT event_digest FROM receipt_records WHERE event_id=?",
         arrayOf(candidate.objectId),

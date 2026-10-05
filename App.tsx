@@ -25,10 +25,10 @@ import {SurvivalCore} from './src/emergency/SurvivalCore';
 import {prepareSosLocation} from './src/emergency/prepareSosLocation';
 import {useBleRelayStatus} from './src/emergency/useBleRelayStatus';
 import {activeEmergencyReport, reportIsResolved, useEmergencyReports} from './src/emergency/useEmergencyReports';
-import {AuthenticatedServerStatus, historyDate, SosHistory, StatusFreshness} from './src/emergency/SosHistory';
+import {AuthenticatedServerStatus, historyDate, offlineSnapshotText, SosHistory, StatusFreshness} from './src/emergency/SosHistory';
 
 const emergencyLabels: Record<EmergencyType, string> = {
-  UNSPECIFIED: 'Emergency type not specified',
+  UNSPECIFIED: 'Type not specified',
   MEDICAL: 'Medical',
   FLOOD: 'Flood',
   FIRE: 'Fire',
@@ -47,13 +47,13 @@ function responderAcknowledgementText(ack: ResponderAckInfo | null | undefined) 
   const responseState = (() => {
     switch (ack?.status) {
       case 'EN_ROUTE':
-        return 'Responders report they are on the way';
+        return 'Responders say they are on the way';
       case 'ON_SCENE':
-        return 'Responders report they are on scene';
+        return 'Responders say they are on scene';
       case 'RESOLVED':
-        return 'Responder marked this incident resolved';
+        return 'Responder marked this resolved';
       default:
-        return 'Responder has acknowledged your SOS';
+        return 'Responder acknowledged your SOS';
     }
   })();
 
@@ -67,15 +67,23 @@ function responderAcknowledgementText(ack: ResponderAckInfo | null | undefined) 
 }
 
 function verifiedResponderHeadline(receipt: VerifiedReceiptInfo, currentRevision = receipt.revision): string {
+  if (receipt.verificationKind === 'VERIFIED_OFFLINE_ROOT_SNAPSHOT') {
+    if (receipt.offlineEvidenceState !== 'VALID_AT_LAST_CHECK') {
+      return 'Saved responder update needs a fresh check. SOS stays active.';
+    }
+    return receipt.status === 'RESOLVED'
+      ? 'Saved responder update says resolved. SOS stays active until confirmed.'
+      : `Saved responder update: ${receipt.status.replace(/_/g, ' ').toLowerCase()}. Current status is unconfirmed.`;
+  }
   switch (receipt.status) {
     case 'EN_ROUTE':
-      return 'Responder reports they are on the way';
+      return 'Responder says they are on the way';
     case 'ON_SCENE':
-      return 'Responder reports they are on scene';
+      return 'Responder says they are on scene';
     case 'RESOLVED':
-      return 'Responder reports this incident is resolved';
+      return 'Responder marked this resolved';
     default:
-      return receipt.revision === currentRevision ? 'Responder acknowledged your current SOS' : `Responder acknowledged SOS version ${receipt.revision}`;
+      return receipt.revision === currentRevision ? 'Responder acknowledged this SOS' : `Responder acknowledged SOS version ${receipt.revision}`;
   }
 }
 
@@ -90,25 +98,8 @@ function verifiedResponderText(receipt: VerifiedReceiptInfo, currentRevision: nu
 }
 
 function verifiedAuthorityText(receipt: VerifiedReceiptInfo): string {
-  if (receipt.verificationKind === 'VERIFIED_OFFLINE_AUTHORITY') {
-    const checkedAt = (() => {
-      if (receipt.authorityCheckedAt === null) {
-        return 'Authority check time is unavailable.';
-      }
-      const date = new Date(receipt.authorityCheckedAt);
-      return Number.isNaN(date.getTime())
-        ? 'Authority check time could not be formatted.'
-        : `Authority last checked ${date.toISOString()}.`;
-    })();
-    return `Verified using offline responder credentials. Current revocation status is unavailable. ${checkedAt}`;
-  }
-  return `Responder authority was verified when this receipt was accepted. Authority last checked: ${historyDate(receipt.authorityCheckedAt)}.`;
-}
-
-function requesterDeliveryText(receipt: VerifiedReceiptInfo): string {
-  return receipt.requesterDeliveryState === 'RECEIVED'
-    ? 'Responder received your return confirmation'
-    : 'Requester return confirmation not yet received';
+  if (receipt.verificationKind === 'VERIFIED_OFFLINE_ROOT_SNAPSHOT') return offlineSnapshotText(receipt);
+  return `Responder approval was verified offline. Current approval cannot be checked. Checked: ${historyDate(receipt.authorityCheckedAt)}.`;
 }
 
 export default function App() {
@@ -149,11 +140,12 @@ export default function App() {
   const latestVerifiedEventId = latestVerifiedReceipt?.eventId;
   const latestVerifiedHeadline = latestVerifiedReceipt
     ? latest?.providerConflict
-      ? 'Responder updates disagree about whether this SOS is resolved. Your SOS stays active.'
+      ? 'Responder updates conflict. SOS stays active.'
       : verifiedResponderHeadline(latestVerifiedReceipt, latest?.revision ?? 1)
     : null;
 
   useEffect(() => {
+    // Warm a previously granted location permission without putting a dialog in front of SOS.
     void prepareSosLocation(false);
   }, []);
 
@@ -181,9 +173,9 @@ export default function App() {
     };
   }, [latestVerifiedEventId, latestVerifiedHeadline, latestVerifiedReportId]);
   const messageIsError =
-    message === 'SOS was not saved. Please try again.' ||
-    message === 'Saved SOS reports could not be loaded.' ||
-    message?.startsWith('Details were not saved.') === true;
+    message === 'Could not save SOS. Try again.' ||
+    message === 'Could not load saved SOS reports.' ||
+    message?.startsWith('Could not save details.') === true;
 
   useEffect(() => {
     // Reveal the form, saved report or error without jumping on delivery refreshes.
@@ -197,6 +189,8 @@ export default function App() {
     // No form, permission request, or location acquisition can gate durable creation.
     const saved = await create({});
     if (saved) {
+      // The SOS is already durable. Permission/current-fix work is best effort from here.
+      void prepareSosLocation(true);
       setShowForm(false);
       setDetailsTarget(null);
       detailOperation.current = null;
@@ -238,7 +232,7 @@ export default function App() {
         setUrgency(null);
       }
     } catch {
-      setDetailsError('Details were not saved. Your original SOS remains saved. Please try again.');
+      setDetailsError('Could not save details. SOS is still saved. Try again.');
     } finally {
       detailsSaveInFlight.current = false;
       setPreparingDetails(false);
@@ -247,47 +241,47 @@ export default function App() {
 
   const statusCard = (
     <View style={styles.statusCard}>
-      <Text accessibilityRole="header" style={styles.sectionTitle}>{hasActiveSos ? 'Active SOS status' : 'Latest SOS status'}</Text>
+      <Text accessibilityRole="header" style={styles.sectionTitle}>{hasActiveSos ? 'Active SOS' : 'Latest SOS'}</Text>
       {loading ? (
-        <Text style={styles.statusText}>Checking this device…</Text>
+        <Text style={styles.statusText}>Checking…</Text>
       ) : latest ? (
         <>
           <Text style={styles.savedText}>Saved on this device</Text>
           <StatusFreshness report={latest} syncing={syncing} />
-          {latest.providerConflict ? <Text style={styles.pendingText}>Responder updates disagree about whether this SOS is resolved. Your SOS stays active while the conflict is unresolved.</Text> : null}
-          {!hasActiveSos ? <Text style={styles.statusDetailText}>This SOS is resolved. You can view its history or send a new SOS. Optional details are closed.</Text> : null}
+          {latest.providerConflict ? <Text style={styles.pendingText}>Responder updates conflict. SOS stays active.</Text> : null}
+          {latest.offlineSnapshotClosureHold ? <Text style={styles.pendingText}>Offline responder proof cannot confirm closure. SOS stays active.</Text> : null}
+          {!hasActiveSos ? <Text style={styles.statusDetailText}>Resolved. You can send a new SOS.</Text> : null}
           {latest.serverStatus ? <AuthenticatedServerStatus status={latest.serverStatus} /> : null}
           {latest.verifiedReceipt ? (
             <View style={styles.verifiedReceiptBlock}>
-              <Text style={styles.responderText}>Verified responder update</Text>
-              <Text style={styles.evidenceText}>Receipt covers SOS version {latest.verifiedReceipt.revision}.</Text>
+              <Text style={styles.responderText}>{latest.verifiedReceipt.verificationKind === 'VERIFIED_OFFLINE_ROOT_SNAPSHOT' ? 'Saved responder update' : 'Responder update'}</Text>
+              {latest.verifiedReceipt.revision !== (latest.revision ?? 1) ? <Text style={styles.evidenceText}>For SOS version {latest.verifiedReceipt.revision}</Text> : null}
               <Text style={styles.statusDetailText}>
                 {verifiedResponderText(latest.verifiedReceipt, latest.revision ?? 1)}
               </Text>
-              <Text style={styles.evidenceText}>
-                {verifiedAuthorityText(latest.verifiedReceipt)}
-              </Text>
-              <Text style={styles.evidenceText}>
-                {requesterDeliveryText(latest.verifiedReceipt)}
-              </Text>
+              {latest.verifiedReceipt.verificationKind !== 'VERIFIED_CURRENT' ? (
+                <Text style={styles.evidenceText}>
+                  {verifiedAuthorityText(latest.verifiedReceipt)}
+                </Text>
+              ) : null}
             </View>
           ) : null}
           {latest.serverStatus && (originalDeliveryState === 'DELIVERY_PENDING' || originalDeliveryState === 'RELAYED_TO_PEER' || originalDeliveryState === 'PERMANENT_FAILURE') ? (
             <>
               <Text style={styles.deliveryEvidenceText}>
-                {originalDeliveryState === 'PERMANENT_FAILURE' ? 'Original transport confirmation unavailable' : 'Original transport confirmation pending'}
+                {originalDeliveryState === 'PERMANENT_FAILURE' ? 'Original delivery receipt unavailable' : 'Original delivery receipt pending'}
               </Text>
               <Text style={styles.statusDetailText}>
-                The server has a record of this incident. This phone does not have a delivery receipt for the original SOS message.
+                The server has this SOS. This phone is still missing the original delivery receipt.
                 {' '}{originalDeliveryState === 'PERMANENT_FAILURE'
-                  ? 'Automatic delivery cannot retry that original message.'
+                  ? 'Automatic delivery cannot retry it.'
                   : originalDeliveryState === 'RELAYED_TO_PEER'
-                    ? 'A nearby device has a saved copy for forwarding. SAGIP will keep checking for delivery confirmation.'
-                    : 'SAGIP will keep retrying the original delivery through available connections.'}
+                    ? 'A nearby phone has a copy. SAGIP will keep checking.'
+                    : 'SAGIP will keep retrying.'}
               </Text>
             </>
           ) : latest.serverStatus && originalDeliveryState === 'RESPONDER_ACKNOWLEDGED' ? (
-            <Text style={styles.deliveryEvidenceText}>Responder acknowledgement transport state recorded. Server-confirmed status is shown above.</Text>
+            <Text style={styles.deliveryEvidenceText}>Server-confirmed responder status is shown above.</Text>
           ) : originalDeliveryState === 'RESPONDER_ACKNOWLEDGED' ? (
             <>
               <Text
@@ -297,47 +291,47 @@ export default function App() {
                     : styles.pendingText
                 }>
                 {latest.verifiedReceipt
-                  ? 'Responder acknowledgement transport state recorded'
+                  ? 'Responder update recorded'
                   : 'Unverified responder update'}
               </Text>
               <Text style={styles.statusDetailText}>
                 {latest.verifiedReceipt
-                  ? 'Verified responder evidence is shown separately above.'
-                  : `${responderAcknowledgementText(latest.responderAck)}. This legacy acknowledgement is not cryptographically verified.`}
+                  ? 'Verified responder status is shown above.'
+                  : `${responderAcknowledgementText(latest.responderAck)}. This update is not verified.`}
               </Text>
             </>
           ) : originalDeliveryState === 'SERVER_ACCEPTED' ? (
             <>
-              <Text style={styles.acceptedText}>Server accepted</Text>
+              <Text style={styles.acceptedText}>Server accepted SOS</Text>
               <Text style={styles.statusDetailText}>
-                The SAGIP server has accepted this SOS. Server acceptance does not by itself prove responder acknowledgement.
+                Responder acknowledgement is not confirmed yet.
               </Text>
             </>
           ) : originalDeliveryState === 'PERMANENT_FAILURE' ? (
             <>
               <Text style={styles.failedText}>Delivery failed permanently</Text>
               <Text style={styles.statusDetailText}>
-                This SOS is still saved on this device, but automatic delivery cannot continue for this initial SOS version.
+                SOS is still saved here. Automatic delivery cannot continue.
               </Text>
             </>
           ) : originalDeliveryState === 'RELAYED_TO_PEER' ? (
             <>
-              <Text style={styles.relayedText}>Relayed to another SAGIP device</Text>
+              <Text style={styles.relayedText}>Relayed to another SAGIP phone</Text>
               <Text style={styles.statusDetailText}>
-                Another SAGIP device has a saved copy to forward. This does not yet mean the server or a responder received it.
+                Server receipt is not confirmed yet.
               </Text>
             </>
           ) : (
             <>
-              <Text style={styles.pendingText}>Pending delivery</Text>
+              <Text style={styles.pendingText}>Waiting to send</Text>
               <Text style={styles.statusDetailText}>
-                Saved on your phone; waiting to send. SAGIP will keep looking for internet or a nearby-device delivery path.
+                SOS is saved. SAGIP will keep trying.
               </Text>
             </>
           )}
           {(latest.revision ?? 1) > 1 && latest.latestDelivery ? (
             <View style={styles.verifiedReceiptBlock}>
-              <Text style={styles.sectionTitle}>Optional details delivery</Text>
+              <Text style={styles.sectionTitle}>Details status</Text>
               <Text style={styles.statusDetailText}>
                 {detailsDeliveryText(latest.latestDelivery.deliveryState)}
               </Text>
@@ -348,12 +342,12 @@ export default function App() {
           </Text>
           <Text style={styles.statusDetailText}>
             {latest.location
-              ? `Location attached · ${latest.location.source} · ${latest.location.freshness === 'FRESH' ? 'recent fix' : 'older fix'}${latest.location.accuracyMeters === null ? '' : ` · ±${Math.round(latest.location.accuracyMeters)} m`}`
-              : 'No device location was attached to this SOS.'}
+              ? `Location · ${latest.location.source} · ${latest.location.freshness === 'FRESH' ? 'recent' : 'older'}${latest.location.accuracyMeters === null ? '' : ` · ±${Math.round(latest.location.accuracyMeters)} m`}`
+              : 'No location attached.'}
           </Text>
         </>
       ) : (
-        <Text style={styles.statusText}>No SOS saved on this device yet.</Text>
+        <Text style={styles.statusText}>No SOS saved yet.</Text>
       )}
     </View>
   );
@@ -363,13 +357,13 @@ export default function App() {
       <StatusBar barStyle="dark-content" />
       {showForm || showCompactSos ? (
         <Pressable testID="compact-sos-button" accessibilityRole="button"
-          accessibilityLabel={hasActiveSos ? 'Active SOS. Check saved delivery status' : 'Save a new emergency SOS'}
-          accessibilityHint={hasActiveSos ? 'Keeps your optional details and checks the same active SOS' : 'Immediately saves an SOS. Optional details never block saving.'}
+          accessibilityLabel={hasActiveSos ? 'Active SOS. Check status' : 'Save emergency SOS'}
+          accessibilityHint={hasActiveSos ? 'Checks this SOS. It does not create a new one.' : 'Saves the SOS on this phone first.'}
           disabled={saving} accessibilityState={{disabled: saving, busy: saving}}
           onPress={pressSos}
           style={({pressed}) => [styles.compactSosButton, saving && styles.disabledButton, pressed && styles.pressed]}>
           <Text style={styles.compactSosText}>{saving ? 'Saving SOS…' : hasActiveSos ? 'SOS already active' : 'SOS'}</Text>
-          <Text style={styles.compactSosHint}>{hasActiveSos ? 'Tap to check delivery status' : 'Tap once to send SOS'}</Text>
+          <Text style={styles.compactSosHint}>{hasActiveSos ? 'Check status' : 'Tap to save SOS'}</Text>
         </Pressable>
       ) : null}
       <ScrollView ref={scrollRef} contentContainerStyle={styles.container}
@@ -393,9 +387,9 @@ export default function App() {
         {showForm || !latest ? (
           <View style={styles.introduction}>
             <Text accessibilityRole="header" style={styles.title}>
-              {showForm ? 'Add optional details' : 'Need emergency help?'}
+              {showForm ? 'Add optional details' : 'Need help now?'}
             </Text>
-            <Text style={styles.subtitle}>{showForm ? 'Your SOS is already saved. Add either detail if you can, or skip this step.' : 'Save an SOS even without internet.'}</Text>
+            <Text style={styles.subtitle}>{showForm ? 'SOS is already saved. Add details if you can.' : 'SOS saves even without internet.'}</Text>
           </View>
         ) : null}
 
@@ -404,8 +398,8 @@ export default function App() {
             accessibilityRole="button"
             testID="primary-sos-button"
             onLayout={event => { primarySosBottom.current = event.nativeEvent.layout.y + event.nativeEvent.layout.height; }}
-            accessibilityLabel={hasActiveSos ? 'SOS already active. Check delivery status' : 'Create emergency SOS report'}
-            accessibilityHint={hasActiveSos ? 'Checks saved delivery evidence for your active SOS without creating another incident' : 'Immediately save SOS locally and start available delivery. Details are optional.'}
+            accessibilityLabel={hasActiveSos ? 'Active SOS. Check status' : 'Save emergency SOS'}
+            accessibilityHint={hasActiveSos ? 'Checks this SOS. It does not create a new one.' : 'Saves the SOS on this phone and starts delivery.'}
             disabled={saving}
             accessibilityState={{disabled: saving, busy: saving}}
             style={({pressed}) => [styles.sosButton, saving && styles.disabledButton, pressed && styles.pressed]}
@@ -415,12 +409,12 @@ export default function App() {
               {saving ? 'Saving SOS…' : hasActiveSos ? 'SOS already active' : latest ? 'Tap to send a new SOS' : 'Tap once to send SOS'}
             </Text>
             {hasActiveSos ? <Text style={styles.sosButtonHint}>
-              {syncing ? 'Checking delivery status…' : 'Tap to check delivery. Your saved SOS stays active.'}
+              {syncing ? 'Checking status…' : 'Tap to check status'}
             </Text> : null}
           </Pressable>
         ) : (
           <View style={styles.card}>
-            <Text accessibilityRole="header" style={styles.sectionTitle}>What is happening?</Text>
+            <Text accessibilityRole="header" style={styles.sectionTitle}>Emergency type</Text>
             <View style={styles.optionGrid}>
               {EMERGENCY_TYPES.map(type => (
                 <OptionButton
@@ -433,7 +427,7 @@ export default function App() {
                 />
               ))}
             </View>
-            <Text accessibilityRole="header" style={styles.sectionTitle}>How urgent is it?</Text>
+            <Text accessibilityRole="header" style={styles.sectionTitle}>Urgency</Text>
             {URGENCIES.map(item => (
               <OptionButton
                 key={item}
@@ -456,10 +450,10 @@ export default function App() {
         {showForm ? statusCard : null}
 
         {!showForm ? <>
-          <Pressable accessibilityRole="button" accessibilityLabel="Your SOS history"
+          <Pressable accessibilityRole="button" accessibilityLabel="SOS history"
             accessibilityState={{expanded: showHistory}} style={styles.secondaryButton}
             onPress={() => setShowHistory(current => !current)}>
-            <Text style={styles.secondaryButtonText}>{showHistory ? 'Hide SOS history' : `Your SOS history (${reports.length})`}</Text>
+            <Text style={styles.secondaryButtonText}>{showHistory ? 'Hide history' : `SOS history (${reports.length})`}</Text>
           </Pressable>
           {showHistory ? <SosHistory reports={reports} /> : null}
         </> : null}
@@ -485,32 +479,32 @@ export default function App() {
         {showHelp ? (
           <View style={styles.card}>
             <Text style={styles.deliveryHelpText}>
-              If internet works, SAGIP sends directly to the server. Nearby-device relay is the offline fallback.
+              With internet, SAGIP sends to the server. Without internet, nearby SAGIP phones can relay it.
             </Text>
             <Text style={styles.deliveryHelpText}>
-              Device location is attached when available. Your SOS still saves if location permission or GPS is unavailable.
+              SAGIP adds location when available. SOS saving does not depend on location.
             </Text>
           </View>
         ) : null}
       </ScrollView>
       {showForm ? (
         <View style={styles.formActions}>
-          {detailsTargetClosed ? <Text style={styles.statusDetailText}>This SOS was resolved while you were editing. Close these unsaved details to return to its history.</Text> : null}
+          {detailsTargetClosed ? <Text style={styles.statusDetailText}>This SOS was resolved. Close these unsaved details.</Text> : null}
           {detailsTarget && latest?.reportId === detailsTarget.reportId && (latest.revision ?? 1) !== detailsTarget.revision ? (
-            <Pressable accessibilityRole="button" accessibilityLabel="Refresh SOS version and keep choices"
+            <Pressable accessibilityRole="button" accessibilityLabel="Refresh SOS and keep choices"
               disabled={saving} accessibilityState={{disabled: saving}}
               onPress={() => {
                 setDetailsTarget({reportId: latest.reportId, revision: latest.revision ?? 1});
                 detailOperation.current = null;
                 setDetailsError(null);
               }} style={styles.secondaryButton}>
-              <Text style={styles.secondaryButtonText}>SOS changed. Refresh version and keep choices</Text>
+              <Text style={styles.secondaryButtonText}>SOS changed. Refresh and keep choices</Text>
             </Pressable>
           ) : null}
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={saving ? 'Saving optional SOS details' : 'Save optional SOS details'}
-            accessibilityHint="Adds selected details to the same saved SOS; unselected details stay unchanged"
+            accessibilityHint="Adds the selected details to this SOS."
             disabled={detailsTargetClosed || (!emergencyType && !urgency) || saving}
             accessibilityState={{disabled: detailsTargetClosed || (!emergencyType && !urgency) || saving}}
             onPress={() => {
@@ -526,7 +520,7 @@ export default function App() {
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Skip optional SOS details"
-            accessibilityHint="Keeps your saved SOS and its delivery attempts. Discards only these unsaved choices."
+            accessibilityHint="Keeps the SOS. Discards unsaved choices."
             disabled={saving}
             accessibilityState={{disabled: saving}}
             onPress={() => {
@@ -541,7 +535,7 @@ export default function App() {
               saving && styles.disabledButton,
               pressed && styles.pressed,
             ]}>
-            <Text style={styles.cancelButtonText}>Skip / close</Text>
+            <Text style={styles.cancelButtonText}>Skip details</Text>
           </Pressable>
         </View>
       ) : null}
@@ -551,11 +545,11 @@ export default function App() {
 
 function detailsDeliveryText(state: string): string {
   switch (state) {
-    case 'SERVER_ACCEPTED': return 'The server accepted your latest details. Responder acknowledgement of these details is not yet confirmed.';
-    case 'RESPONDER_ACKNOWLEDGED': return 'Acknowledgement recorded for the latest details. Verified evidence, when available, is shown separately.';
-    case 'RELAYED_TO_PEER': return 'Latest details saved on another SAGIP device for forwarding. Server receipt is not yet confirmed.';
-    case 'PERMANENT_FAILURE': return 'Latest details remain saved here, but their delivery failed permanently. Original SOS status is shown above.';
-    default: return 'Latest details saved here and waiting to send. Original SOS status is shown above.';
+    case 'SERVER_ACCEPTED': return 'Server accepted the latest details.';
+    case 'RESPONDER_ACKNOWLEDGED': return 'Responder acknowledgement recorded for the latest details.';
+    case 'RELAYED_TO_PEER': return 'Another SAGIP phone has the latest details. Server receipt is not confirmed.';
+    case 'PERMANENT_FAILURE': return 'Latest details stay saved here. Delivery failed permanently.';
+    default: return 'Latest details are saved here. Waiting to send.';
   }
 }
 
@@ -563,12 +557,12 @@ function relayCustodySummary(status: BleRelayStatus | null): string | null {
   if (!status || status.heldRelayCount <= 0) return null;
   const heldLabel = `${status.heldRelayCount} relayed SOS message${status.heldRelayCount === 1 ? '' : 's'}`;
   if (status.pendingForwardCount <= 0) {
-    return `This phone is safely carrying ${heldLabel}; server forwarding has completed.`;
+    return `${heldLabel} saved here. Forwarding complete.`;
   }
   if (status.pendingForwardCount === status.heldRelayCount) {
-    return `This phone is safely carrying ${heldLabel} and is waiting to forward ${status.pendingForwardCount === 1 ? 'it' : 'them'} to the SAGIP server.`;
+    return `${heldLabel} saved here. Waiting to forward.`;
   }
-  return `This phone is safely carrying ${heldLabel}; ${status.pendingForwardCount} still ${status.pendingForwardCount === 1 ? 'needs' : 'need'} server forwarding.`;
+  return `${heldLabel} saved here. ${status.pendingForwardCount} waiting to forward.`;
 }
 
 function NearbyRelayCard({
@@ -585,7 +579,7 @@ function NearbyRelayCard({
   onRefresh: () => void;
 }) {
   let stateText = 'Checking nearby relay…';
-  let detail = 'Your SOS can still be saved on this phone while relay is checked.';
+  let detail = 'SOS saving does not depend on nearby relay.';
   let actionLabel: string | null = null;
   let action: (() => void) | null = null;
   const custodySummary = relayCustodySummary(status);
@@ -595,7 +589,7 @@ function NearbyRelayCard({
       case 'PERMISSION_REQUIRED':
         stateText = 'Nearby relay needs permission';
         detail =
-          'SOS saving still works without it. Allow nearby-device access so SAGIP can pass saved SOS messages to nearby SAGIP phones when internet is unavailable.';
+          'Allow nearby-device access to relay SOS messages when internet is unavailable.';
         actionLabel = requesting ? 'Requesting permission…' : 'Allow nearby relay';
         action = onEnable;
         break;
@@ -607,40 +601,40 @@ function NearbyRelayCard({
         break;
       case 'NOT_SUPPORTED':
         stateText = 'Nearby relay unavailable';
-        detail = 'This phone does not support the Bluetooth relay SAGIP needs.';
+        detail = 'This phone does not support SAGIP nearby relay.';
         break;
       case 'READY':
         if (status.isDutyCyclePaused) {
           stateText = 'Nearby relay active';
           detail = custodySummary
-            ? `${custodySummary} SAGIP is conserving battery between nearby-device checks.`
-            : 'SAGIP is conserving battery between nearby-device checks. Relay will resume automatically.';
+            ? `${custodySummary} Relay is paused to save battery.`
+            : 'Relay is paused to save battery. It restarts automatically.';
         } else if (status.isScanning && status.isAdvertising) {
           stateText = 'Nearby relay active';
           const discoveryDetail =
             status.peerCount > 0
               ? `${status.peerCount} nearby SAGIP device${status.peerCount === 1 ? '' : 's'} detected.`
-              : 'Searching for nearby SAGIP devices.';
+              : 'Searching for nearby SAGIP phones.';
           detail = custodySummary ? `${custodySummary} ${discoveryDetail}` : discoveryDetail;
         } else if (status.isScanning || status.isAdvertising) {
           stateText = 'Nearby relay partially active';
           detail = custodySummary
-            ? `${custodySummary} Bluetooth relay is running, but one nearby mode is not active.`
-            : 'Bluetooth relay is running, but one relay mode is not active. SAGIP will keep retrying delivery.';
+            ? `${custodySummary} Relay is only partly active.`
+            : 'Relay is only partly active. SAGIP will retry.';
           actionLabel = 'Retry nearby relay';
           action = onEnable;
         } else {
           stateText = 'Nearby relay not active';
           detail = custodySummary
             ? `${custodySummary} Bluetooth is ready, but nearby relay is not running.`
-            : 'Bluetooth is ready, but nearby relay is not running. Your SOS remains saved locally.';
+            : 'Bluetooth is ready. Nearby relay is not running.';
           actionLabel = 'Retry nearby relay';
           action = onEnable;
         }
         break;
       default:
-        stateText = 'Nearby relay status unavailable';
-        detail = 'Your SOS can still be saved locally. SAGIP could not confirm Bluetooth relay status.';
+        stateText = 'Relay status unavailable';
+        detail = 'SOS saving still works.';
         actionLabel = 'Check relay status';
         action = onRefresh;
     }
@@ -657,7 +651,7 @@ function NearbyRelayCard({
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={actionLabel}
-          accessibilityHint="Updates Bluetooth relay availability without affecting locally saved SOS reports"
+          accessibilityHint="Checks nearby relay only."
           disabled={requesting}
           accessibilityState={{disabled: requesting}}
           onPress={action}

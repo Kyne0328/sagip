@@ -115,6 +115,37 @@ describe('verified receipt bridge', () => {
     );
   });
 
+  const snapshot = {
+    eventId: 'snapshot', revision: 1, verificationKind: 'VERIFIED_OFFLINE_ROOT_SNAPSHOT',
+    authorityCheckedAt: 2000, issuedAt: 1000, authorityExpiresAt: 900000,
+    offlineEvidenceState: 'VALID_AT_LAST_CHECK', status: 'RESOLVED', callsign: 'UNIT-1',
+    note: '', requesterDeliveryState: 'UNKNOWN',
+  };
+
+  it.each([true, false])('preserves report-wide offline closure hold %p', async offlineSnapshotClosureHold => {
+    nativeCore.listEmergencyReports.mockResolvedValue([{...baseSummary, offlineSnapshotClosureHold}]);
+    expect((await SurvivalCore.listEmergencyReports())[0].offlineSnapshotClosureHold).toBe(offlineSnapshotClosureHold);
+  });
+  it.each(['false', null, 1])('rejects malformed report-wide closure hold %p', async offlineSnapshotClosureHold => {
+    nativeCore.listEmergencyReports.mockResolvedValue([{...baseSummary, offlineSnapshotClosureHold}]);
+    await expect(SurvivalCore.listEmergencyReports()).rejects.toThrow('Invalid emergency report response from native core');
+  });
+
+  it('preserves complete bounded historical snapshot metadata', async () => {
+    nativeCore.listEmergencyReports.mockResolvedValue([{...baseSummary, verifiedReceipt: snapshot}]);
+    const [result] = await SurvivalCore.listEmergencyReports();
+    expect(result.verifiedReceipt).toEqual(snapshot);
+  });
+
+  it.each([
+    {issuedAt: undefined}, {issuedAt: -1}, {authorityExpiresAt: 2000},
+    {authorityCheckedAt: null}, {offlineEvidenceState: undefined},
+    {offlineEvidenceState: 'CURRENT'}, {note: 'Private note'},
+  ])('rejects incomplete or misleading snapshot metadata %p', async invalid => {
+    nativeCore.listEmergencyReports.mockResolvedValue([{...baseSummary, verifiedReceipt: {...snapshot, ...invalid}}]);
+    await expect(SurvivalCore.listEmergencyReports()).rejects.toThrow('Invalid emergency report response from native core');
+  });
+
   it('keeps absent legacy verified evidence absent', async () => {
     nativeCore.createEmergencyReport.mockResolvedValue(baseSummary);
 

@@ -6,15 +6,43 @@ import java.net.HttpURLConnection
 import java.net.URI
 import java.util.UUID
 
-data class ReceiptReturnEntry(val eventId: String, val eventDigest: String, val bytes: ByteArray)
-data class ReceiptReturnPage(val entries: List<ReceiptReturnEntry>, val nextCursor: String?)
+data class ReceiptReturnEntry(
+  val eventId: String, val eventDigest: String, val bytes: ByteArray,
+  val offlineBundle: ByteArray? = null,
+)
+data class ReceiptReturnPage(
+  val entries: List<ReceiptReturnEntry>, val nextCursor: String?,
+  val revocations: List<ByteArray> = emptyList(),
+)
 fun interface ReceiptReturnTransport { fun fetch(reportId: String, cursor: String?): ReceiptReturnPage }
+fun interface ReceiptReturnTimeTransport { fun fetch(challenge: TimeChallenge): ByteArray }
+
+/** Accept only the exact locally issued challenge through the trusted persistence owner. */
+internal fun refreshReceiptReturnTime(
+  transport: ReceiptReturnTimeTransport,
+  active: () -> Boolean,
+  trustedTime: () -> TimeInterval?,
+  begin: () -> TimeChallenge,
+  accept: (String, ByteArray) -> TimeAcceptance,
+): Boolean = runCatching {
+  check(active())
+  if (trustedTime() != null) return@runCatching true
+  val challenge = begin()
+  check(active())
+  val bytes = transport.fetch(challenge)
+  check(active() && bytes.size in 1..ReceiptV2Codec.MAX_RECEIPT_BYTES)
+  accept(challenge.id, bytes).kind == "ACCEPTED" && active() && trustedTime() != null
+}.getOrDefault(false)
 /** sourceId must change when the authenticated account or endpoint changes. Reports need explicit enrollment. */
-data class ReceiptReturnFeedConfig(val sourceId: String, val reportIds: Set<String>, val transport: ReceiptReturnTransport)
+data class ReceiptReturnFeedConfig(
+  val sourceId: String, val reportIds: Set<String>, val transport: ReceiptReturnTransport,
+  val timeTransport: ReceiptReturnTimeTransport? = null,
+)
 data class ReceiptReturnBatch(val enabled: Boolean = false, val stored: Int = 0, val pending: Int = 0, val retryable: Int = 0)
 
 /** HTTPS/system trust only; no redirects, credential persistence, root installation, or authority inference. */
-class HttpReceiptReturnTransport(baseUrl: String, private val token: () -> String) : ReceiptReturnTransport {
+class HttpReceiptReturnTransport(baseUrl: String, private val token: () -> String) :
+  ReceiptReturnTransport, ReceiptReturnTimeTransport {
   private val base = URI(baseUrl).also {
     require(it.scheme == "https" && it.host != null && it.rawUserInfo == null && it.rawQuery == null && it.rawFragment == null)
     require(it.rawPath.isNullOrEmpty() || it.rawPath == "/")
@@ -41,28 +69,87 @@ class HttpReceiptReturnTransport(baseUrl: String, private val token: () -> Strin
       return decodePage(raw, cursor)
     } finally { connection.disconnect() }
   }
+  override fun fetch(challenge: TimeChallenge): ByteArray {
+    val body = encodeTimeRequest(challenge)
+    val auth = token()
+    require(auth.length in 1..512 && auth.all { it.code in 33..126 })
+    val connection = URI(base + "/v2/authority/time").toURL().openConnection() as HttpURLConnection
+    try {
+      connection.instanceFollowRedirects = false
+      connection.connectTimeout = 10_000
+      connection.readTimeout = 10_000
+      connection.requestMethod = "POST"
+      connection.doOutput = true
+      connection.setFixedLengthStreamingMode(body.size)
+      connection.setRequestProperty("Authorization", "Bearer " + auth)
+      connection.setRequestProperty("Content-Type", "application/json")
+      connection.setRequestProperty("Accept", "application/octet-stream")
+      connection.setRequestProperty("Accept-Encoding", "identity")
+      connection.outputStream.use { it.write(body) }
+      check(connection.responseCode == 200) { "RECEIPT_TIME_UNAVAILABLE" }
+      require(connection.contentLengthLong <= ReceiptV2Codec.MAX_RECEIPT_BYTES)
+      return decodeTimeResponse(connection.inputStream.use { it.readBytesBounded(ReceiptV2Codec.MAX_RECEIPT_BYTES) })
+    } finally { connection.disconnect() }
+  }
+
+  internal fun encodeTimeRequest(challenge: TimeChallenge): ByteArray {
+    require(challenge.verifierId.size == 32 && challenge.nonce.size == 32)
+    require(UUID.fromString(challenge.verifierBootSessionId).toString() == challenge.verifierBootSessionId)
+    return JSONObject().put("verifierId", Base64.encodeToString(challenge.verifierId, Base64.NO_WRAP))
+      .put("verifierBootSessionId", challenge.verifierBootSessionId)
+      .put("nonce", Base64.encodeToString(challenge.nonce, Base64.NO_WRAP))
+      .toString().toByteArray(Charsets.UTF_8)
+  }
+
+  internal fun decodeTimeResponse(bytes: ByteArray): ByteArray {
+    require(bytes.size in 1..ReceiptV2Codec.MAX_RECEIPT_BYTES)
+    require(ReceiptV2Codec.decode(bytes).fields is ReceiptFields.Time) { "NOT_TIME_PROOF" }
+    return bytes
+  }
+
   internal fun decodePage(raw: ByteArray, cursor: String? = null): ReceiptReturnPage {
     require(raw.size <= MAX_PAGE_BYTES)
     val decoder = Charsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
       val page = JSONObject(decoder.decode(java.nio.ByteBuffer.wrap(raw)).toString())
-      require(page.keys().asSequence().toSet() == setOf("entries", "nextCursor"))
+      val pageKeys = page.keys().asSequence().toSet()
+      require(pageKeys == setOf("entries", "nextCursor") ||
+        pageKeys == setOf("entries", "nextCursor", "revocationsBase64"))
       val entries = page.getJSONArray("entries")
       require(entries.length() <= 32)
       val parsed = (0 until entries.length()).map { index ->
         val row = entries.getJSONObject(index)
-        require(row.keys().asSequence().toSet() == setOf("eventId", "eventDigest", "bytesBase64"))
+        val rowKeys = row.keys().asSequence().toSet()
+        val required = setOf("eventId", "eventDigest", "bytesBase64")
+        require(rowKeys == required || rowKeys == required + "offlineBundleBase64")
         val id = row.getString("eventId"); val digest = row.getString("eventDigest")
         require(UUID.fromString(id).toString() == id && digest.matches(HEX))
-        val encoded = row.getString("bytesBase64")
-        require(encoded.length <= 10_924)
-        val bytes = Base64.decode(encoded, Base64.NO_WRAP)
-        require(bytes.size in 1..ReceiptV2Codec.MAX_RECEIPT_BYTES && Base64.encodeToString(bytes, Base64.NO_WRAP) == encoded)
-        ReceiptReturnEntry(id, digest, bytes)
+        val bytes = canonicalBase64(row.getString("bytesBase64"), ReceiptV2Codec.MAX_RECEIPT_BYTES)
+        val bundle = if (row.has("offlineBundleBase64")) {
+          canonicalBase64(row.getString("offlineBundleBase64"), BleReceiptExchangeCodec.MAX_OBJECT_BYTES).also {
+            val decoded = OfflineRootSnapshotCodec.decodeBundle(it)
+            require(java.security.MessageDigest.isEqual(decoded.receipt, bytes)) { "OFFLINE_BUNDLE_RECEIPT_MISMATCH" }
+          }
+        } else null
+        ReceiptReturnEntry(id, digest, bytes, bundle)
       }
       require(parsed.map { it.eventId }.toSet().size == parsed.size)
       val next = if (page.isNull("nextCursor")) null else page.getString("nextCursor").also { require(it.matches(HEX)) }
       require(next == null || next != cursor)
-      return ReceiptReturnPage(parsed, next)
+      val revocations = if (page.has("revocationsBase64")) {
+        val values = page.getJSONArray("revocationsBase64")
+        require(values.length() <= 192)
+        (0 until values.length()).map { canonicalBase64(values.getString(it), 4096) }
+      } else emptyList()
+      require(parsed.sumOf { it.bytes.size.toLong() + (it.offlineBundle?.size ?: 0) } +
+        revocations.sumOf { it.size.toLong() } <= MAX_PAGE_BYTES)
+      return ReceiptReturnPage(parsed, next, revocations)
+  }
+
+  private fun canonicalBase64(encoded: String, maxBytes: Int): ByteArray {
+    require(encoded.length <= ((maxBytes + 2) / 3) * 4)
+    val bytes = Base64.decode(encoded, Base64.NO_WRAP)
+    require(bytes.size in 1..maxBytes && Base64.encodeToString(bytes, Base64.NO_WRAP) == encoded)
+    return bytes
   }
 
   private fun java.io.InputStream.readBytesBounded(max: Int): ByteArray {
@@ -90,11 +177,12 @@ class ReceiptReturnWorker(
   @Synchronized fun runOnce(): ReceiptReturnBatch {
     val config = configuration() ?: return ReceiptReturnBatch()
     val receiver = service() ?: return ReceiptReturnBatch()
-    if (receiver.baseContext() == null) return ReceiptReturnBatch()
+    if (!receiver.feedActive()) return ReceiptReturnBatch()
     require(config.sourceId.matches(Regex("[A-Za-z0-9_-]{1,64}")) && config.reportIds.size <= 10_000)
     config.reportIds.forEach { require(UUID.fromString(it).toString() == it) }
     enqueue(config)
     var stored = 0; var pending = 0; var retryable = 0
+    var timeRefreshAttempted = false
     repeat(16) {
       if (!current(config, receiver)) return ReceiptReturnBatch(false, stored, pending, retryable)
       val attempt = claim(config, checkedClock()) ?: return ReceiptReturnBatch(true, stored, pending, retryable)
@@ -103,11 +191,25 @@ class ReceiptReturnWorker(
       var waiting = false
       try {
         check(current(config, receiver))
+        if (!timeRefreshAttempted && config.timeTransport != null && receiver.trustedTime() == null) {
+          timeRefreshAttempted = true
+          if (!refreshReceiptReturnTime(config.timeTransport, { current(config, receiver) },
+              receiver::trustedTime, receiver::beginTimeChallenge, receiver::acceptTimeProof)) retryable++
+        }
+        // Clock failure must never suppress signed revocation import from an otherwise available feed.
+        check(current(config, receiver))
         val page = config.transport.fetch(attempt.reportId, attempt.cursor)
-        check(page.entries.size <= 32 && page.entries.sumOf { it.bytes.size.toLong() } <= 262_144)
+        check(page.entries.size <= 32 && page.revocations.size <= 192)
+        check(page.entries.sumOf { it.bytes.size.toLong() + (it.offlineBundle?.size ?: 0) } +
+          page.revocations.sumOf { it.size.toLong() } <= 262_144)
         check(page.nextCursor == null || (page.nextCursor.matches(Regex("[0-9a-f]{64}")) && page.nextCursor != attempt.cursor))
         check(page.entries.map { it.eventId }.toSet().size == page.entries.size)
-        for (entry in page.entries) {
+        for (revocation in page.revocations) {
+          check(current(config, receiver))
+          check(revocation.size in 1..4096)
+          if (!receiver.ingestOfflineRootRevocation(revocation)) { waiting = true; break }
+        }
+        for (entry in if (waiting) emptyList() else page.entries) {
           check(current(config, receiver))
           check(TrustedReceiptReturnService.hex(TrustedReceiptReturnService.hash(entry.bytes)) == entry.eventDigest)
           val fields = ReceiptV2Codec.decode(entry.bytes).fields
@@ -122,7 +224,13 @@ class ReceiptReturnWorker(
             }
             else -> error("NOT_RELAY_RECEIPT")
           }
-          val admission = receiver.admit(kind, entry.bytes)
+          val bundle = entry.offlineBundle
+          if (bundle != null) {
+            val decoded = OfflineRootSnapshotCodec.decodeBundle(bundle)
+            check(java.security.MessageDigest.isEqual(decoded.receipt, entry.bytes)) { "OFFLINE_BUNDLE_RECEIPT_MISMATCH" }
+            check(kind == ObjectKind.RESPONDER_RECEIPT) { "OFFLINE_BUNDLE_KIND" }
+          }
+          val admission = receiver.admit(if (bundle == null) kind else ObjectKind.OFFLINE_ROOT_BUNDLE, bundle ?: entry.bytes)
           if (admission.kind !in setOf(CustodyResultKind.COMMITTED, CustodyResultKind.DUPLICATE)) {
             waiting = true
             break // Retain cursor. Pending bytes must never be lost to bounded quarantine eviction.
@@ -137,7 +245,7 @@ class ReceiptReturnWorker(
     return ReceiptReturnBatch(true, stored, pending, retryable)
   }
   private fun current(config: ReceiptReturnFeedConfig, receiver: TrustedReceiptReturnService) =
-    configuration() === config && service() === receiver && receiver.baseContext() != null
+    configuration() === config && service() === receiver && receiver.feedActive()
   private fun enqueue(config: ReceiptReturnFeedConfig) {
     val db = database.writableDatabase
     db.beginTransaction()

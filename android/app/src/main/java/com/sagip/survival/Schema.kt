@@ -1,7 +1,18 @@
 package com.sagip.survival
 
 object Schema {
-  const val VERSION = 19
+  const val VERSION = 20
+
+
+  private val OFFLINE_ROOT_CREATE_STATEMENTS = listOf(
+    "CREATE TABLE offline_root_relay_scan (domain_id TEXT PRIMARY KEY NOT NULL, row_id INTEGER NOT NULL DEFAULT 0)",
+    "CREATE TABLE offline_root_domains (domain_id TEXT PRIMARY KEY NOT NULL, policy_digest TEXT NOT NULL, epoch INTEGER NOT NULL CHECK(epoch>=0), state_digest TEXT NOT NULL, checked_high INTEGER NOT NULL DEFAULT 0, time_high INTEGER NOT NULL DEFAULT 0, generation INTEGER NOT NULL DEFAULT 0, uncertain INTEGER NOT NULL DEFAULT 0 CHECK(uncertain IN (0,1)))",
+    "CREATE TABLE offline_root_evidence (domain_id TEXT NOT NULL REFERENCES offline_root_domains(domain_id), proof_id TEXT NOT NULL, proof_digest TEXT NOT NULL, event_id TEXT NOT NULL, bundle_bytes BLOB NOT NULL, expires_at_ms INTEGER NOT NULL, PRIMARY KEY(domain_id,proof_id))",
+    "CREATE INDEX idx_offline_root_evidence_event ON offline_root_evidence(event_id)",
+    "CREATE TABLE offline_root_streams (domain_id TEXT NOT NULL REFERENCES offline_root_domains(domain_id), event_id TEXT NOT NULL, receipt_digest TEXT NOT NULL, provider_id TEXT NOT NULL, report_id TEXT NOT NULL, revision INTEGER NOT NULL, sequence INTEGER NOT NULL, PRIMARY KEY(domain_id,event_id), UNIQUE(domain_id,provider_id,report_id,sequence))",
+    "CREATE TABLE offline_root_revocations (domain_id TEXT NOT NULL REFERENCES offline_root_domains(domain_id), revocation_id TEXT NOT NULL, digest TEXT NOT NULL, target_kind TEXT NOT NULL, target_id TEXT NOT NULL, epoch INTEGER NOT NULL, object_bytes BLOB NOT NULL, PRIMARY KEY(domain_id,revocation_id))",
+    "CREATE INDEX idx_offline_root_revocations_target ON offline_root_revocations(domain_id,target_kind,target_id)",
+  )
 
   private val RECEIPT_RETURN_CREATE_STATEMENTS = listOf(
     "CREATE TABLE receipt_return_replay_state (singleton INTEGER PRIMARY KEY CHECK(singleton=1), quarantine_row_id INTEGER NOT NULL DEFAULT 0, signed_row_id INTEGER NOT NULL DEFAULT 0, inventory_row_id INTEGER NOT NULL DEFAULT 0, lease_row_id INTEGER NOT NULL DEFAULT 0)",
@@ -242,7 +253,7 @@ object Schema {
         transport_state TEXT NOT NULL,
         accounted_bytes INTEGER NOT NULL,
         PRIMARY KEY (object_kind, object_id),
-        CHECK (object_kind IN (1, 2, 3))
+        CHECK (object_kind IN (1, 2, 3, 4, 5))
       )
     """.trimIndent(),
     """
@@ -254,7 +265,7 @@ object Schema {
         protected_until_ms INTEGER NOT NULL,
         accounted_bytes INTEGER NOT NULL,
         PRIMARY KEY (object_kind, object_id),
-        CHECK (object_kind IN (1, 2, 3))
+        CHECK (object_kind IN (1, 2, 3, 4, 5))
       )
     """.trimIndent(),
     """
@@ -279,7 +290,7 @@ object Schema {
         terminal_outcome TEXT,
         updated_at_ms INTEGER NOT NULL,
         PRIMARY KEY (peer_id, object_kind, object_id),
-        CHECK (object_kind IN (1, 2, 3))
+        CHECK (object_kind IN (1, 2, 3, 4, 5))
       )
     """.trimIndent(),
     """
@@ -295,7 +306,7 @@ object Schema {
         outcome TEXT,
         created_at_ms INTEGER NOT NULL,
         completed_at_ms INTEGER,
-        CHECK (object_kind IN (1, 2, 3)),
+        CHECK (object_kind IN (1, 2, 3, 4, 5)),
         CHECK (state IN ('ACTIVE', 'COMPLETED', 'EXPIRED'))
       )
     """.trimIndent(),
@@ -500,7 +511,7 @@ object Schema {
     "CREATE INDEX idx_relay_receipts_message ON relay_receipts(message_id)",
     "CREATE INDEX idx_responder_acks_report ON responder_acks(report_id)",
     "CREATE INDEX idx_relay_responder_acks_report ON relay_responder_acks(report_id, acknowledged_at DESC)",
-  ) + RECEIPT_CREATE_STATEMENTS + RELAY_CREATE_STATEMENTS + TRANSFER_CREATE_STATEMENTS + CONTACT_CREATE_STATEMENTS + GATEWAY_CREATE_STATEMENTS + PAIRING_CREATE_STATEMENTS + ADMISSION_CREATE_STATEMENTS + TIME_PROOF_CREATE_STATEMENTS + ACTION_API_CREATE_STATEMENTS + VICTIM_STATUS_CREATE_STATEMENTS + RECEIPT_RETURN_CREATE_STATEMENTS
+  ) + RECEIPT_CREATE_STATEMENTS + RELAY_CREATE_STATEMENTS + TRANSFER_CREATE_STATEMENTS + CONTACT_CREATE_STATEMENTS + GATEWAY_CREATE_STATEMENTS + PAIRING_CREATE_STATEMENTS + ADMISSION_CREATE_STATEMENTS + TIME_PROOF_CREATE_STATEMENTS + ACTION_API_CREATE_STATEMENTS + VICTIM_STATUS_CREATE_STATEMENTS + RECEIPT_RETURN_CREATE_STATEMENTS + OFFLINE_ROOT_CREATE_STATEMENTS
 
   val MIGRATE_1_TO_2 = listOf(
     "ALTER TABLE outbound_envelopes ADD COLUMN envelope_bytes BLOB",
@@ -603,6 +614,18 @@ object Schema {
     """.trimIndent(),
     "CREATE INDEX idx_relay_responder_acks_report ON relay_responder_acks(report_id, acknowledged_at DESC)",
   )
+
+
+  val MIGRATE_19_TO_20: List<String> = listOf("relay_objects","relay_object_tombstones","relay_peer_object_state","relay_transfer_leases").flatMap { table ->
+    val statements = RELAY_CREATE_STATEMENTS + TRANSFER_CREATE_STATEMENTS
+    val create = statements.first { it.trimStart().startsWith("CREATE TABLE " + table + " (") }
+    listOf(
+      create.replace("CREATE TABLE " + table + " (", "CREATE TABLE " + table + "_v20 ("),
+      "INSERT INTO " + table + "_v20 SELECT * FROM " + table,
+      "DROP TABLE " + table,
+      "ALTER TABLE " + table + "_v20 RENAME TO " + table,
+    ) + statements.filter { (it.startsWith("CREATE INDEX ") || it.startsWith("CREATE UNIQUE INDEX ")) && it.contains(" ON " + table + "(") }
+  } + OFFLINE_ROOT_CREATE_STATEMENTS
 
   val MIGRATE_7_TO_8 = RECEIPT_CREATE_STATEMENTS
   val MIGRATE_8_TO_9 = RELAY_CREATE_STATEMENTS

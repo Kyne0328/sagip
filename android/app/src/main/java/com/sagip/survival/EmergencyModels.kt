@@ -55,6 +55,9 @@ data class VerifiedReceiptSummary(
   val callsign: String,
   val note: String,
   val requesterDeliveryState: String,
+  val issuedAt: Long? = null,
+  val authorityExpiresAt: Long? = null,
+  val offlineEvidenceState: String? = null,
 )
 
 data class EmergencyReportSummary(
@@ -67,6 +70,7 @@ data class EmergencyReportSummary(
   val location: LocationSnapshot?,
   val responderAck: ResponderAck? = null,
   val verifiedReceipt: VerifiedReceiptSummary? = null,
+  val offlineSnapshotClosureHold: Boolean = false,
   val latestRevision: Int = 1,
   val message: String? = null,
   val originalDelivery: RevisionDeliverySummary? = null,

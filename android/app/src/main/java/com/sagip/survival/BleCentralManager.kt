@@ -223,6 +223,7 @@ class BleCentralManager(
     private val serviceDiscoveryStarted = AtomicBoolean(false)
     private var mtuFallback: ScheduledFuture<*>? = null
     private var fastTypedOffer = false
+    private var peerObjectMask = BleReceiptExchangeCodec.LEGACY_OBJECT_MASK
     private val peerInventory = mutableListOf<InventoryEntry>()
     private var peerInventorySnapshotId: String? = null
     private var expectedPeerInventoryPage = 0
@@ -341,7 +342,7 @@ class BleCentralManager(
 
     private fun requestPeerInventory(gatt: BluetoothGatt, snapshotId: String?, pageIndex: Int): Boolean {
       val control = extensionControlChar ?: return false
-      control.value = BleReceiptExchangeCodec.encodeInventoryRequest(BleInventoryRequest(snapshotId, pageIndex))
+      control.value = BleReceiptExchangeCodec.encodeInventoryRequest(BleInventoryRequest(snapshotId, pageIndex, peerObjectMask))
       extensionState = ExtensionState.WRITING_INVENTORY_REQUEST
       return try {
         gatt.writeCharacteristic(control)
@@ -391,6 +392,11 @@ class BleCentralManager(
       prepareTypedLeases(gatt)
     }
 
+    private fun typedForwardAllowed(kind: ObjectKind, bytes: ByteArray): Boolean =
+      BleReceiptExchangeCodec.supportsObject(peerObjectMask, kind) &&
+        (BleReceiptExchangeCodec.canTransferWithoutTime(kind) || custodyTimeProvider() != null) &&
+        canForwardObject(kind, bytes)
+
     private fun prepareTypedLeases(gatt: BluetoothGatt) {
       val queue = receiptQueue ?: run {
         extensionState = ExtensionState.NONE
@@ -403,8 +409,9 @@ class BleCentralManager(
           gatt.device.address,
           now,
           if (fastTypedOffer) BleRelayLatencyPolicy.DIRECT_TYPED_OFFER_THRESHOLD else BleReceiptExchangeCodec.MAX_CONTACT_TRANSFERS,
-          eligible = canForwardObject,
-          custodyTimeMs = custodyTimeProvider() ?: now,
+          eligible = ::typedForwardAllowed,
+          // Zero is only a queue scan value. Without time, the predicate admits signed revocations alone.
+          custodyTimeMs = custodyTimeProvider() ?: 0L,
         )
       } catch (_: Exception) {
         gatt.disconnect()
@@ -413,7 +420,7 @@ class BleCentralManager(
       val remote = peerInventory.associateBy { it.objectKind to it.objectId }
       val remaining = mutableListOf<TransferLease>()
       for (lease in leased) {
-        if (!runCatching { canForwardObject(lease.objectKind, lease.bytes) }.getOrDefault(false)) {
+        if (!runCatching { typedForwardAllowed(lease.objectKind, lease.bytes) }.getOrDefault(false)) {
           runCatching { queue.releaseTransferLease(lease.leaseId, nowProvider()) }
           continue
         }
@@ -441,7 +448,7 @@ class BleCentralManager(
         continueLegacyAfterReturnAck(gatt)
         return
       }
-      if (!runCatching { canForwardObject(lease.objectKind, lease.bytes) }.getOrDefault(false)) {
+      if (!runCatching { typedForwardAllowed(lease.objectKind, lease.bytes) }.getOrDefault(false)) {
         releaseTypedLease(lease)
         typedLeaseIndex++
         sendTypedOffer(gatt)
@@ -544,7 +551,7 @@ class BleCentralManager(
 
     private fun sendTypedNextChunk(gatt: BluetoothGatt) {
       val lease = typedLeases.getOrNull(typedLeaseIndex) ?: run { gatt.disconnect(); return }
-      if (!runCatching { canForwardObject(lease.objectKind, lease.bytes) }.getOrDefault(false)) {
+      if (!runCatching { typedForwardAllowed(lease.objectKind, lease.bytes) }.getOrDefault(false)) {
         releaseTypedLease(lease)
         gatt.disconnect()
         return
@@ -759,14 +766,15 @@ class BleCentralManager(
           gatt.disconnect()
           return
         }
-        val supported = status == BluetoothGatt.GATT_SUCCESS && runCatching {
+        val capability = if (status == BluetoothGatt.GATT_SUCCESS) runCatching {
           BleReceiptExchangeCodec.decodeCapability(characteristic.value ?: ByteArray(0))
-        }.isSuccess
-        if (!supported) {
+        }.getOrNull() else null
+        if (capability == null) {
           extensionState = ExtensionState.NONE
           continueLegacyAfterReturnAck(gatt)
           return
         }
+        peerObjectMask = capability.objectMask
         peerInventory.clear()
         peerInventorySnapshotId = null
         expectedPeerInventoryPage = 0

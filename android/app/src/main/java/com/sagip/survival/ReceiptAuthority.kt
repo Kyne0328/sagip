@@ -12,13 +12,14 @@ data class VerificationContext(
   val roots: Map<String, ByteArray>, val revokedGrants: Set<String>, val allowedScopes: Set<String>,
   val trustedTime: TimeInterval?, val authorityCheckedAtMs: Long?, val currentAuthorityChecked: Boolean,
   val report: ReportIdentity?, val pairedTimeProviderId: String?, val linkedAck: ByteArray? = null,
+  val offlineRoot: OfflineRootVerificationContext? = null,
 )
 sealed class ReceiptVerification {
   abstract val kind: String
   data class Rejected(val reason: String) : ReceiptVerification() { override val kind = "REJECTED" }
   data class Unverified(val reason: String) : ReceiptVerification() { override val kind = "UNVERIFIED_AUTHORITY" }
-  data class Verified(val eventId: String, val revision: Int, val authorityCheckedAtMs: Long?, val revocationNotCheckedWhileOffline: Boolean) : ReceiptVerification() {
-    override val kind = if (revocationNotCheckedWhileOffline) "VERIFIED_OFFLINE_AUTHORITY" else "VERIFIED_CURRENT"
+  data class Verified(val eventId: String, val revision: Int, val authorityCheckedAtMs: Long?, val revocationNotCheckedWhileOffline: Boolean, val historicalRootSnapshot: Boolean = false) : ReceiptVerification() {
+    override val kind = if (historicalRootSnapshot) OfflineRootSnapshotCodec.KIND else if (revocationNotCheckedWhileOffline) "VERIFIED_OFFLINE_AUTHORITY" else "VERIFIED_CURRENT"
   }
 }
 data class MonotonicClock(val bootId: String, val elapsedMs: Long)
@@ -115,8 +116,10 @@ object ReceiptAuthority {
         }
         val time = c.trustedTime ?: throw Unavailable("RECEIPT_TIME_UNAVAILABLE")
         unavailableIf(!valid(time) || time.latestMs >= f.forwardingExpiresAtMs, "RECEIPT_TIME_UNAVAILABLE")
-        unavailableIf(!offline && !c.currentAuthorityChecked, "ROOT_AUTHORITY_UNCHECKED")
-        ReceiptVerification.Verified(f.actionId, f.revision, c.authorityCheckedAtMs, offline)
+        if (!offline && c.offlineRoot != null) OfflineRootSnapshotVerifier.verify(bytes, c) else {
+          unavailableIf(!offline && !c.currentAuthorityChecked, "ROOT_AUTHORITY_UNCHECKED")
+          ReceiptVerification.Verified(f.actionId, f.revision, c.authorityCheckedAtMs, offline)
+        }
       }
       else -> throw Invalid("NOT_RECEIPT")
     }
