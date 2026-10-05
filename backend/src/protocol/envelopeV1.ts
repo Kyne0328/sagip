@@ -99,8 +99,8 @@ export function decodeEnvelopeV1(bytes: Buffer): DecodedEnvelopeV1 {
   const messageId = uuidFromBytes(cursor.take(16, 'message ID'));
   const reportId = uuidFromBytes(cursor.take(16, 'report ID'));
   const revision = cursor.u32('revision');
-  if (revision < 1) {
-    throw protocolFailure('MALFORMED_ENVELOPE', 'Revision must be at least 1');
+  if (revision < 1 || revision > 0x7fff_ffff) {
+    throw protocolFailure('MALFORMED_ENVELOPE', 'Revision must be between 1 and 2147483647');
   }
   const createdAtMs = cursor.i64('created timestamp');
   if (createdAtMs < 0n) {

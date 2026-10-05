@@ -71,3 +71,17 @@ export interface ReportStatusResponse {
     acknowledgedAt: string;
   } | null;
 }
+
+export type VictimReportAcknowledgement = NonNullable<ReportStatusResponse['latestAck']> & {
+  revision: null;
+};
+
+export interface VictimReportStatusResponse extends ReportStatusResponse {
+  currentRevision: number;
+  latestAck: VictimReportAcknowledgement | null;
+  acknowledgements: VictimReportAcknowledgement[];
+  nextCursor: string | null;
+  checkedAt: string;
+  transport: 'AUTHENTICATED_SERVER';
+  statusScope: 'REPORT';
+}

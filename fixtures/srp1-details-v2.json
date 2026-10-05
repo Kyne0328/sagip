@@ -1,8 +1,93 @@
 {
-  "contract": "SRP1 format 2; approved pending implementation",
+  "contract": "SRP1 formats 1/2 with explicit UNSPECIFIED metadata code 0; upgrade receiving decoders and backend schema before enabling code-0 senders",
   "messageMaximumBytes": 500,
   "payloadMaximumBytes": 532,
   "cases": [
+    {
+      "name": "v1_unspecified_no_location",
+      "formatVersion": 1,
+      "hex": "5352503101000000",
+      "byteLength": 8,
+      "expected": {
+        "accepted": true,
+        "emergencyType": 0,
+        "urgency": 0,
+        "location": null,
+        "message": null
+      }
+    },
+    {
+      "name": "v2_unspecified_no_location",
+      "formatVersion": 2,
+      "hex": "53525031020000000000",
+      "byteLength": 10,
+      "expected": {
+        "accepted": true,
+        "emergencyType": 0,
+        "urgency": 0,
+        "location": null,
+        "message": null
+      }
+    },
+    {
+      "name": "v2_category_only",
+      "formatVersion": 2,
+      "hex": "53525031020300000000",
+      "byteLength": 10,
+      "expected": {
+        "accepted": true,
+        "emergencyType": 3,
+        "urgency": 0,
+        "location": null,
+        "message": null
+      }
+    },
+    {
+      "name": "v2_urgency_only",
+      "formatVersion": 2,
+      "hex": "53525031020001000000",
+      "byteLength": 10,
+      "expected": {
+        "accepted": true,
+        "emergencyType": 0,
+        "urgency": 1,
+        "location": null,
+        "message": null
+      }
+    },
+    {
+      "name": "v2_message_only",
+      "formatVersion": 2,
+      "hex": "5352503102000000000448656c70",
+      "byteLength": 14,
+      "expected": {
+        "accepted": true,
+        "emergencyType": 0,
+        "urgency": 0,
+        "location": null,
+        "message": "Help"
+      }
+    },
+    {
+      "name": "v2_unspecified_fresh_location",
+      "formatVersion": 2,
+      "hex": "535250310200000100dec54c073612880000032000000000000004b001010000",
+      "byteLength": 32,
+      "expected": {
+        "accepted": true,
+        "emergencyType": 0,
+        "urgency": 0,
+        "location": {
+          "latitude": 14.5995,
+          "longitude": 120.9842,
+          "accuracyMeters": 8,
+          "capturedAtMs": 1200,
+          "source": 1,
+          "freshness": 1
+        },
+        "message": null
+      }
+    },
     {
       "name": "v2_empty_no_location",
       "formatVersion": 2,

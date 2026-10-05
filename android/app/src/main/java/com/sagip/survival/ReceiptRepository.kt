@@ -309,6 +309,18 @@ class ReceiptRepository(
       }
       db.delete("receipt_quarantine", "lower(hex(object_digest))=?", arrayOf(hex(digest)))
       val responderFields = decoded.fields as? ReceiptFields.Responder
+      if (responderFields != null) {
+        val collision = db.rawQuery(
+          "SELECT 1 FROM receipt_records WHERE object_kind='RESPONDER' AND report_id=? AND lower(hex(issuer_provider_id))=? AND sequence=? AND event_id!=? LIMIT 1",
+          arrayOf(reportId,hex(responderFields.issuerProviderId),responderFields.sequence.toString(),eventId),
+        ).use { it.moveToFirst() }
+        if (collision) {
+          insertQuarantine(db,bytes,eventId,reportId,revision,"PROVIDER_SEQUENCE_CONFLICT")
+          trimQuarantine(db)
+          db.setTransactionSuccessful()
+          return ReceiptApplication.REJECTED
+        }
+      }
       if (!hasReceiptCapacity(
           db = db,
           eventId = eventId,
@@ -549,7 +561,26 @@ class ReceiptRepository(
     }
   }
 
-  fun projection(reportId:String):ReceiptProjection?=database.readableDatabase.rawQuery("SELECT issuer_provider_id,report_id,event_id,revision,sequence,verification_kind,authority_checked_at_ms,notification_eligible,requester_delivery_state FROM receipt_projections WHERE report_id=? ORDER BY updated_at_ms DESC LIMIT 1",arrayOf(reportId)).use{c->if(!c.moveToFirst())null else ReceiptProjection(c.getBlob(0),c.getString(1),c.getString(2),c.getInt(3),c.getLong(4),c.getString(5),if(c.isNull(6))null else c.getLong(6),c.getInt(7)!=0,c.getString(8))}
+  fun projection(reportId: String): ReceiptProjection? = database.readableDatabase.rawQuery(
+    """SELECT p.issuer_provider_id,p.report_id,p.event_id,p.revision,p.sequence,p.verification_kind,
+      p.authority_checked_at_ms,p.notification_eligible,p.requester_delivery_state,r.object_bytes
+      FROM receipt_projections p JOIN receipt_records r ON r.event_id=p.event_id WHERE p.report_id=?""",
+    arrayOf(reportId),
+  ).use { c ->
+    val candidates = mutableListOf<Pair<ReceiptProjection,Int>>()
+    while(c.moveToNext()) {
+      val fields = runCatching { ReceiptV2Codec.decode(c.getBlob(9)).fields as? ReceiptFields.Responder }.getOrNull() ?: continue
+      if(fields.reportId != reportId || fields.actionId != c.getString(2) ||
+        fields.revision != c.getInt(3) || fields.sequence != c.getLong(4) ||
+        !MessageDigest.isEqual(fields.issuerProviderId,c.getBlob(0))) continue
+      candidates += ReceiptProjection(c.getBlob(0),c.getString(1),c.getString(2),c.getInt(3),c.getLong(4),
+        c.getString(5),if(c.isNull(6)) null else c.getLong(6),c.getInt(7)!=0,c.getString(8)) to fields.status
+    }
+    // Provider sequences and local arrival times are not a shared global order.
+    candidates.maxWithOrNull(compareBy<Pair<ReceiptProjection,Int>> { it.first.revision }
+      .thenBy { it.second }.thenBy { hex(it.first.issuerProviderId) }
+      .thenBy { it.first.sequence }.thenBy { it.first.eventId })?.first
+  }
 
   fun claimVerifiedReceiptNotification(reportId: String, eventId: String): Boolean {
     UUID.fromString(reportId)
@@ -820,11 +851,17 @@ class ReceiptRepository(
     updatedAt: Long,
     notify: Boolean,
   ): Boolean {
-    val oldSequence = db.rawQuery(
-      "SELECT sequence FROM receipt_projections WHERE lower(hex(issuer_provider_id))=? AND report_id=?",
+    val old = db.rawQuery(
+      """SELECT p.sequence,p.revision,r.object_bytes FROM receipt_projections p
+        JOIN receipt_records r ON r.event_id=p.event_id
+        WHERE lower(hex(p.issuer_provider_id))=? AND p.report_id=?""",
       arrayOf(hex(fields.issuerProviderId), fields.reportId),
-    ).use { c -> if (c.moveToFirst()) c.getLong(0) else null }
-    if (oldSequence != null && oldSequence >= fields.sequence) return false
+    ).use { c ->
+      if(!c.moveToFirst()) null else Triple(c.getLong(0),c.getInt(1),
+        (ReceiptV2Codec.decode(c.getBlob(2)).fields as ReceiptFields.Responder).status)
+    }
+    if (old != null && (old.first >= fields.sequence || old.second > fields.revision ||
+      (old.second == fields.revision && old.third > fields.status))) return false
     db.delete("receipt_projections", "lower(hex(issuer_provider_id))=? AND report_id=?", arrayOf(hex(fields.issuerProviderId), fields.reportId))
     db.insertOrThrow("receipt_projections", null, ContentValues().apply {
       put("issuer_provider_id", fields.issuerProviderId)

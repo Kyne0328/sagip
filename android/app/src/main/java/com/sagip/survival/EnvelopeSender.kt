@@ -72,30 +72,8 @@ class HttpEnvelopeSender(
         }
     }
 
-    override suspend fun checkReportStatus(reportId: String): ResponderAck? {
-        return try {
-            val statusUrl = if (endpointUrl.contains("/v1/envelopes")) {
-                endpointUrl.replace("/v1/envelopes", "/v1/reports/$reportId/status")
-            } else {
-                "$endpointUrl/reports/$reportId/status"
-            }
-            val url = URL(statusUrl)
-            val connection = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = connectTimeoutMs
-                readTimeout = readTimeoutMs
-            }
-            if (connection.responseCode == HttpURLConnection.HTTP_OK) {
-                val responseBody = connection.inputStream.bufferedReader().use { it.readText() }
-                parseResponderAck(reportId, responseBody)
-            } else {
-                null
-            }
-        } catch (_: Exception) {
-            null
-        }
-    }
-
+    // Private status is fetched separately with the report owner's installation proof.
+    // Relays cannot read another person's status through the legacy transport.
     companion object {
         internal fun parseRetryAfterMillis(value: String?): Long? {
             val seconds = value?.trim()?.toLongOrNull() ?: return null

@@ -39,15 +39,15 @@ export async function prepareSosLocation(
     return 'UNAVAILABLE';
   }
 
-  let granted = await hasAndroidLocationPermission();
-  if (!granted && requestPermission) {
-    granted = await requestAndroidLocationPermission();
-  }
-  if (!granted) {
-    return 'DENIED';
-  }
-
   try {
+    let granted = await hasAndroidLocationPermission();
+    if (!granted && requestPermission) {
+      granted = await requestAndroidLocationPermission();
+    }
+    if (!granted) {
+      return 'DENIED';
+    }
+
     return (await SurvivalCore.primeLocation()) ? 'STARTED' : 'UNAVAILABLE';
   } catch {
     return 'UNAVAILABLE';

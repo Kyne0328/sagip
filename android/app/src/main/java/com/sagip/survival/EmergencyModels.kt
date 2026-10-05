@@ -7,25 +7,28 @@ enum class EmergencyType {
   TRAPPED,
   VIOLENCE,
   OTHER,
+  UNSPECIFIED,
 }
 
 enum class Urgency {
   IMMEDIATE_DANGER,
   NEED_ASSISTANCE,
+  UNSPECIFIED,
 }
 
 data class CreateEmergencyReportInput(
-  val emergencyType: EmergencyType,
-  val urgency: Urgency,
+  val emergencyType: EmergencyType = EmergencyType.UNSPECIFIED,
+  val urgency: Urgency = Urgency.UNSPECIFIED,
 )
 
-data class AppendEmergencyDetailsInput(
+data class AppendEmergencyDetailsInput @JvmOverloads constructor(
   val reportId: String,
   val expectedRevision: Int,
   val operationId: String,
   val emergencyType: EmergencyType? = null,
   // Null means absent/retain; an explicit empty string clears the message.
   val message: String? = null,
+  val urgency: Urgency? = null,
 )
 
 data class RevisionDeliverySummary(
@@ -85,6 +88,7 @@ data class EnvelopePreparationSource(
   val emergencyType: EmergencyType,
   val urgency: Urgency,
   val location: LocationSnapshot?,
+  val message: String? = null,
 )
 
 data class OutboundEnvelopeWork(

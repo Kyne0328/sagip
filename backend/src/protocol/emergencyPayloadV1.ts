@@ -10,8 +10,9 @@ export interface DecodedLocationV1 {
 }
 
 export interface DecodedEmergencyPayloadV1 {
-  emergencyType: 1 | 2 | 3 | 4 | 5 | 6;
-  urgency: 1 | 2;
+  // Code 0 means explicitly not specified; it is not OTHER or routine urgency.
+  emergencyType: 0 | 1 | 2 | 3 | 4 | 5 | 6;
+  urgency: 0 | 1 | 2;
   location: DecodedLocationV1 | null;
 }
 
@@ -30,11 +31,11 @@ export function decodeEmergencyPayloadV1(bytes: Buffer): DecodedEmergencyPayload
   }
 
   const emergencyType = bytes[5];
-  if (emergencyType === undefined || emergencyType < 1 || emergencyType > 6) {
+  if (emergencyType === undefined || emergencyType < 0 || emergencyType > 6) {
     throw protocolFailure('MALFORMED_PAYLOAD', 'Unknown emergency type code');
   }
   const urgency = bytes[6];
-  if (urgency !== 1 && urgency !== 2) {
+  if (urgency !== 0 && urgency !== 1 && urgency !== 2) {
     throw protocolFailure('MALFORMED_PAYLOAD', 'Unknown urgency code');
   }
   const locationPresent = bytes[7];

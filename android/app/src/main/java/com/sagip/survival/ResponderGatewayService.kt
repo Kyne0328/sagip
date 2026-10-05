@@ -10,7 +10,7 @@ data class GrantProvisionResult(val state: String, val reason: String? = null)
 data class TimeProofResult(val kind: String, val bytes: ByteArray? = null, val reason: String? = null)
 data class GatewayIncident(val identity: ReportIdentity, val observedIncidentVersion: Long,
   val emergencyType: EmergencyType, val urgency: Urgency, val location: LocationSnapshot?,
-  val receiptTimeline: List<ByteArray>, val pendingActions: List<ActionIntent>)
+  val receiptTimeline: List<ByteArray>, val pendingActions: List<ActionIntent>, val message: String? = null)
 
 /** Native human work boundary. Trust configuration is supplied by an operator, never by action JSON. */
 class ResponderGatewayService(
@@ -345,7 +345,7 @@ class ResponderGatewayService(
     }
     return envelopes.values.map { bytes ->
       val envelope = TransportEnvelopeV1.decode(bytes)
-      val payload = EmergencyPayloadV1.decode(envelope.payload)
+      val payload = EmergencyPayload.decode(envelope.payload)
       val history = mutableListOf<ByteArray>()
       db.rawQuery("SELECT object_bytes FROM receipt_records WHERE report_id=? ORDER BY received_at_ms,event_id", arrayOf(envelope.reportId)).use { c -> while (c.moveToNext()) history.add(c.getBlob(0)) }
       val pending = mutableListOf<ActionIntent>()
@@ -353,7 +353,7 @@ class ResponderGatewayService(
         while (c.moveToNext()) pending.add(ActionIntent(c.getString(0), envelope.reportId, c.getLong(1), c.getInt(2), c.getString(3)))
       }
       GatewayIncident(ReportIdentity(envelope.reportId, 1, envelope.revision, envelope.payloadDigest, envelope.originKeyId, envelope.originPublicKeyDer),
-        receipts.currentReceiptVersion(envelope.reportId), payload.emergencyType, payload.urgency, payload.location, history, pending)
+        receipts.currentReceiptVersion(envelope.reportId), payload.emergencyType, payload.urgency, payload.location, history, pending, payload.message)
     }
   }
 

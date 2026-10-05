@@ -25,6 +25,13 @@ class SurvivalCoreRuntime private constructor(context: Context) {
   val receiptQueue = ReceiptQueue(database)
   private val deliveryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private val deliveryMutex = Mutex()
+  private val statusSync by lazy {
+    StatusSyncDispatcher(deliveryScope) {
+      VictimStatusWorker(VictimStatusStore(database),
+        HttpPrivateReportStatusSender(BackendEndpointConfig.envelopeUrl(), AndroidKeystoreSigningIdentity()),
+      ).runOnce()
+    }
+  }
   val gatewayAccess = GatewayDeviceAccess(appContext)
   @Volatile private var deployment: GatewayDeploymentConfig? = null
   private var gatewayService: ResponderGatewayService? = null
@@ -102,7 +109,7 @@ class SurvivalCoreRuntime private constructor(context: Context) {
       repository = repository,
       sender = sender,
       relayStore = repository,
-      ackStore = repository,
+      ackStore = null,
     )
     val preparation = runCatching {
       EnvelopePreparationService(
@@ -111,6 +118,8 @@ class SurvivalCoreRuntime private constructor(context: Context) {
       ).preparePending()
     }
     val completed = worker.runOnce(nowMs)
+    // Informational history reads must never hold up a newly committed SOS upload.
+    statusSync.trigger()
     runGatewaySync(nowMs)
     // Do not let a local signing/preparation failure block an already-durable
     // relayed envelope from reaching the server. Scheduled delivery still

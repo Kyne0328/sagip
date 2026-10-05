@@ -185,6 +185,11 @@ class ResponderGatewayServiceTest {
     db.writableDatabase.execSQL("DROP TABLE gateway_admission_sources")
     db.writableDatabase.execSQL("DROP TABLE gateway_time_requests")
     db.writableDatabase.execSQL("ALTER TABLE receipt_time_checkpoints DROP COLUMN proof_bytes")
+    // Construct the historical schema, not a current schema with a stale version number.
+    db.writableDatabase.execSQL("DROP TABLE detail_operations")
+    listOf("message", "latitude", "longitude", "accuracy_meters", "captured_at", "source", "freshness").forEach {
+      db.writableDatabase.execSQL("ALTER TABLE report_revisions DROP COLUMN $it")
+    }
     db.writableDatabase.version = 11
     db.close(); db = SagipDatabase(context)
     assertEquals(Schema.VERSION, db.readableDatabase.version)

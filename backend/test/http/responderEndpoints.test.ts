@@ -6,11 +6,12 @@ import {fileURLToPath} from 'node:url';
 import {applyMigrations} from '../../src/db/migrate.js';
 import {createSagipServer} from '../../src/http/createServer.js';
 import {ResponderService} from '../../src/responder/service.js';
+import {statusProofHeaders, statusTestIdentity} from '../support/statusProof.js';
 import {createMemoryPostgresPool} from '../support/postgres.js';
 
 const MIGRATIONS_DIR = fileURLToPath(new URL('../../migrations/', import.meta.url));
 
-test('responder HTTP endpoints: auth, listing, acknowledging, and public status', async () => {
+test('responder HTTP endpoints: auth, listing, acknowledging, and private origin status', async () => {
   const pool = createMemoryPostgresPool();
   await applyMigrations(pool, MIGRATIONS_DIR);
 
@@ -40,11 +41,13 @@ test('responder HTTP endpoints: auth, listing, acknowledging, and public status'
 
     // Seed an incident with revision
     const reportId = randomUUID();
-    const originKeyId = Buffer.alloc(32, 2);
+    const origin = statusTestIdentity();
+    const originPublicKey = origin.publicKey.export({format: 'der', type: 'spki'});
+    const originKeyId = createHash('sha256').update(originPublicKey).digest();
     await pool.query(
       `INSERT INTO origin_keys(origin_key_id, public_key_der, first_seen_at, last_seen_at)
        VALUES ($1, $2, NOW(), NOW())`,
-      [originKeyId, Buffer.from([1, 2, 3])],
+      [originKeyId, originPublicKey],
     );
     await pool.query(
       `INSERT INTO incidents(report_id, origin_key_id, created_at_ms, first_received_at)
@@ -279,8 +282,12 @@ test('responder HTTP endpoints: auth, listing, acknowledging, and public status'
     });
     assert.equal(bearerAfterLogoutRes.status, 200);
 
-    // 7. Public GET /v1/reports/:reportId/status -> 200 (no auth needed)
-    const statusRes = await fetch(`${baseUrl}/v1/reports/${reportId}/status`);
+    // 7. Only the origin device can read private report status/history.
+    const deniedStatus = await fetch(`${baseUrl}/v1/reports/${reportId}/status`);
+    assert.equal(deniedStatus.status, 401);
+    const statusRes = await fetch(`${baseUrl}/v1/reports/${reportId}/status`, {
+      headers: statusProofHeaders(reportId, origin.privateKey),
+    });
     assert.equal(statusRes.status, 200);
     const statusData = (await statusRes.json()) as {reportId: string; serverAccepted: boolean; latestAck: {callsign: string; status: string}};
     assert.equal(statusData.reportId, reportId);
@@ -288,11 +295,10 @@ test('responder HTTP endpoints: auth, listing, acknowledging, and public status'
     assert.equal(statusData.latestAck?.callsign, 'RESCUE-BRAVO-1');
     assert.equal(statusData.latestAck?.status, 'ACKNOWLEDGED');
 
-    // Unknown report status -> serverAccepted: false
+    // Unknown IDs have the same response as known IDs without proof.
     const unknownStatusRes = await fetch(`${baseUrl}/v1/reports/${randomUUID()}/status`);
-    assert.equal(unknownStatusRes.status, 200);
-    const unknownData = (await unknownStatusRes.json()) as {serverAccepted: boolean};
-    assert.equal(unknownData.serverAccepted, false);
+    assert.equal(unknownStatusRes.status, 401);
+    assert.deepEqual(await unknownStatusRes.json(), await deniedStatus.json());
   } finally {
     server.close();
     await pool.end();

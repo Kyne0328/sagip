@@ -18,6 +18,7 @@ class SagipSurvivalCoreModule(
   private val database = runtime.database
   private val repository = runtime.repository
   private val receiptRepository = ReceiptRepository(database)
+  private val victimStatusStore = VictimStatusStore(database)
   private val locationProvider = LocationSnapshotProvider(reactContext.applicationContext)
   private val preparationService by lazy {
     EnvelopePreparationService(repository, AndroidKeystoreSigningIdentity())
@@ -119,24 +120,64 @@ class SagipSurvivalCoreModule(
     }
 
     val committed = try {
-      val location = locationProvider.getBestAvailableLocation()
+      // Last-known data only. Location/permission/provider failures cannot block saving SOS.
+      val location = runCatching { locationProvider.getBestAvailableLocation() }.getOrNull()
       repository.createReport(parsed, location)
     } catch (_: Exception) {
       promise.reject(ERROR_PERSISTENCE_FAILED, "The SOS could not be saved on this device")
       return
     }
 
-    val result = BestEffortPreparation.afterCommit(committed) {
-      preparationService.preparePending()
+    // Only the durable transaction is on the success path. Signing/network/relay are retriable.
+    promise.resolve(toWritableMap(committed))
+    dispatchCommittedReport()
+  }
+
+  @ReactMethod
+  fun newEmergencyDetailsOperationId(promise: Promise) {
+    promise.resolve(java.util.UUID.randomUUID().toString())
+  }
+
+  @ReactMethod
+  fun appendEmergencyReportDetails(reportId: String, input: ReadableMap, promise: Promise) {
+    val parsed = try {
+      EmergencyBridgeInput.parseDetails(reportId, input)
+    } catch (failure: EmergencyDetailsException) {
+      promise.reject(failure.code, failure.message)
+      return
+    } catch (_: Exception) {
+      promise.reject(ERROR_INVALID_INPUT, "Optional SOS details are invalid")
+      return
     }
+    val committed = try {
+      repository.appendEmergencyDetails(parsed)
+    } catch (failure: EmergencyDetailsException) {
+      promise.reject(failure.code, failure.message)
+      return
+    } catch (_: Exception) {
+      promise.reject(ERROR_PERSISTENCE_FAILED, "The optional details could not be saved on this device")
+      return
+    }
+    // A repeated operation can refer to an older revision. Return the current snapshot.
+    val latest = runCatching { repository.getReportSummary(reportId) }.getOrDefault(committed)
+    promise.resolve(toWritableMap(latest))
+    dispatchCommittedReport()
+  }
+
+  private fun dispatchCommittedReport() {
+    runCatching { EmergencyJobScheduler.scheduleNetworkSync(reactApplicationContext.applicationContext) }
     runCatching {
-      if (EmergencyRelayService.start(reactApplicationContext.applicationContext)) {
-        runtime.bleRelay.start()
+      executor.execute {
+        runCatching { preparationService.preparePending() }
+        runCatching {
+          if (EmergencyRelayService.start(reactApplicationContext.applicationContext)) {
+            runtime.bleRelay.start()
+          }
+          runtime.bleRelay.expediteForNewActivity()
+        }
+        runCatching { runBlocking { runtime.runDeliveryPass() } }
       }
     }
-    runtime.bleRelay.expediteForNewActivity()
-    triggerBackgroundDelivery()
-    promise.resolve(toWritableMap(result))
   }
 
   @ReactMethod
@@ -154,10 +195,6 @@ class SagipSurvivalCoreModule(
 
   @ReactMethod
   fun listEmergencyReports(promise: Promise) {
-    BestEffortPreparation.afterCommit(Unit) {
-      preparationService.preparePending()
-    }
-
     try {
       val result = Arguments.createArray()
       repository.listReports().forEach { result.pushMap(toWritableMap(withVerifiedReceipt(it))) }
@@ -172,11 +209,7 @@ class SagipSurvivalCoreModule(
     if (projection.verificationKind !in VERIFIED_RECEIPT_KINDS) return summary
     if (projection.requesterDeliveryState !in REQUESTER_DELIVERY_STATES) return summary
 
-    val currentRevision = database.readableDatabase.rawQuery(
-      "SELECT revision FROM outbound_envelopes WHERE report_id=? LIMIT 1",
-      arrayOf(summary.reportId),
-    ).use { cursor -> if (cursor.moveToFirst()) cursor.getInt(0) else null } ?: return summary
-    if (projection.revision != currentRevision) return summary
+    if (projection.revision != summary.latestRevision) return summary
 
     val bytes = receiptRepository.getReceipt(projection.eventId) ?: return summary
     val fields = runCatching {
@@ -213,20 +246,54 @@ class SagipSurvivalCoreModule(
     )
   }
 
-  internal fun parseInput(input: ReadableMap): CreateEmergencyReportInput {
-    val emergencyType = EmergencyType.valueOf(input.getString("emergencyType") ?: error("missing emergencyType"))
-    val urgency = Urgency.valueOf(input.getString("urgency") ?: error("missing urgency"))
-    return CreateEmergencyReportInput(emergencyType, urgency)
+  internal fun parseInput(input: ReadableMap): CreateEmergencyReportInput = EmergencyBridgeInput.parseCreate(input)
+
+  private fun deliveryMap(delivery: RevisionDeliverySummary): WritableMap = Arguments.createMap().apply {
+    putInt("revision", delivery.revision)
+    putString("messageId", delivery.messageId)
+    putString("deliveryState", delivery.deliveryState)
   }
 
   internal fun toWritableMap(summary: EmergencyReportSummary): WritableMap {
     return Arguments.createMap().apply {
+      val history = Arguments.createArray()
+      victimStatusStore.history(summary.reportId).forEach { event ->
+        history.pushMap(Arguments.createMap().apply {
+          putString("id",event.id); putString("kind",event.kind); putDouble("occurredAt",event.occurredAt.toDouble())
+          event.revision?.let { putInt("revision",it) } ?: putNull("revision")
+          event.status?.let { putString("status",it) } ?: putNull("status")
+          putString("provenance",event.provenance)
+          event.callsign?.let { putString("callsign",it) } ?: putNull("callsign")
+          event.note?.let { putString("note",it) } ?: putNull("note")
+        })
+      }
+      putArray("history",history)
+      val sync = victimStatusStore.syncState(summary.reportId)
+      putMap("statusSync",Arguments.createMap().apply {
+        sync.lastAttemptAt?.let { putDouble("lastAttemptAt",it.toDouble()) } ?: putNull("lastAttemptAt")
+        sync.lastSuccessAt?.let { putDouble("lastSuccessAt",it.toDouble()) } ?: putNull("lastSuccessAt")
+        putString("state",sync.state)
+        putBoolean("historyPending",sync.historyPending)
+      })
+      victimStatusStore.serverStatus(summary.reportId)?.let { status ->
+        putMap("serverStatus",Arguments.createMap().apply {
+          putString("status",status.status); putNull("revision"); putString("statusScope","REPORT")
+          putDouble("updatedAt",status.updatedAt.toDouble())
+          status.callsign?.let { putString("callsign",it) } ?: putNull("callsign")
+          status.note?.let { putString("note",it) } ?: putNull("note")
+        })
+      }
       putString("reportId", summary.reportId)
       putDouble("createdAt", summary.createdAt.toDouble())
       putString("emergencyType", summary.emergencyType.name)
       putString("urgency", summary.urgency.name)
       putString("lifecycleState", summary.lifecycleState)
       putString("deliveryState", summary.deliveryState)
+      putInt("revision", summary.latestRevision)
+      putInt("latestRevision", summary.latestRevision)
+      summary.message?.let { putString("message", it) } ?: putNull("message")
+      summary.originalDelivery?.let { putMap("originalDelivery", deliveryMap(it)) }
+      summary.latestDelivery?.let { putMap("latestDelivery", deliveryMap(it)) }
       if (summary.location == null) {
         putNull("location")
       } else {

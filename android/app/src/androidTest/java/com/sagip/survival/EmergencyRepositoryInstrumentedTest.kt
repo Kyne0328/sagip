@@ -426,12 +426,12 @@ class EmergencyRepositoryInstrumentedTest {
     assertTableCount("responder_acks", 1)
     assertTableCount("delivery_events", 2)
     val restored = repository.listReports().single()
-    assertEquals("RESPONDER_ACKNOWLEDGED", restored.deliveryState)
+    assertEquals("DELIVERY_PENDING", restored.deliveryState)
     assertEquals("server-ack-1", restored.responderAck?.ackId)
   }
 
   @Test
-  fun responderStatusPollingContinuesUntilResolvedAndCannotRegress() {
+  fun unsignedResolvedStatusRemainsHistoricalAndCannotStopPolling() {
     val report = repository.createReport(
       CreateEmergencyReportInput(EmergencyType.MEDICAL, Urgency.IMMEDIATE_DANGER),
       location = null,
@@ -501,7 +501,7 @@ class EmergencyRepositoryInstrumentedTest {
       ),
     )
 
-    assertTrue(repository.listReportsAwaitingAck(now = 100_000L).isEmpty())
+    assertEquals(listOf(report.reportId), repository.listReportsAwaitingAck(now = 100_000L))
     val restored = repository.listReports().single()
     assertEquals("RESOLVED", restored.responderAck?.status)
     assertEquals("ack-resolved", restored.responderAck?.ackId)

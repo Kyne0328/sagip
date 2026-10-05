@@ -240,6 +240,7 @@ function parseEntry(value: Record<string, unknown>, providerKind: 1 | 2): Incide
     originKeyId: decodeDigest(requireString(value.originKeyId), providerKind),
     observedIncidentVersion: requireString(value.observedIncidentVersion),
     emergencyType: requireString(value.emergencyType),
+    message: value.message === null || value.message === undefined ? null : requireString(value.message),
     urgency: requireString(value.urgency),
     location: locationRaw
       ? {

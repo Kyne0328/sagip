@@ -8,17 +8,23 @@ import {
   URGENCIES,
   VERIFIED_RECEIPT_KINDS,
   VERIFIED_RESPONDER_STATUSES,
+  type AppendEmergencyDetailsInput,
   type BleRelayStatus,
   type CreateEmergencyReportInput,
   type EmergencyReportSummary,
+  type EmergencyHistoryEvent,
+  type StatusSyncInfo,
+  type ServerStatusInfo,
   type LocationSnapshot,
   type VerifiedReceiptInfo,
 } from './types';
 
 interface NativeSurvivalCore {
+  newEmergencyDetailsOperationId(): Promise<string>;
   createEmergencyReport(
     input: CreateEmergencyReportInput,
   ): Promise<unknown>;
+  appendEmergencyReportDetails(reportId: string, input: AppendEmergencyDetailsInput): Promise<unknown>;
   listEmergencyReports(): Promise<unknown>;
   claimVerifiedReceiptNotification(reportId: string, eventId: string): Promise<unknown>;
   primeLocation(): Promise<unknown>;
@@ -149,6 +155,65 @@ function parseVerifiedReceipt(value: unknown): VerifiedReceiptInfo | undefined {
   };
 }
 
+function parseRevisionDelivery(value: unknown): EmergencyReportSummary['latestDelivery'] {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || typeof value.revision !== 'number' ||
+      !Number.isSafeInteger(value.revision) || value.revision < 1 ||
+      typeof value.messageId !== 'string' || !value.messageId ||
+      !DELIVERY_STATES.includes(value.deliveryState as never)) {
+    return invalidEmergencyReport();
+  }
+  return {revision: value.revision, messageId: value.messageId,
+    deliveryState: value.deliveryState as EmergencyReportSummary['deliveryState']};
+}
+
+function parseHistory(value: unknown): EmergencyHistoryEvent[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) return invalidEmergencyReport();
+  const ids = new Set<string>();
+  return value.map(event => {
+    if (!isRecord(event) || typeof event.id !== 'string' || !event.id || ids.has(event.id) ||
+        !['LOCAL_COMMIT', 'DETAILS_SAVED', 'RELAYED_TO_PEER', 'SERVER_ACCEPTED', 'DELIVERY_FAILED', 'RESPONDER_UPDATE'].includes(event.kind as string) ||
+        !Number.isSafeInteger(event.occurredAt) || (event.occurredAt as number) < 0 ||
+        (event.revision !== null && (!Number.isSafeInteger(event.revision) || (event.revision as number) < 1)) ||
+        (event.status !== null && !VERIFIED_RESPONDER_STATUSES.includes(event.status as never)) ||
+        !['LOCAL', 'SERVER_AUTHENTICATED', 'UNVERIFIED', 'VERIFIED_CURRENT', 'VERIFIED_OFFLINE_AUTHORITY'].includes(event.provenance as string) ||
+        (event.callsign !== null && typeof event.callsign !== 'string') ||
+        (event.note !== null && typeof event.note !== 'string')) return invalidEmergencyReport();
+    ids.add(event.id);
+    return event as unknown as EmergencyHistoryEvent;
+  });
+}
+
+function parseStatusSync(value: unknown): StatusSyncInfo | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || typeof value.historyPending !== 'boolean' || !['NEVER', 'SUCCESS', 'FAILED'].includes(value.state as string) ||
+      [value.lastAttemptAt, value.lastSuccessAt].some(time => time !== null && (!Number.isSafeInteger(time) || (time as number) < 0))) {
+    return invalidEmergencyReport();
+  }
+  return value as unknown as StatusSyncInfo;
+}
+
+function parseServerStatus(value: unknown): ServerStatusInfo | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) ||
+      !VERIFIED_RESPONDER_STATUSES.includes(value.status as never) ||
+      value.revision !== null || value.statusScope !== 'REPORT' ||
+      !Number.isSafeInteger(value.updatedAt) || (value.updatedAt as number) < 0 ||
+      (value.callsign !== null && typeof value.callsign !== 'string') ||
+      (value.note !== null && typeof value.note !== 'string')) {
+    return invalidEmergencyReport();
+  }
+  return {
+    status: value.status as ServerStatusInfo['status'],
+    revision: null,
+    statusScope: 'REPORT',
+    updatedAt: value.updatedAt as number,
+    callsign: value.callsign as string | null,
+    note: value.note as string | null,
+  };
+}
+
 function parseSummary(value: unknown): EmergencyReportSummary {
   if (!isRecord(value)) {
     throw new Error('Invalid emergency report response from native core');
@@ -157,6 +222,7 @@ function parseSummary(value: unknown): EmergencyReportSummary {
   const {
     reportId,
     createdAt,
+    revision,
     emergencyType,
     urgency,
     lifecycleState,
@@ -170,8 +236,9 @@ function parseSummary(value: unknown): EmergencyReportSummary {
     typeof reportId !== 'string' ||
     reportId.length === 0 ||
     typeof createdAt !== 'number' ||
-    !EMERGENCY_TYPES.includes(emergencyType as never) ||
-    !URGENCIES.includes(urgency as never) ||
+    (revision !== undefined && (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 1)) ||
+    (emergencyType !== 'UNSPECIFIED' && !EMERGENCY_TYPES.includes(emergencyType as never)) ||
+    (urgency !== 'UNSPECIFIED' && !URGENCIES.includes(urgency as never)) ||
     !VALID_LIFECYCLES.includes(lifecycleState as string) ||
     !DELIVERY_STATES.includes(deliveryState as never)
   ) {
@@ -183,6 +250,9 @@ function parseSummary(value: unknown): EmergencyReportSummary {
   return {
     reportId,
     createdAt,
+    ...(revision !== undefined ? {revision: revision as number} : {}),
+    ...(value.originalDelivery !== undefined ? {originalDelivery: parseRevisionDelivery(value.originalDelivery)} : {}),
+    ...(value.latestDelivery !== undefined ? {latestDelivery: parseRevisionDelivery(value.latestDelivery)} : {}),
     emergencyType: emergencyType as EmergencyReportSummary['emergencyType'],
     urgency: urgency as EmergencyReportSummary['urgency'],
     lifecycleState: lifecycleState as EmergencyReportSummary['lifecycleState'],
@@ -190,6 +260,9 @@ function parseSummary(value: unknown): EmergencyReportSummary {
     location: parseLocation(location),
     ...(ack ? {responderAck: ack} : {}),
     ...(verified ? {verifiedReceipt: verified} : {}),
+    ...(value.history !== undefined ? {history: parseHistory(value.history)} : {}),
+    ...(value.statusSync !== undefined ? {statusSync: parseStatusSync(value.statusSync)} : {}),
+    ...(value.serverStatus !== undefined ? {serverStatus: parseServerStatus(value.serverStatus)} : {}),
   };
 }
 
@@ -257,10 +330,26 @@ function requireNativeCore(): NativeSurvivalCore {
 }
 
 export const SurvivalCore = {
+  async newEmergencyDetailsOperationId(): Promise<string> {
+    const id = await requireNativeCore().newEmergencyDetailsOperationId();
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)) {
+      throw new Error('Native detail operation ID is invalid');
+    }
+    return id;
+  },
   async createEmergencyReport(
     input: CreateEmergencyReportInput,
   ): Promise<EmergencyReportSummary> {
     return parseSummary(await requireNativeCore().createEmergencyReport(input));
+  },
+
+  async appendEmergencyReportDetails(
+    reportId: string,
+    input: AppendEmergencyDetailsInput,
+  ): Promise<EmergencyReportSummary> {
+    const summary = parseSummary(await requireNativeCore().appendEmergencyReportDetails(reportId, input));
+    if (summary.reportId !== reportId) throw new Error('Native detail update returned another report');
+    return summary;
   },
 
   async listEmergencyReports(): Promise<EmergencyReportSummary[]> {

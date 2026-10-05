@@ -13,6 +13,7 @@ export interface GatewayIncident {
   observedIncidentVersion: string;
   emergencyType: string;
   urgency: string;
+  message?: string | null;
   location: {latitude: number; longitude: number} | null;
   timeline: {eventId: string; callsign: string; status: number; note: string; revision: number}[];
   pendingActions?: GatewayAction[];
@@ -50,7 +51,7 @@ function native(): NativeGateway {
 }
 export const GatewayCore = {
   authenticate: () => native().authenticate(),
-  lock: () => native().lock(),
+  lock: async () => native().lock(),
   newActionId: () => native().newActionId(),
   status: () => native().status(),
   listGatewayIncidents: () => native().listGatewayIncidents(),

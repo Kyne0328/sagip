@@ -98,6 +98,25 @@ jobs:
             npx tsx --test test/db/migration.test.ts test/http/mapAssets.test.ts
           )
 
+      - name: Start isolated PostgreSQL validation database
+        run: bash scripts/start-test-postgres.sh
+
+      - name: Validate backend and PostgreSQL acceptance before production changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset DATABASE_URL
+          : "${SAGIP_TEST_DATABASE_URL:?Isolated test database is required}"
+          npm --prefix backend test
+          (
+            cd backend
+            SAGIP_ACCEPTANCE_DATABASE_URL="$SAGIP_TEST_DATABASE_URL" npx tsx --test acceptance/receiptImport.postgres.test.ts
+          )
+
+      - name: Stop isolated PostgreSQL validation database
+        if: ${{ always() }}
+        run: docker rm --force sagip-test-postgres || true
+
       - name: Link and plan Neon production target
         env:
           NEON_API_KEY: ${{ secrets.NEON_API_KEY }}

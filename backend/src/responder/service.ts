@@ -10,12 +10,16 @@ import type {
   IncidentQueueSummary,
   IncidentSummary,
   ReportStatusResponse,
+  VictimReportStatusResponse,
   ResponderAck,
   ResponderIdentity,
   ResponderStatus,
 } from './types.js';
 
+import {verifyReportStatusAccessProof, validReportStatusCursor, type ReportStatusAccessProof} from './reportStatusAccess.js';
+
 const EMERGENCY_TYPES: Record<number, string> = {
+  0: 'UNSPECIFIED',
   1: 'MEDICAL',
   2: 'FLOOD',
   3: 'FIRE',
@@ -25,6 +29,7 @@ const EMERGENCY_TYPES: Record<number, string> = {
 };
 
 const URGENCIES: Record<number, string> = {
+  0: 'UNSPECIFIED',
   1: 'IMMEDIATE_DANGER',
   2: 'NEED_ASSISTANCE',
 };
@@ -279,7 +284,8 @@ export class ResponderService {
       ${statusFilter ? 'WHERE ($3 = \'PENDING\' AND la.ack_id IS NULL) OR la.status = $3' : ''}
       ORDER BY
         CASE WHEN la.status = 'RESOLVED' THEN 1 ELSE 0 END ASC,
-        lr.urgency ASC,
+        -- Untriaged SOS remains emergency-priority without claiming immediate danger.
+        CASE WHEN lr.urgency IN (0, 1) THEN 0 ELSE 1 END ASC,
         CASE la.status
           WHEN 'ACKNOWLEDGED' THEN 1
           WHEN 'EN_ROUTE' THEN 2
@@ -323,8 +329,8 @@ export class ResponderService {
       createdAtMs: Number(row.created_at_ms),
       firstReceivedAt: row.first_received_at.toISOString(),
       latestRevision: row.revision,
-      emergencyType: EMERGENCY_TYPES[row.emergency_type] ?? 'OTHER',
-      urgency: URGENCIES[row.urgency] ?? 'NEED_ASSISTANCE',
+      emergencyType: EMERGENCY_TYPES[row.emergency_type] ?? 'UNSPECIFIED',
+      urgency: URGENCIES[row.urgency] ?? 'UNSPECIFIED',
       message: row.message,
       location: this.mapLocation(row),
       latestAck: row.ack_id && row.responder_id && row.callsign && row.ack_status && row.ack_time
@@ -455,8 +461,8 @@ export class ResponderService {
 
     const revisions = revResult.rows.map(r => ({
       revision: r.revision,
-      emergencyType: EMERGENCY_TYPES[r.emergency_type] ?? 'OTHER',
-      urgency: URGENCIES[r.urgency] ?? 'NEED_ASSISTANCE',
+      emergencyType: EMERGENCY_TYPES[r.emergency_type] ?? 'UNSPECIFIED',
+      urgency: URGENCIES[r.urgency] ?? 'UNSPECIFIED',
       message: r.message,
       location: this.mapLocation(r),
     }));
@@ -473,8 +479,8 @@ export class ResponderService {
 
     const latestRev = revisions.at(-1) ?? {
       revision: 1,
-      emergencyType: 'OTHER',
-      urgency: 'NEED_ASSISTANCE',
+      emergencyType: 'UNSPECIFIED',
+      urgency: 'UNSPECIFIED',
       message: null,
       location: null,
     };
@@ -556,6 +562,90 @@ export class ResponderService {
       status: row.status as ResponderStatus,
       note: row.note,
       acknowledgedAt: row.acknowledged_at.toISOString(),
+    };
+  }
+
+  /**
+   * A fresh origin-device signature scopes the read to one report and page.
+   * It is a short-lived read proof, never a portable responder receipt.
+   */
+  async authenticateReportStatusAccess(
+    reportId: string,
+    proof: ReportStatusAccessProof,
+    cursor: string | null,
+  ): Promise<boolean> {
+    const result = await this.pool.query<{public_key_der: Buffer}>(
+      `SELECT k.public_key_der FROM incidents i
+       JOIN origin_keys k ON k.origin_key_id=i.origin_key_id
+       WHERE i.report_id=$1`,
+      [reportId],
+    );
+    const key = result.rows[0]?.public_key_der;
+    return key !== undefined && verifyReportStatusAccessProof(reportId, proof, cursor, key);
+  }
+
+  async getReportStatusHistory(reportId: string, cursor: string | null): Promise<VictimReportStatusResponse> {
+    if (!validReportStatusCursor(cursor)) throw new Error('INVALID_CURSOR');
+    const status = await this.getReportStatus(reportId);
+    if (!status?.serverAccepted) throw new Error('UNAUTHORIZED');
+    type AckRow = {
+      ack_id: string; callsign: string; status: ResponderStatus;
+      note: string | null; acknowledged_at: Date;
+    };
+    if (cursor) {
+      const anchor = await this.pool.query(
+        'SELECT ack_id FROM responder_acknowledgements WHERE report_id=$1 AND ack_id=$2',
+        [reportId, cursor],
+      );
+      if (!anchor.rows[0]) throw new Error('INVALID_CURSOR');
+    }
+    // Join the stored cursor row so PostgreSQL timestamp microseconds are never
+    // rounded through JavaScript Date, which can otherwise loop/skip page edges.
+    const history = await this.pool.query<AckRow>(
+      `SELECT ra.ack_id,ri.callsign,ra.status,ra.acknowledged_at
+       FROM responder_acknowledgements ra
+       JOIN responder_identities ri ON ri.responder_id=ra.responder_id
+       ${cursor ? 'JOIN responder_acknowledgements anchor ON anchor.ack_id=$2 AND anchor.report_id=$1' : ''}
+       WHERE ra.report_id=$1
+       ${cursor ? 'AND (ra.acknowledged_at>anchor.acknowledged_at OR (ra.acknowledged_at=anchor.acknowledged_at AND ra.ack_id>anchor.ack_id))' : ''}
+       ORDER BY ra.acknowledged_at ASC,ra.ack_id ASC LIMIT 101`,
+      cursor ? [reportId, cursor] : [reportId],
+    );
+    const acknowledgements: VictimReportStatusResponse['acknowledgements'] = [];
+    let historyBytes = 2;
+    for (const row of history.rows.slice(0, 100)) {
+      const entry = {
+        ackId: row.ack_id,
+        callsign: row.callsign,
+        status: row.status,
+        // Responder notes have no victim-visible classification in this schema.
+        note: null,
+        acknowledgedAt: row.acknowledged_at.toISOString(),
+        revision: null,
+      };
+      const entryBytes = Buffer.byteLength(JSON.stringify(entry), 'utf8') + 1;
+      if (historyBytes + entryBytes > 196608) {
+        if (acknowledgements.length === 0) throw new Error('STATUS_ENTRY_TOO_LARGE');
+        break;
+      }
+      acknowledgements.push(entry);
+      historyBytes += entryBytes;
+    }
+    const currentRevision = (await this.pool.query<{revision: number}>(
+      'SELECT MAX(revision) AS revision FROM incident_revisions WHERE report_id=$1',
+      [reportId],
+    )).rows[0]?.revision;
+    return {
+      ...status,
+      currentRevision: Number(currentRevision ?? 0),
+      latestAck: status.latestAck ? {...status.latestAck, note: null, revision: null} : null,
+      acknowledgements,
+      nextCursor: history.rows.length > acknowledgements.length ? acknowledgements.at(-1)!.ackId : null,
+      checkedAt: new Date().toISOString(),
+      transport: 'AUTHENTICATED_SERVER',
+      // Legacy responder actions were not recorded against an observed revision.
+      // A client must not relabel them as a revision-bound signed receipt.
+      statusScope: 'REPORT',
     };
   }
 

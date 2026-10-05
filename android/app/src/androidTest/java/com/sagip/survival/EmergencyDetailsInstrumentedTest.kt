@@ -60,15 +60,16 @@ class EmergencyDetailsInstrumentedTest {
     }
   }
 
-  @Test fun permanentFailureRemainsActiveAndLatestResolvedAckPermitsNewReport() {
+  @Test fun permanentFailureRemainsActiveAndResolvedAckIsTerminalDespiteLateLowerStatus() {
     val report = repository.createReport(initial, null, 100)
     repository.markDeliveryFailed(messageId(report.reportId, 1), "terminal", 110)
     assertEquals(report.reportId, repository.createReport(initial, null, 120).reportId)
     ack(report.reportId, "RESOLVED", 130)
     ack(report.reportId, "EN_ROUTE", 140)
-    assertEquals(report.reportId, repository.createReport(initial, null, 150).reportId)
-    ack(report.reportId, "RESOLVED", 160)
-    val next = repository.createReport(initial, null, 170)
+    ack(report.reportId, "ACKNOWLEDGED", 145)
+    assertEquals("RESOLVED", repository.getReportSummary(report.reportId).responderAck?.status)
+    expectCode("DETAILS_CONFLICT") { append(report.reportId, 1, id(), message = "Too late") }
+    val next = repository.createReport(initial, null, 150)
     assertNotEquals(report.reportId, next.reportId)
     assertEquals(2, count("reports"))
   }
@@ -78,6 +79,7 @@ class EmergencyDetailsInstrumentedTest {
     ack(first.reportId, "RESOLVED", 101)
     val second = repository.createReport(initial, null, 200)
     db().execSQL("DELETE FROM responder_acks")
+    db().execSQL("DELETE FROM victim_server_acks")
     assertEquals(second.reportId, repository.createReport(initial, null, 300).reportId)
     db().execSQL("UPDATE reports SET created_at=100")
     assertEquals(maxOf(first.reportId, second.reportId), repository.createReport(initial, null, 400).reportId)
@@ -251,6 +253,9 @@ class EmergencyDetailsInstrumentedTest {
   private fun count(table: String, where: String = "1=1") = rows("SELECT COUNT(*) FROM $table WHERE $where").single().single().toInt()
   private fun messageId(reportId: String, revision: Int) = rows("SELECT message_id FROM outbound_envelopes WHERE report_id='$reportId' AND revision=$revision").single().single()
   private fun ack(reportId: String, status: String, at: Long) {
+    // Tests that require authoritative closure use an origin-authenticated server observation.
+    val ack = ResponderAck(id(),reportId,"SERVER","TEST",status,null,at)
+    VictimStatusStore(helper).record(PrivateStatusPage(reportId,1,at,listOf(ack),ack,null),at)
     db().execSQL("INSERT INTO responder_acks(ack_id,report_id,responder_id,status,acknowledged_at) VALUES (?,?,?,?,?)",
       arrayOf<Any>(id(), reportId, "test-responder", status, at))
   }

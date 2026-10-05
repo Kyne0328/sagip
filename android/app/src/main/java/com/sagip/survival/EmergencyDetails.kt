@@ -37,7 +37,8 @@ object EmergencyDetails {
   fun requestDigest(input: AppendEmergencyDetailsInput): String {
     val bytes = ByteArrayOutputStream()
     DataOutputStream(bytes).use { output ->
-      output.writeInt(1) // Local request digest format, independent of the wire payload.
+      // Preserve replay identity for previously committed category/message-only operations.
+      output.writeInt(if (input.urgency == null) 1 else 2)
       output.writeUTF(input.reportId)
       output.writeInt(input.expectedRevision)
       output.writeBoolean(input.emergencyType != null)
@@ -47,6 +48,7 @@ object EmergencyDetails {
         output.writeInt(it.size)
         output.write(it)
       }
+      input.urgency?.let { output.writeUTF(it.name) }
     }
     return MessageDigest.getInstance("SHA-256").digest(bytes.toByteArray())
       .joinToString("") { "%02x".format(it) }

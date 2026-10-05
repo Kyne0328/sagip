@@ -10,11 +10,11 @@ class EmergencyPayloadV2Test {
   private val location = LocationSnapshot(14.5995, 120.9842, 8.0, 1200L, "GPS", "FRESH")
 
   @Test
-  fun `all 34 frozen fixtures decode and valid fixtures encode exactly`() {
+  fun `all frozen fixtures including unspecified decode and valid fixtures encode exactly`() {
     val fixture = File("../../fixtures/srp1-details-v2.json")
     assertTrue("canonical fixture must exist: ${fixture.absolutePath}", fixture.isFile)
     val cases = JsonParser.parseString(fixture.readText(Charsets.UTF_8)).asJsonObject.getAsJsonArray("cases")
-    assertEquals(34, cases.size())
+    assertEquals(40, cases.size())
     cases.forEach { entry ->
       val vector = entry.asJsonObject
       val name = vector.get("name").asString
@@ -23,14 +23,18 @@ class EmergencyPayloadV2Test {
       val expected = vector.getAsJsonObject("expected")
       val version = vector.get("formatVersion").asInt
       if (!expected.get("accepted").asBoolean) {
+        assertThrows(name, IllegalArgumentException::class.java) { EmergencyPayload.decode(bytes) }
         assertThrows(name, IllegalArgumentException::class.java) {
           if (version == 1) EmergencyPayloadV1.decode(bytes) else EmergencyPayloadV2.decode(bytes)
         }
       } else {
-        val type = EmergencyType.entries[expected.get("emergencyType").asInt - 1]
-        val urgency = Urgency.entries[expected.get("urgency").asInt - 1]
+        val typeCode = expected.get("emergencyType").asInt
+        val type = if (typeCode == 0) EmergencyType.UNSPECIFIED else EmergencyType.entries[typeCode - 1]
+        val urgencyCode = expected.get("urgency").asInt
+        val urgency = if (urgencyCode == 0) Urgency.UNSPECIFIED else Urgency.entries[urgencyCode - 1]
         val expectedLocation = if (expected.get("location").isJsonNull) null else expected.getAsJsonObject("location").location()
         val message = if (expected.get("message").isJsonNull) null else expected.get("message").asString
+        assertEquals(name, DecodedEmergencyPayload(type, urgency, expectedLocation, message), EmergencyPayload.decode(bytes))
         if (version == 1) {
           assertEquals(name, DecodedEmergencyPayload(type, urgency, expectedLocation), EmergencyPayloadV1.decode(bytes))
           assertArrayEquals(name, bytes, EmergencyPayload.encode(type, urgency, expectedLocation, null))

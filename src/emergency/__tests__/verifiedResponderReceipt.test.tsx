@@ -15,6 +15,7 @@ jest.mock('../SurvivalCore', () => ({
 }));
 
 jest.mock('../useEmergencyReports', () => ({
+  ...jest.requireActual('../useEmergencyReports'),
   useEmergencyReports: jest.fn(),
 }));
 
@@ -60,8 +61,12 @@ function setReports(reports: EmergencyReportSummary[]) {
     reports,
     loading: false,
     saving: false,
+    syncing: false,
+    lastLocalReadAt: null,
     message: null,
     create: jest.fn(),
+    appendDetails: jest.fn(),
+    refresh: jest.fn(),
   });
 }
 
@@ -146,6 +151,16 @@ test('verified responder action text stays qualified and visible when return sig
   expect(rendered).toContain('Unit dispatched');
   expect(rendered).toContain('Requester return confirmation not yet received');
   expect(rendered).not.toContain('Responder received your return confirmation');
+});
+
+test('historical receipt names its version and does not imply current authority checking', async () => {
+  setReports([{...reportWithVerifiedReceipt(), revision: 2}]);
+  const renderer = await renderApp();
+  const text = JSON.stringify(renderer.toJSON());
+  expect(text).toContain('Responder acknowledged SOS version 1');
+  expect(text).not.toContain('Responder acknowledged your current SOS');
+  expect(text).toContain('Authority last checked:');
+  expect(text).toContain('was verified when this receipt was accepted');
 });
 
 test('offline authority evidence names unavailable live revocation knowledge', async () => {

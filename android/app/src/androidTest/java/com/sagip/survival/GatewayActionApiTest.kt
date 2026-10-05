@@ -105,6 +105,29 @@ class GatewayActionApiTest {
   private fun api() = GatewayActionApi(db, gateway) { MonotonicClock(boot, elapsed) }
   private fun post(json: JSONObject, owner: String = "browser-a") = api().handle("POST", "/gateway/v1/actions", json.toString().toByteArray(), owner)
   private fun responseJson(r: GatewayApiResponse) = JSONObject(String(r.body))
+  @Test fun mixed_payload_versions_preserve_civilian_message_in_gateway_snapshot() {
+    setupGateway()
+    val legacyId = newReport().identity.reportId
+    val reportId = java.util.UUID.randomUUID().toString()
+    val message = "  Synthetic help 🆘\nUpper floor <script>literal</script>  "
+    val payload = EmergencyPayloadV2.encode(EmergencyType.TRAPPED, Urgency.IMMEDIATE_DANGER, null, message)
+    val bytes = TransportEnvelopeV1.create(EnvelopeUnsignedInput(java.util.UUID.randomUUID().toString(), reportId,
+      1, 100_000L, null, 100, payload), ActionApiTestIdentity())
+    assertTrue(EmergencyRepository(db).persistInboundEnvelope(bytes, 100_000L) is InboundPersistResult.Stored)
+    val descriptor = api().handle("POST", "/gateway/v1/snapshots", "{}".toByteArray(), "browser-a")
+    assertEquals("A supported details payload must not break the entire incident queue", 201, descriptor.status)
+    val d = responseJson(descriptor)
+    assertEquals(2, gateway.listGatewayIncidents().size)
+    val page = api().handle("GET", "/gateway/v1/snapshots/${d.getString("snapshotId")}/pages?cursor=${d.getString("nextCursor")}", ByteArray(0), "browser-a")
+    assertEquals(200, page.status)
+    val entries = responseJson(page).getJSONArray("entries")
+    assertEquals(2, entries.length())
+    val byId = (0 until entries.length()).map { entries.getJSONObject(it) }.associateBy { it.getString("reportId") }
+    assertTrue(byId.getValue(legacyId).isNull("message"))
+    assertEquals(message, byId.getValue(reportId).getString("message"))
+    assertEquals("TRAPPED", byId.getValue(reportId).getString("emergencyType"))
+  }
+
   @Test fun lost_gateway_response_does_not_reissue() {
     setupGateway(); val json = intent(newReport())
     val first = post(json)
@@ -267,6 +290,11 @@ class GatewayActionApiTest {
     setupGateway();val i=newReport();val intent=ActionIntent(java.util.UUID.randomUUID().toString(),i.identity.reportId,i.observedIncidentVersion,1,"")
     val original=gateway.recordGatewayAction(intent).bytes!!
     listOf("gateway_snapshot_pages","gateway_snapshots","gateway_api_actions","gateway_sync").forEach {db.writableDatabase.execSQL("DROP TABLE $it")}
+    // v17 fields must be absent before replaying the genuine additive migrations.
+    db.writableDatabase.execSQL("DROP TABLE detail_operations")
+    listOf("message", "latitude", "longitude", "accuracy_meters", "captured_at", "source", "freshness").forEach {
+      db.writableDatabase.execSQL("ALTER TABLE report_revisions DROP COLUMN $it")
+    }
     db.writableDatabase.version=15;db.close();db=SagipDatabase(context);setupGateway()
     assertEquals(Schema.VERSION, db.readableDatabase.version)
     assertArrayEquals(original,gateway.getGatewayAction(intent.actionId).bytes)
@@ -424,7 +452,9 @@ class GatewayActionApiTest {
   private data class TestTls(val server: SSLContext, val client: SSLContext, val fingerprint: ByteArray)
 
   companion object {
-    private const val TEST_P12 = "MIIELAIBAzCCA9YGCSqGSIb3DQEHAaCCA8cEggPDMIIDvzCCATYGCSqGSIb3DQEHAaCCAScEggEjMIIBHzCCARsGCyqGSIb3DQEMCgECoIG9MIG6MGYGCSqGSIb3DQEFDTBZMDgGCSqGSIb3DQEFDDArBBQzV/CxuD6sWK/5Z74MhB6FAJRv9gICJxACASAwDAYIKoZIhvcNAgkFADAdBglghkgBZQMEASoEEEzZQpp7g8jJzimmwShVF8gEUAmeAT2UuShACBeXu/3Bqd1KOeaCcTTHVTK2s9+R8krObB4KTIP4xbjox2eILheQ6/s5Roq1I589C+Zl+jOuvzLvBATdbw4JNL2GQAg/JcxhMUwwJwYJKoZIhvcNAQkUMRoeGABnAGEAdABlAHcAYQB5AC0AdABlAHMAdDAhBgkqhkiG9w0BCRUxFAQSVGltZSAxNzkwOTExMTA5NDk1MIICgQYJKoZIhvcNAQcGoIICcjCCAm4CAQAwggJnBgkqhkiG9w0BBwEwZgYJKoZIhvcNAQUNMFkwOAYJKoZIhvcNAQUMMCsEFB8sPyXpUDie8B2PYYZdQcs4SfpLAgInEAIBIDAMBggqhkiG9w0CCQUAMB0GCWCGSAFlAwQBKgQQNU+3Ryq+e8dNRgscoB69dICCAfAVxlXrgmJkT6KI3pNjvOGfxKhGSwWyfIsSFE/VxYNr831UOcUv+/yA7Rp+VHWabw+b4bSfmt1RSV1bfcGQfoQXs/kn/Np1uTUyP0uEXgUnGBG9ud6m2z0LPxM1eZ29u7pEL870nAFGxbthtGi64mDb1aqwe342+Sb0RzI+GZlaaXnXMun3Yqh88PptwTIYAIJFfLR1sc2ejZGHUG3Y6x8AgifhVwgVx7GreZ0v7u7vtC10uQrwWUmw8lnXwzuS+EQzn0pP5mMa1IezIoUtIeylK9Ti687vC0kwUXp6HkRQAFqbQUEx0mLUE3wr9gWqokjzt8+nnxjqesXA5AM5WycDO/MWgU6gND2un57Ib5pvoSN7IJ5u+LiEdoxZkR82TdwJfVvs00HkG5F8scDk65vNmnSKGVgMWOyeU93U91wpGhab6g1dSAKiEImPeEFvao1KrFd6pAyDNrL0uPWQ07dzEkRWQorjcFNQyFCnKBGzvqJwDHG87hesM1JUTBjbAZ8DGmlaqqJicVlai6gOF4Lr0k2CZdsJbVpgeZNtQQ9zCT2wyaOcksP6SQ80swN14BfUWuuHdmBt0frKH84Q0mcP4S86R97WvRjArkZumjnMg1ubSuBeurWTHuzucgiCLUKZ0Py6OOpGeDsIuccCCFVWME0wMTANBglghkgBZQMEAgEFAAQgTKBxuhon3r10mKfAqyNlVF9PMvmlfALmYE7M9ROjqJkEFDv5y3ypK7LBDARpQWEeTWcq2IhlAgInEA=="
+    // Public synthetic fixture: legacy PKCS12 protection is compatible with Android 31.
+    // Certificate and key are unchanged; production TLS policy is unaffected.
+    private const val TEST_P12 = "MIIDjAIBAzCCA0UGCSqGSIb3DQEHAaCCAzYEggMyMIIDLjCB6wYJKoZIhvcNAQcBoIHdBIHaMIHXMIHUBgsqhkiG9w0BDAoBAqB3MHUwKQYKKoZIhvcNAQwBAzAbBBRIgEZo6f7NjINu90BrdpxqU1bVwwIDAMNQBEgS7in2GfCQaBR7aK3Mj2z0i88JoBAcxNR2vNQ/14frR6J7XojOZgtZ/fJwHriVEaJw5VRbIQX7cwYAqXLUigy2WEWZObbjbY4xTDAnBgkqhkiG9w0BCRQxGh4YAGcAYQB0AGUAdwBhAHkALQB0AGUAcwB0MCEGCSqGSIb3DQEJFTEUBBJUaW1lIDE3OTExNjMzMDM0NTEwggI8BgkqhkiG9w0BBwagggItMIICKQIBADCCAiIGCSqGSIb3DQEHATApBgoqhkiG9w0BDAEGMBsEFL9nRoGv3JmeUpKR3eb14DWPKIqqAgMAw1CAggHoVMBwHWcDp4+3qBNOdwsDCqV8Vrs7CrBB5xIUCo7ecsxpopsYCoBxdIWxD2vf7DvLtC+FAoAiguMq4Z58ty2otJuPVoiS2BAS15rHg662EmORzwUkcvHovTxCjeMHSFjzHlCiBRryJ5lfRlqLPWeCQHq51/CR4K6fiMTN96MpSPQYfg2bMSDQrpREv7FxeC/Ae9HfIL98LAQvuRZ3PuYX84SJv0o1Rj9RIwj3imvkz9sga8Gtqws+x1I/seH/Z49GMaINoyiH1eaOnl7j8H73K30Yj7NRwdzhYnyeRdoYesUQouI9+/uwkgrdK/psWtlVzdb/7Y75Ab1vrxkl0KHjA+ZiBVP7wImC+w49ggZnbZYAYBhZHBBox4Vaxb+VXs2ySTd4QjP55poTPDtgtubHhfzdJGBeowRf6cEUxqO4T9ad449lSoYsBCqb6qnTAjyicq7yLMRQw0ey0wt28LiktcyONyL5cbi3ktmtzxnsIsVjJHAzRr0q09DIry9k6GfRvPONBqnqufjjOGhJnoWVXuR08LO8nSByXSwRdy2Xj5Qfcwf7CfjhY+W2lmVh2igoZxrTl62ag/XtQ7TGybyOUJfh+mRx6Wljhpo5XDVuEYhNphDz80Y0/Q7zphBAKOlrG0lut2W42eowPjAhMAkGBSsOAwIaBQAEFCaA/7YCqb4DkyPRKKQueVMm8m9PBBTN4YR4KNR0iTsBgEf96sb2sfruNQIDAYag"
   }
 }
 

@@ -30,6 +30,31 @@ test('500-byte message persists unchanged and concurrent replay returns one rece
   });
 });
 
+test('ingestion owns verified envelope bytes before asynchronous persistence', async () => {
+  await withService(async (service, pool) => {
+    const bytes = buildSignedEnvelope();
+    const original = Buffer.from(bytes);
+    const pending = service.ingestEnvelope(bytes);
+    bytes.fill(0);
+    const receipt = await pending;
+
+    assert.deepEqual(
+      (await pool.query('SELECT envelope_bytes FROM accepted_messages')).rows[0]?.envelope_bytes,
+      original,
+    );
+    assert.deepEqual(await service.ingestEnvelope(original), receipt);
+  });
+});
+
+test('ingestion snapshots acceptance time before asynchronous persistence', async () => {
+  await withService(async (service) => {
+    const acceptedAt = new Date('2026-09-05T04:00:00.000Z');
+    const pending = service.ingestEnvelope(buildSignedEnvelope(), acceptedAt);
+    acceptedAt.setTime(0);
+    assert.equal((await pending).acceptedAt, '2026-09-05T04:00:00.000Z');
+  });
+});
+
 test('501-byte message rejects before persistence', async () => {
   await withService(async (service, pool) => {
     await assert.rejects(service.ingestEnvelope(buildSignedEnvelope({message: 'é'.repeat(250) + 'a'})));

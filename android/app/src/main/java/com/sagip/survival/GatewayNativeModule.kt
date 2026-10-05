@@ -91,6 +91,7 @@ class GatewayNativeModule(private val context: ReactApplicationContext) : ReactC
         putString("reportId", incident.identity.reportId); putInt("revision", incident.identity.revision)
         putString("observedIncidentVersion", incident.observedIncidentVersion.toString())
         putString("emergencyType", incident.emergencyType.name); putString("urgency", incident.urgency.name)
+        putString("message", incident.message)
         putArray("pendingActions", Arguments.createArray().apply {
           incident.pendingActions.forEach { action -> pushMap(Arguments.createMap().apply {
             putString("actionId", action.actionId); putString("reportId", action.reportId)

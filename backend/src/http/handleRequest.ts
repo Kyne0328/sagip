@@ -8,6 +8,7 @@ import {
   type ResponderService,
   ResponderValidationError,
 } from '../responder/service.js';
+import {parseReportStatusAccessProof, validReportStatusCursor} from '../responder/reportStatusAccess.js';
 import type {ResponderIdentity, ResponderStatus} from '../responder/types.js';
 import type {IncidentSnapshotService} from '../responder/incidentSnapshot.js';
 import type {ActionCommitResult, ActionIntent, ReceiptService} from '../responder/receiptService.js';
@@ -193,7 +194,13 @@ export async function handleSagipRequest(
         discardRequestBody(context);
         return jsonResponse(501, {error: 'NOT_IMPLEMENTED'});
       }
-      const challenge = await deps.receiptService.createReceiptAccessChallenge(receiptChallengeMatch[1] as string);
+      if (!deps.responderService) return jsonResponse(501, {error: 'NOT_IMPLEMENTED'});
+      const reportId = (receiptChallengeMatch[1] as string).toLowerCase();
+      const proof = parseReportStatusAccessProof(request.headers);
+      if (!proof || !await deps.responderService.authenticateReportStatusAccess(reportId, proof, null)) {
+        return jsonResponse(401, {error: 'ORIGIN_PROOF_REQUIRED'});
+      }
+      const challenge = await deps.receiptService.createReceiptAccessChallenge(reportId);
       return jsonResponse(201, {
         ...challenge,
         originKeyId: Buffer.from(challenge.originKeyId).toString('base64'),
@@ -381,12 +388,16 @@ export async function handleSagipRequest(
         discardRequestBody(context);
         return jsonResponse(501, {error: 'NOT_IMPLEMENTED'});
       }
-      const reportId = reportStatusMatch[1] as string;
-      const status = await deps.responderService.getReportStatus(reportId);
-      return jsonResponse(
-        200,
-        status ?? {reportId, serverAccepted: false, acceptedAt: null, latestAck: null},
-      );
+      const reportId = (reportStatusMatch[1] as string).toLowerCase();
+      const cursor = parsedUrl.searchParams.get('cursor');
+      if (parsedUrl.searchParams.size > (cursor === null ? 0 : 1) || !validReportStatusCursor(cursor)) {
+        return jsonResponse(400, {error: 'INVALID_CURSOR'});
+      }
+      const proof = parseReportStatusAccessProof(request.headers);
+      if (!proof || !await deps.responderService.authenticateReportStatusAccess(reportId, proof, cursor)) {
+        return jsonResponse(401, {error: 'ORIGIN_PROOF_REQUIRED'});
+      }
+      return jsonResponse(200, await deps.responderService.getReportStatusHistory(reportId, cursor));
     }
 
     if (pathname === RESPONDER_SESSION_PATH) {
@@ -636,8 +647,14 @@ function selectRateLimiter(
 }
 
 function strictJsonObject(bytes: Buffer, keys: string[]): Record<string, unknown> {
-  const text = new TextDecoder('utf-8', {fatal: true}).decode(bytes);
-  const value: unknown = JSON.parse(text);
+  let text: string;
+  let value: unknown;
+  try {
+    text = new TextDecoder('utf-8', {fatal: true}).decode(bytes);
+    value = JSON.parse(text);
+  } catch {
+    throw new Error('INVALID_JSON');
+  }
   if (!isRecord(value) || JSON.stringify(value) !== text.trim()) throw new Error('INVALID_JSON');
   const actual = Object.keys(value);
   if (actual.length !== keys.length || actual.some(key => !keys.includes(key))) throw new Error('INVALID_FIELDS');

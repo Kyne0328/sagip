@@ -27,7 +27,13 @@ export class IngestionService {
     }
     const envelope = verifyEnvelopeV1(bytes);
     try {
-      return await this.repository.accept({bytes, envelope, acceptedAt});
+      // Retain the verified input, not caller-owned mutable objects, across
+      // asynchronous database acquisition and transaction work.
+      return await this.repository.accept({
+        bytes: Buffer.from(bytes),
+        envelope,
+        acceptedAt: new Date(acceptedAt.getTime()),
+      });
     } catch (error) {
       if (error instanceof IngestionConflictError) throw error;
       if (isTransientDatabaseFailure(error)) {

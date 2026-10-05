@@ -9,6 +9,7 @@ data class DecodedEmergencyPayload(
   val emergencyType: EmergencyType,
   val urgency: Urgency,
   val location: LocationSnapshot?,
+  val message: String? = null,
 )
 
 object EmergencyPayloadV1 {
@@ -93,6 +94,7 @@ object EmergencyPayloadV1 {
   }
 
   private fun emergencyTypeCode(type: EmergencyType): Int = when (type) {
+    EmergencyType.UNSPECIFIED -> 0
     EmergencyType.MEDICAL -> 1
     EmergencyType.FLOOD -> 2
     EmergencyType.FIRE -> 3
@@ -102,6 +104,7 @@ object EmergencyPayloadV1 {
   }
 
   private fun emergencyTypeFromCode(code: Int): EmergencyType = when (code) {
+    0 -> EmergencyType.UNSPECIFIED
     1 -> EmergencyType.MEDICAL
     2 -> EmergencyType.FLOOD
     3 -> EmergencyType.FIRE
@@ -112,11 +115,13 @@ object EmergencyPayloadV1 {
   }
 
   private fun urgencyCode(urgency: Urgency): Int = when (urgency) {
+    Urgency.UNSPECIFIED -> 0
     Urgency.IMMEDIATE_DANGER -> 1
     Urgency.NEED_ASSISTANCE -> 2
   }
 
   private fun urgencyFromCode(code: Int): Urgency = when (code) {
+    0 -> Urgency.UNSPECIFIED
     1 -> Urgency.IMMEDIATE_DANGER
     2 -> Urgency.NEED_ASSISTANCE
     else -> throw IllegalArgumentException("unknown urgency code")

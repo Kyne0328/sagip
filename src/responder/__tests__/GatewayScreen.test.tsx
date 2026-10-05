@@ -24,7 +24,10 @@ beforeEach(() => {
   core.recordGatewayAction.mockResolvedValue({actionId: 'saved-action', state: 'PREPARING', reason: 'SIGNER_UNAVAILABLE'});
 });
 async function press(r: TestRenderer.ReactTestRenderer, label: string) {
-  await act(async () => { await r.root.findAll(b => b.props.accessibilityLabel === label && typeof b.props.onPress === 'function')[0].props.onPress(); });
+  const matchesLabel = (actual: string | undefined) => label.startsWith('Select incident ')
+    ? Boolean(actual?.startsWith('Select ') && actual.includes(label.slice('Select incident '.length, 'Select incident '.length + 8)))
+    : actual === label;
+  await act(async () => { await r.root.findAll(b => matchesLabel(b.props.accessibilityLabel) && typeof b.props.onPress === 'function')[0].props.onPress(); });
 }
 async function render() {
   let r!: TestRenderer.ReactTestRenderer;
@@ -32,6 +35,38 @@ async function render() {
   return r;
 }
 function content(r: TestRenderer.ReactTestRenderer) { return JSON.stringify(r.toJSON()); }
+
+test('shows explicit selected incident and action indicators without recording an action', async () => {
+  const r = await render();
+  await press(r, 'Unlock responder workspace');
+  await press(r, `Select incident ${incident.reportId}`);
+  expect(content(r)).toContain('✓ ');
+  const selectedIncident = r.root.findAll(b => b.props.accessibilityLabel?.includes(incident.reportId.slice(0, 8)) && typeof b.props.onPress === 'function')[0];
+  expect(selectedIncident.props.accessibilityState.selected).toBe(true);
+  await press(r, 'En route');
+  const choice = r.root.findAll(b => b.props.accessibilityLabel === 'En route' && typeof b.props.onPress === 'function')[0];
+  expect(choice.props.accessibilityState.checked).toBe(true);
+  expect(core.recordGatewayAction).not.toHaveBeenCalled();
+  expect(content(r)).toContain('Location unavailable');
+  expect(content(r)).toContain('Verified issuance unavailable');
+  await act(async () => r.unmount());
+});
+
+test('locks choices after saved pending work while keeping retry explicit', async () => {
+  const r = await render();
+  await press(r, 'Unlock responder workspace');
+  await press(r, `Select incident ${incident.reportId}`);
+  await press(r, 'Save acknowledgement');
+  const choice = r.root.findAll(b => b.props.accessibilityLabel === 'En route' && typeof b.props.onPress === 'function')[0];
+  expect(choice.props.accessibilityState.disabled).toBe(true);
+  expect(choice.props.disabled).toBe(true);
+  const note = r.root.findAll(b => b.props.accessibilityLabel === 'Responder action note')[0];
+  expect(note.props.editable).toBe(false);
+  expect(content(r)).toContain('Retry saved action');
+  expect(core.recordGatewayAction).toHaveBeenCalledTimes(1);
+  await act(async () => r.unmount());
+});
+
 
 test('gateway_ack_requires_human_intent and keeps preparing work explicit', async () => {
   const r = await render();
@@ -135,4 +170,53 @@ test('stale saved work remains visible while a new revision can receive a fresh 
   expect(core.recordGatewayAction.mock.calls[0][0].observedIncidentVersion).toBe('2');
   expect(core.recordGatewayAction.mock.calls[0][0].actionId).not.toBe('old-action');
   await act(async () => r.unmount());
+});
+
+
+test('incident accessibility names include meaningful emergency and location details', async () => {
+  const r = await render();
+  try {
+    await press(r, 'Unlock responder workspace');
+    const card = r.root.findAll(b => typeof b.props.onPress === 'function' && b.props.accessibilityLabel?.includes(incident.reportId.slice(0, 8)))[0];
+    expect(card.props.accessibilityLabel).toContain('medical');
+    expect(card.props.accessibilityLabel).toContain('revision 1');
+    expect(card.props.accessibilityLabel).toContain('Need assistance');
+    expect(card.props.accessibilityLabel).toContain('Location unavailable');
+  } finally {await act(async () => r.unmount());}
+});
+
+test('save accessibility name follows the selected responder action', async () => {
+  const r = await render();
+  try {
+    await press(r, 'Unlock responder workspace');
+    await press(r, `Select incident ${incident.reportId}`);
+    await press(r, 'Resolved');
+    expect(r.root.findAll(b => b.props.accessibilityLabel === 'Save resolved action' && typeof b.props.onPress === 'function')).toHaveLength(1);
+  } finally {await act(async () => r.unmount());}
+});
+
+test('selected gateway incident preserves civilian detail text verbatim', async () => {
+  const message = '  Synthetic help 🆘\nUpper floor <script>literal</script>  ';
+  core.listGatewayIncidents.mockResolvedValue([{...incident, message}]);
+  const r = await render();
+  try {
+    await press(r, 'Unlock responder workspace');
+    await press(r, `Select incident ${incident.reportId}`);
+    expect(content(r)).toContain('Civilian message');
+    expect(content(r)).toContain(JSON.stringify(message).slice(1, -1));
+    expect(core.recordGatewayAction).not.toHaveBeenCalled();
+  } finally {await act(async () => r.unmount());}
+});
+
+test('device verification exposes its busy state to assistive technology', async () => {
+  let finish!: (value: boolean) => void;
+  core.authenticate.mockReturnValue(new Promise(resolve => {finish = resolve;}));
+  const r = await render();
+  try {
+    await act(async () => {r.root.findByProps({accessibilityLabel: 'Unlock responder workspace'}).props.onPress();});
+    expect(r.root.findByProps({accessibilityLabel: 'Unlock responder workspace'}).props.accessibilityState.busy).toBe(true);
+  } finally {
+    await act(async () => {finish(false);});
+    await act(async () => r.unmount());
+  }
 });

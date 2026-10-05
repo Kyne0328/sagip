@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import {statusProofHeaders, statusTestIdentity} from '../support/statusProof.js';
 import {handleSagipRequest} from '../../src/http/handleRequest.js';
 import type {ResponderService} from '../../src/responder/service.js';
 import type {ActionIntent, ReceiptService} from '../../src/responder/receiptService.js';
@@ -23,6 +24,37 @@ function responderService(): ResponderService {
     authenticate: async (token: string) => token === 'valid-token' ? responder : token === 'valid-admin-token' ? admin : null,
   } as unknown as ResponderService;
 }
+
+test('authority JSON routes reject malformed JSON and UTF-8 before service calls', async () => {
+  let calls = 0;
+  const mustNotRun = async () => { calls += 1; throw new Error('must not run'); };
+  const deps = {
+    ingestEnvelope: mustNotRun,
+    responderService: responderService(),
+    authorityService: {
+      issueGatewayGrantResult: mustNotRun,
+      revokeGrant: mustNotRun,
+      issueAuthorityTimeProof: mustNotRun,
+    } as unknown as GrantProvisioningService,
+    rateLimiter: {isAllowed: () => true},
+  };
+  for (const path of [
+    '/v2/authority/grants',
+    '/v2/authority/grants/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/revoke',
+    '/v2/authority/time',
+  ]) {
+    for (const body of [Buffer.from('{'), Buffer.from([0xff])]) {
+      const response = await handleSagipRequest(new Request('https://sagip.example' + path, {
+        method: 'POST',
+        headers: {authorization: 'Bearer valid-admin-token', 'content-type': 'application/json'},
+        body,
+      }), deps);
+      assert.equal(response.status, 400, path);
+      assert.deepEqual(await response.json(), {error: 'INVALID_JSON'});
+    }
+  }
+  assert.equal(calls, 0);
+});
 
 test('v2 receipt import requires responder authentication and forwards exact signed bytes', async () => {
   const seen: Buffer[] = [];
@@ -244,11 +276,15 @@ test('origin receipt access routes bind challenge, secure session and report pol
       return {entries: [{eventId: actionId,eventDigest: 'cc'.repeat(32),bytesBase64: Buffer.from('SGA2').toString('base64'),kind: 'SGA2',revision: 1,verification: 'VERIFIED_CURRENT'}], nextCursor: null};
     },
   } as unknown as ReceiptService;
-  const deps = {ingestEnvelope: async () => { throw new Error('unused'); }, receiptService};
+  const origin = statusTestIdentity();
+  const deps = {
+    ingestEnvelope: async () => { throw new Error('unused'); }, receiptService,
+    responderService: {authenticateReportStatusAccess: async () => true} as unknown as ResponderService,
+  };
 
   const challenge = await handleSagipRequest(new Request(
     'https://sagip.example/v2/reports/' + rid + '/receipt-access/challenges',
-    {method: 'POST'},
+    {method: 'POST', headers: statusProofHeaders(rid, origin.privateKey)},
   ), deps);
   assert.equal(challenge.status, 201);
   assert.deepEqual(await challenge.json(), {challengeId, reportId: rid, originKeyId: originKeyId.toString('base64'), nonce: nonce.toString('base64'), expiresAtMs: 1790812870000});

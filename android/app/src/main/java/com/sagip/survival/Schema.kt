@@ -1,7 +1,7 @@
 package com.sagip.survival
 
 object Schema {
-  const val VERSION = 17
+  const val VERSION = 18
 
   private val ACTION_API_CREATE_STATEMENTS = listOf(
     "CREATE TABLE gateway_api_actions (action_id TEXT PRIMARY KEY NOT NULL REFERENCES gateway_work(action_id), responder_id TEXT NOT NULL, provider_id TEXT NOT NULL, action_digest TEXT NOT NULL, intent_json TEXT NOT NULL)",
@@ -311,6 +311,23 @@ object Schema {
     "CREATE INDEX idx_relay_peer_contacts_activity ON relay_peer_contacts(last_activity_at_ms)",
   )
 
+  private val VICTIM_STATUS_CREATE_STATEMENTS = listOf(
+    """CREATE TABLE victim_status_sync (
+      report_id TEXT PRIMARY KEY NOT NULL REFERENCES reports(report_id) ON DELETE CASCADE,
+      last_attempt_at INTEGER, last_success_at INTEGER, next_attempt_at INTEGER NOT NULL DEFAULT 0,
+      state TEXT NOT NULL DEFAULT 'NEVER' CHECK(state IN ('NEVER','SUCCESS','FAILED')),
+      cursor TEXT, server_checked_at INTEGER, current_revision INTEGER
+    )""",
+    """CREATE TABLE victim_server_acks (
+      report_id TEXT NOT NULL REFERENCES reports(report_id) ON DELETE CASCADE,
+      ack_id TEXT NOT NULL, callsign TEXT, status TEXT NOT NULL
+        CHECK(status IN ('ACKNOWLEDGED','EN_ROUTE','ON_SCENE','RESOLVED')),
+      note TEXT, acknowledged_at INTEGER NOT NULL, received_at INTEGER NOT NULL,
+      PRIMARY KEY(report_id,ack_id)
+    )""",
+    "CREATE INDEX idx_victim_server_acks_report ON victim_server_acks(report_id, acknowledged_at, ack_id)",
+  )
+
   val CREATE_STATEMENTS = listOf(
     """
       CREATE TABLE reports (
@@ -477,7 +494,7 @@ object Schema {
     "CREATE INDEX idx_relay_receipts_message ON relay_receipts(message_id)",
     "CREATE INDEX idx_responder_acks_report ON responder_acks(report_id)",
     "CREATE INDEX idx_relay_responder_acks_report ON relay_responder_acks(report_id, acknowledged_at DESC)",
-  ) + RECEIPT_CREATE_STATEMENTS + RELAY_CREATE_STATEMENTS + TRANSFER_CREATE_STATEMENTS + CONTACT_CREATE_STATEMENTS + GATEWAY_CREATE_STATEMENTS + PAIRING_CREATE_STATEMENTS + ADMISSION_CREATE_STATEMENTS + TIME_PROOF_CREATE_STATEMENTS + ACTION_API_CREATE_STATEMENTS
+  ) + RECEIPT_CREATE_STATEMENTS + RELAY_CREATE_STATEMENTS + TRANSFER_CREATE_STATEMENTS + CONTACT_CREATE_STATEMENTS + GATEWAY_CREATE_STATEMENTS + PAIRING_CREATE_STATEMENTS + ADMISSION_CREATE_STATEMENTS + TIME_PROOF_CREATE_STATEMENTS + ACTION_API_CREATE_STATEMENTS + VICTIM_STATUS_CREATE_STATEMENTS
 
   val MIGRATE_1_TO_2 = listOf(
     "ALTER TABLE outbound_envelopes ADD COLUMN envelope_bytes BLOB",
@@ -593,6 +610,16 @@ object Schema {
 
   // SQLiteOpenHelper runs upgrades in one transaction with foreign keys enabled.
   // Preserve child rows before rebuilding outbound_envelopes to allow immutable revisions.
+  val MIGRATE_17_TO_18 = VICTIM_STATUS_CREATE_STATEMENTS + listOf(
+    // Recover upload work previously stopped by unsigned legacy ACKs.
+    """UPDATE outbound_envelopes SET delivery_state=CASE
+      WHEN EXISTS(SELECT 1 FROM server_receipts s WHERE s.message_id=outbound_envelopes.message_id)
+        THEN 'SERVER_ACCEPTED' ELSE 'DELIVERY_PENDING' END,
+      next_attempt_at=0 WHERE delivery_state='RESPONDER_ACKNOWLEDGED'""",
+    """UPDATE reports SET lifecycle_state='LOCALLY_COMMITTED'
+      WHERE lifecycle_state='RESPONDER_ACKNOWLEDGED'""",
+  )
+
   val MIGRATE_16_TO_17 = listOf(
     "ALTER TABLE report_revisions ADD COLUMN message TEXT CHECK(message IS NULL OR length(CAST(message AS BLOB)) <= 500)",
     "ALTER TABLE report_revisions ADD COLUMN latitude REAL",

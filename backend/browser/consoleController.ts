@@ -449,6 +449,7 @@ function mapIsReady(): boolean {
 }
 
 function formatEmergencyLabel(value: string): string {
+  if (!value || value === 'UNSPECIFIED') return 'SOS · category not specified';
   const normalized = humanize(value).trim();
   return normalized.length === 0
     ? 'Emergency'

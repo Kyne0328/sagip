@@ -11,7 +11,7 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
     val sql = """
       SELECT MAX(activity_at)
       FROM (
-        SELECT r.created_at AS activity_at
+        SELECT o.created_at AS activity_at
         FROM reports r
         JOIN outbound_envelopes o ON o.report_id = r.report_id
         WHERE o.delivery_state IN (?, ?, ?)
@@ -188,12 +188,13 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
       }
 
       val current = readRevisionSummary(db, request.reportId)
-      if (current.responderAck?.status == "RESOLVED" || current.latestRevision != request.expectedRevision) {
+      if (VictimStatusStore.isResolved(db, request.reportId, current.latestRevision) || current.latestRevision != request.expectedRevision) {
         throw EmergencyDetailsException("DETAILS_CONFLICT", "Report resolved or details changed; restore before editing")
       }
       val category = request.emergencyType ?: current.emergencyType
+      val urgency = request.urgency ?: current.urgency
       val message = if (request.message == null) current.message else request.message.ifEmpty { null }
-      val changed = category != current.emergencyType || message != current.message
+      val changed = category != current.emergencyType || urgency != current.urgency || message != current.message
       val revision = if (changed) {
         if (current.latestRevision == Int.MAX_VALUE) {
           throw EmergencyDetailsException("DETAILS_CONFLICT", "Report revision limit reached")
@@ -208,7 +209,7 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
           put("revision", revision)
           put("created_at", now)
           put("emergency_type", category.name)
-          put("urgency", current.urgency.name)
+          put("urgency", urgency.name)
           put("message", message)
           putLocationSnapshot(this, current.location)
         })
@@ -216,7 +217,7 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
           put("message_id", messageId)
           put("report_id", request.reportId)
           put("revision", revision)
-          put("priority", priorityFor(current.urgency))
+          put("priority", priorityFor(urgency))
           put("created_at", now)
           put("next_attempt_at", now)
           put("attempt_count", 0)
@@ -243,14 +244,19 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
 
   private fun findActiveReportId(db: SQLiteDatabase): String? = db.rawQuery(
     """
-      SELECT r.report_id FROM reports r
-      WHERE COALESCE((
-        SELECT a.status FROM responder_acks a WHERE a.report_id = r.report_id
-        ORDER BY a.acknowledged_at DESC, a.ack_id DESC LIMIT 1
-      ), '') != 'RESOLVED'
-      ORDER BY r.created_at DESC, r.report_id DESC LIMIT 1
+      SELECT r.report_id,(SELECT MAX(rr.revision) FROM report_revisions rr WHERE rr.report_id=r.report_id)
+      FROM reports r ORDER BY r.created_at DESC,r.report_id DESC
     """.trimIndent(), null,
-  ).use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+  ).use { cursor ->
+    var active: String? = null
+    while(cursor.moveToNext()) {
+      if(!VictimStatusStore.isResolved(db,cursor.getString(0),cursor.getInt(1))) {
+        active = cursor.getString(0)
+        break
+      }
+    }
+    active
+  }
 
   // A pinned revision reconstructs an operation's result, while ACK/transport evidence may advance.
   // P09 will also use this snapshot query for the public multi-revision listing.
@@ -271,7 +277,8 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
       JOIN outbound_envelopes original ON original.report_id = r.report_id AND original.revision = 1
       LEFT JOIN responder_acks a ON a.ack_id = (
         SELECT candidate.ack_id FROM responder_acks candidate WHERE candidate.report_id = r.report_id
-        ORDER BY candidate.acknowledged_at DESC, candidate.ack_id DESC LIMIT 1
+        ORDER BY CASE candidate.status WHEN 'RESOLVED' THEN 4 WHEN 'ON_SCENE' THEN 3 WHEN 'EN_ROUTE' THEN 2 WHEN 'ACKNOWLEDGED' THEN 1 ELSE 0 END DESC,
+                 candidate.acknowledged_at DESC, candidate.ack_id DESC LIMIT 1
       )
       WHERE r.report_id = ? AND rr.revision = $selectedRevision
     """.trimIndent()
@@ -314,66 +321,25 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
     values.put("freshness", location.freshness)
   }
 
+  fun getReportSummary(reportId: String): EmergencyReportSummary =
+    readRevisionSummary(database.readableDatabase, reportId)
+
   fun listReports(): List<EmergencyReportSummary> {
-    val reports = mutableListOf<EmergencyReportSummary>()
-    val sql = """
-      SELECT r.report_id, r.created_at, r.emergency_type, r.urgency, r.lifecycle_state,
-             o.delivery_state,
-             l.latitude, l.longitude, l.accuracy_meters, l.captured_at, l.source, l.freshness,
-             ra.ack_id, ra.responder_id, ra.callsign, ra.status, ra.note, ra.acknowledged_at
-      FROM reports r
-      JOIN outbound_envelopes o ON o.report_id = r.report_id
-      LEFT JOIN locations l ON l.report_id = r.report_id
-      LEFT JOIN responder_acks ra ON ra.ack_id = (
-        SELECT candidate.ack_id
-        FROM responder_acks candidate
-        WHERE candidate.report_id = r.report_id
-        ORDER BY
-          CASE candidate.status
-            WHEN 'RESOLVED' THEN 4
-            WHEN 'ON_SCENE' THEN 3
-            WHEN 'EN_ROUTE' THEN 2
-            WHEN 'ACKNOWLEDGED' THEN 1
-            ELSE 0
-          END DESC,
-          candidate.acknowledged_at DESC,
-          candidate.ack_id DESC
-        LIMIT 1
-      )
-      ORDER BY r.created_at DESC, r.report_id DESC
-    """.trimIndent()
-
-    database.readableDatabase.rawQuery(sql, null).use { cursor ->
-      while (cursor.moveToNext()) {
-        val ackIdIndex = cursor.getColumnIndexOrThrow("ack_id")
-        val responderAck = if (!cursor.isNull(ackIdIndex)) {
-          ResponderAck(
-            ackId = cursor.getString(ackIdIndex),
-            reportId = cursor.getString(cursor.getColumnIndexOrThrow("report_id")),
-            responderId = cursor.getString(cursor.getColumnIndexOrThrow("responder_id")),
-            callsign = if (cursor.isNull(cursor.getColumnIndexOrThrow("callsign"))) null else cursor.getString(cursor.getColumnIndexOrThrow("callsign")),
-            status = cursor.getString(cursor.getColumnIndexOrThrow("status")),
-            note = if (cursor.isNull(cursor.getColumnIndexOrThrow("note"))) null else cursor.getString(cursor.getColumnIndexOrThrow("note")),
-            acknowledgedAt = cursor.getLong(cursor.getColumnIndexOrThrow("acknowledged_at")),
-          )
-        } else null
-
-        val rawDeliveryState = cursor.getString(cursor.getColumnIndexOrThrow("delivery_state"))
-        val deliveryState = if (responderAck != null) DELIVERY_RESPONDER_ACKNOWLEDGED else rawDeliveryState
-
-        reports += EmergencyReportSummary(
-          reportId = cursor.getString(cursor.getColumnIndexOrThrow("report_id")),
-          createdAt = cursor.getLong(cursor.getColumnIndexOrThrow("created_at")),
-          emergencyType = EmergencyType.valueOf(cursor.getString(cursor.getColumnIndexOrThrow("emergency_type"))),
-          urgency = Urgency.valueOf(cursor.getString(cursor.getColumnIndexOrThrow("urgency"))),
-          lifecycleState = if (responderAck != null) LIFECYCLE_RESPONDER_ACKNOWLEDGED else cursor.getString(cursor.getColumnIndexOrThrow("lifecycle_state")),
-          deliveryState = deliveryState,
-          location = readLocation(cursor),
-          responderAck = responderAck,
-        )
+    val db = database.readableDatabase
+    // One transactional snapshot prevents a concurrent append from mixing revisions.
+    db.beginTransaction()
+    try {
+      val ids = db.rawQuery(
+        "SELECT report_id FROM reports ORDER BY created_at DESC, report_id DESC", null,
+      ).use { cursor ->
+        buildList { while (cursor.moveToNext()) add(cursor.getString(0)) }
       }
+      val result = ids.map { readRevisionSummary(db, it) }
+      db.setTransactionSuccessful()
+      return result
+    } finally {
+      db.endTransaction()
     }
-    return reports
   }
 
   fun listEnvelopePreparationSources(limit: Int = 20): List<EnvelopePreparationSource> {
@@ -381,11 +347,10 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
     val sources = mutableListOf<EnvelopePreparationSource>()
     val sql = """
       SELECT o.message_id, o.report_id, o.revision, o.priority, o.created_at, o.expires_at,
-             rr.emergency_type, rr.urgency,
-             l.latitude, l.longitude, l.accuracy_meters, l.captured_at, l.source, l.freshness
+             rr.emergency_type, rr.urgency, rr.message,
+             rr.latitude, rr.longitude, rr.accuracy_meters, rr.captured_at, rr.source, rr.freshness
       FROM outbound_envelopes o
       JOIN report_revisions rr ON rr.report_id = o.report_id AND rr.revision = o.revision
-      LEFT JOIN locations l ON l.report_id = o.report_id
       WHERE o.preparation_state = ?
       ORDER BY o.priority ASC, o.created_at ASC, o.message_id ASC
       LIMIT ?
@@ -407,6 +372,7 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
           emergencyType = EmergencyType.valueOf(cursor.getString(cursor.getColumnIndexOrThrow("emergency_type"))),
           urgency = Urgency.valueOf(cursor.getString(cursor.getColumnIndexOrThrow("urgency"))),
           location = readLocation(cursor),
+          message = cursor.getColumnIndexOrThrow("message").let { if (cursor.isNull(it)) null else cursor.getString(it) },
         )
       }
     }
@@ -777,7 +743,8 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
   }
 
   private fun priorityFor(urgency: Urgency): Int = when (urgency) {
-    Urgency.IMMEDIATE_DANGER -> 0
+    // Unknown severity must not demote an SOS while its victim cannot provide details.
+    Urgency.UNSPECIFIED, Urgency.IMMEDIATE_DANGER -> 0
     Urgency.NEED_ASSISTANCE -> 10
   }
 
@@ -1179,34 +1146,19 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
 
   override fun listReportsAwaitingAck(now: Long, limit: Int): List<String> {
     require(limit in 1..100) { "limit must be between 1 and 100" }
-    val sql = """
-      SELECT r.report_id
-      FROM reports r
-      JOIN outbound_envelopes o ON o.report_id = r.report_id
-      WHERE o.delivery_state IN (?, ?)
-        AND o.next_attempt_at <= ?
-        AND NOT EXISTS (
-          SELECT 1
-          FROM responder_acks a
-          WHERE a.report_id = r.report_id AND a.status = 'RESOLVED'
-        )
-      ORDER BY o.next_attempt_at ASC, r.created_at ASC, r.report_id ASC
-      LIMIT ?
-    """.trimIndent()
-    return database.readableDatabase.rawQuery(
-      sql,
-      arrayOf(
-        DELIVERY_SERVER_ACCEPTED,
-        DELIVERY_RESPONDER_ACKNOWLEDGED,
-        now.toString(),
-        limit.toString(),
-      ),
-    ).use { cursor ->
-      val result = mutableListOf<String>()
-      while (cursor.moveToNext()) {
-        result.add(cursor.getString(0))
+    val db = database.readableDatabase
+    return db.rawQuery("""
+      SELECT r.report_id,MAX(rr.revision)
+      FROM reports r JOIN report_revisions rr ON rr.report_id=r.report_id
+      WHERE EXISTS(SELECT 1 FROM outbound_envelopes o WHERE o.report_id=r.report_id
+        AND o.delivery_state IN (?,?) AND o.next_attempt_at<=?)
+      GROUP BY r.report_id ORDER BY r.created_at,r.report_id
+    """.trimIndent(),arrayOf(DELIVERY_SERVER_ACCEPTED,DELIVERY_RESPONDER_ACKNOWLEDGED,now.toString())).use { cursor ->
+      buildList {
+        while(cursor.moveToNext() && size < limit) {
+          if(!VictimStatusStore.isResolved(db,cursor.getString(0),cursor.getInt(1))) add(cursor.getString(0))
+        }
       }
-      result
     }
   }
 
@@ -1255,8 +1207,8 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
         """
           SELECT message_id
           FROM outbound_envelopes
-          WHERE report_id = ?
-          ORDER BY revision DESC, created_at DESC
+          WHERE report_id = ? AND revision = 1
+          ORDER BY created_at DESC
           LIMIT 1
         """.trimIndent(),
         arrayOf(ack.reportId),
@@ -1278,14 +1230,8 @@ class EmergencyRepository(private val database: SagipDatabase) : OutboundDeliver
           put("acknowledged_at", ack.acknowledgedAt)
         },
       )
-      db.execSQL(
-        "UPDATE reports SET lifecycle_state = ? WHERE report_id = ?",
-        arrayOf<Any?>(LIFECYCLE_RESPONDER_ACKNOWLEDGED, ack.reportId),
-      )
-      db.execSQL(
-        "UPDATE outbound_envelopes SET delivery_state = ? WHERE report_id = ?",
-        arrayOf<Any?>(DELIVERY_RESPONDER_ACKNOWLEDGED, ack.reportId),
-      )
+      // SGA1/legacy ACKs are historical observations only. They must never stop
+      // upload, close an SOS, or imply receipt-v2 authority.
       insertDeliveryEvent(
         db,
         ack.reportId,

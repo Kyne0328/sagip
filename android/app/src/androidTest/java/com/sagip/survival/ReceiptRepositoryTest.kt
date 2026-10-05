@@ -830,6 +830,51 @@ class ReceiptRepositoryTest {
     assertEquals(null, ReceiptAuthority.advanceCheckpoint(checkpoint, MonotonicClock(UUID.randomUUID().toString(), 5_200L)))
   }
 
+  @Test
+  fun equalProviderSequenceIsQuarantinedAndHigherSequenceCannotRegressStatus() {
+    database = SagipDatabase(context)
+    val db = requireNotNull(database)
+    val origin = JcaSigningIdentity()
+    val responder = JcaSigningIdentity()
+    val reportId = UUID.randomUUID().toString()
+    val source = receiptRepository(db,responder,origin)
+    source.recordReportEnvelope(createEnvelope(reportId,1,origin),now=1000)
+    val actionId=UUID.randomUUID().toString()
+    source.allocateAction(ActionIntent(actionId,reportId,1,status=3,note="On scene"))
+    val original=requireNotNull(source.prepareReceipt(actionId).bytes)
+    val originalFields=ReceiptV2Codec.decode(original).fields as ReceiptFields.Responder
+    fun changed(sequence:Long,status:Int):ByteArray {
+      val draft=originalFields.copy(actionId=UUID.randomUUID().toString(),sequence=sequence,status=status,
+        actionDigest=ByteArray(32),note="Changed status")
+      return signReceipt(draft.copy(actionDigest=ReceiptAuthority.actionDigest(draft)),responder)
+    }
+    val before=source.projection(reportId)!!.eventId
+    assertEquals(ReceiptApplication.REJECTED,source.applyToReport(changed(originalFields.sequence,4),rootContext(responder)))
+    assertEquals(1,countRows(db,"receipt_quarantine"))
+    assertEquals(ReceiptApplication.HISTORICAL,source.applyToReport(changed(originalFields.sequence+1,1),rootContext(responder)))
+    assertEquals(before,source.projection(reportId)!!.eventId)
+  }
+
+  @Test
+  fun laterProviderArrivalCannotRegressSharedVisibleStage() {
+    database=SagipDatabase(context)
+    val db=requireNotNull(database)
+    val origin=JcaSigningIdentity()
+    val first=receiptRepository(db,JcaSigningIdentity(),origin)
+    val second=receiptRepository(db,JcaSigningIdentity(),origin)
+    val reportId=UUID.randomUUID().toString()
+    first.recordReportEnvelope(createEnvelope(reportId,1,origin),now=1000)
+    val onScene=UUID.randomUUID().toString()
+    first.allocateAction(ActionIntent(onScene,reportId,1,status=3,note="On scene"))
+    assertEquals(ActionCommitState.SIGNED,first.prepareReceipt(onScene).state)
+    now += 1000
+    val lower=UUID.randomUUID().toString()
+    second.allocateAction(ActionIntent(lower,reportId,second.currentReceiptVersion(reportId),status=1,note="Late ACK"))
+    assertEquals(ActionCommitState.SIGNED,second.prepareReceipt(lower).state)
+    assertEquals(2,countRows(db,"receipt_projections"))
+    assertEquals(onScene,second.projection(reportId)!!.eventId)
+  }
+
   private fun receiptRepository(
     db: SagipDatabase,
     responder: SigningIdentity,

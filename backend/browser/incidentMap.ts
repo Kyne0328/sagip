@@ -4,6 +4,8 @@ import {readArchiveRange, type OfflineManifest} from './offlinePackage.js';
 interface MapLike {
   fitBounds(bounds: [[number, number], [number, number]], options: {padding: number; duration: number}): void;
   resize(): void;
+  panTo(center: [number, number], options: {duration: number}): void;
+  addControl(control: unknown, position: string): void;
   remove(): void;
 }
 interface MarkerLike {
@@ -13,6 +15,8 @@ interface MarkerLike {
 }
 interface MapLibreLike {
   Map: new (options: Record<string, unknown>) => MapLike;
+  NavigationControl: new (options: {showCompass: boolean}) => unknown;
+  ScaleControl: new (options: {maxWidth: number; unit: string}) => unknown;
   Marker: new (options: {element: HTMLElement; anchor: string}) => MarkerLike;
   addProtocol(name: string, protocol: unknown): void;
 }
@@ -53,6 +57,7 @@ export class IncidentMapView {
   private manifest: OfflineManifest | null = null;
   private activePackageId: string | null = null;
   private needsInitialFit = false;
+  private selectedReportId: string | null = null;
   private hasFittedIncidentBounds = false;
   private renderGeneration = 0;
   private readonly resizeObserver: ResizeObserver | null;
@@ -124,12 +129,14 @@ export class IncidentMapView {
     if (generation !== this.renderGeneration || !this.map) return;
     for (const item of located) {
       const location = item.location!;
-      const markerElement = document.createElement('div');
+      const markerElement = document.createElement('button');
+      markerElement.type = 'button';
+      markerElement.setAttribute('aria-label', (item.emergencyType === 'UNSPECIFIED' ? 'SOS · category not specified' : item.emergencyType.toLowerCase().replaceAll('_', ' ')) + ' incident location');
       markerElement.className = 'map-marker';
       markerElement.dataset.reportId = item.reportId;
       markerElement.dataset.selected = item.reportId === selectedReportId ? 'true' : 'false';
       markerElement.dataset.urgency = item.urgency;
-      markerElement.textContent = item.urgency === 'IMMEDIATE_DANGER' ? '!' : '•';
+      markerElement.textContent = item.urgency === 'IMMEDIATE_DANGER' ? '!' : item.urgency === 'UNSPECIFIED' ? '?' : '•';
       markerElement.addEventListener('click', () => this.onSelect(item.reportId), {
         signal: this.markerListeners.signal,
       });
@@ -158,6 +165,13 @@ export class IncidentMapView {
   }
 
   select(reportId: string | null): void {
+    if (reportId !== this.selectedReportId) {
+      const location = reportId ? this.locationsByReportId.get(reportId) : null;
+      if (location && this.map && this.manifest && insideExtent(location, this.manifest.extent)) {
+        this.map.panTo([location.longitude, location.latitude], {duration: 0});
+      }
+      this.selectedReportId = reportId;
+    }
     for (const element of this.container.querySelectorAll<HTMLElement>('.map-marker')) {
       element.dataset.selected = element.dataset.reportId === reportId ? 'true' : 'false';
     }
@@ -232,6 +246,8 @@ export class IncidentMapView {
         interactive: true,
         fadeDuration: 0,
       });
+      this.map.addControl(new maplibre.NavigationControl({showCompass: true}), 'bottom-right');
+      this.map.addControl(new maplibre.ScaleControl({maxWidth: 120, unit: 'metric'}), 'bottom-left');
       this.placeholder.hidden = true;
       this.needsInitialFit = true;
       this.refreshMapLayout();

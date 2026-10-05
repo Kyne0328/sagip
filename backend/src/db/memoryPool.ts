@@ -51,7 +51,7 @@ export function createMemoryPostgresPool(): Pool {
 
   return {
     query: async (text: string, values?: readonly unknown[]) =>
-      decodeResult(await underlying.query(text, encodeValues(values))),
+      decodeResult(await underlying.query(normalizePostgresCheckNames(text), encodeValues(values))),
     connect: async () => wrapClient(await underlying.connect()),
     end: async () => underlying.end(),
   } as unknown as Pool;
@@ -60,9 +60,21 @@ export function createMemoryPostgresPool(): Pool {
 function wrapClient(client: PoolClient): PoolClient {
   return {
     query: async (text: string, values?: readonly unknown[]) =>
-      decodeResult(await client.query(text, encodeValues(values))),
+      decodeResult(await client.query(normalizePostgresCheckNames(text), encodeValues(values))),
     release: () => client.release(),
   } as unknown as PoolClient;
+}
+
+// pg-mem does not generate PostgreSQL's names for unnamed column CHECKs.
+// Preserve the exact original checks while matching their real PostgreSQL names,
+// so additive migrations exercise DROP/ADD CONSTRAINT instead of skipping checks.
+function normalizePostgresCheckNames(sql: string): string {
+  if (!/CREATE TABLE incident_revisions\s*\(/u.test(sql)) return sql;
+  return sql
+    .replace('emergency_type SMALLINT NOT NULL CHECK (emergency_type BETWEEN 1 AND 6)',
+      'emergency_type SMALLINT NOT NULL CONSTRAINT incident_revisions_emergency_type_check CHECK (emergency_type BETWEEN 1 AND 6)')
+    .replace('urgency SMALLINT NOT NULL CHECK (urgency BETWEEN 1 AND 2)',
+      'urgency SMALLINT NOT NULL CONSTRAINT incident_revisions_urgency_check CHECK (urgency BETWEEN 1 AND 2)');
 }
 
 function encodeValues(values: readonly unknown[] | undefined): unknown[] | undefined {

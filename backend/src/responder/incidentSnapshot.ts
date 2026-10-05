@@ -135,6 +135,7 @@ async function buildSnapshotEntry(client: PoolClient, detail: NonNullable<Awaite
     observedIncidentVersion: String(binding.receipt_version),
     emergencyType: detail.emergencyType,
     urgency: detail.urgency,
+    message: detail.message,
     location: detail.location,
     reportCreatedAtMs: detail.createdAtMs,
     receivedAtMs: Date.parse(detail.firstReceivedAt),

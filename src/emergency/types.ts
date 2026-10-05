@@ -7,10 +7,10 @@ export const EMERGENCY_TYPES = [
   'OTHER',
 ] as const;
 
-export type EmergencyType = (typeof EMERGENCY_TYPES)[number];
+export type EmergencyType = (typeof EMERGENCY_TYPES)[number] | 'UNSPECIFIED';
 
 export const URGENCIES = ['IMMEDIATE_DANGER', 'NEED_ASSISTANCE'] as const;
-export type Urgency = (typeof URGENCIES)[number];
+export type Urgency = (typeof URGENCIES)[number] | 'UNSPECIFIED';
 
 export type LifecycleState = 'LOCALLY_COMMITTED' | 'RELAYED' | 'RESPONDER_ACKNOWLEDGED';
 
@@ -95,12 +95,57 @@ export interface LocationSnapshot {
 }
 
 export interface CreateEmergencyReportInput {
-  emergencyType: EmergencyType;
-  urgency: Urgency;
+  emergencyType?: EmergencyType;
+  urgency?: Urgency;
+}
+
+export interface AppendEmergencyDetailsInput extends CreateEmergencyReportInput {
+  expectedRevision: number;
+  operationId: string;
+}
+
+export interface RevisionDelivery {
+  revision: number;
+  messageId: string;
+  deliveryState: DeliveryState;
+}
+
+export interface EmergencyHistoryEvent {
+  id: string;
+  kind: 'LOCAL_COMMIT' | 'DETAILS_SAVED' | 'RELAYED_TO_PEER' | 'SERVER_ACCEPTED' | 'DELIVERY_FAILED' | 'RESPONDER_UPDATE';
+  occurredAt: number;
+  revision: number | null;
+  status: string | null;
+  provenance: 'LOCAL' | 'SERVER_AUTHENTICATED' | 'UNVERIFIED' | 'VERIFIED_CURRENT' | 'VERIFIED_OFFLINE_AUTHORITY';
+  callsign: string | null;
+  note: string | null;
+}
+
+export interface StatusSyncInfo {
+  historyPending: boolean;
+  lastAttemptAt: number | null;
+  lastSuccessAt: number | null;
+  state: 'NEVER' | 'SUCCESS' | 'FAILED';
+}
+
+/** Report-wide status authenticated by the native HTTPS client; not a portable signed receipt. */
+export interface ServerStatusInfo {
+  status: VerifiedResponderStatus;
+  revision: null;
+  statusScope: 'REPORT';
+  updatedAt: number;
+  callsign: string | null;
+  note: string | null;
 }
 
 export interface EmergencyReportSummary {
+  serverStatus?: ServerStatusInfo;
+  history?: EmergencyHistoryEvent[];
+  statusSync?: StatusSyncInfo;
   reportId: string;
+  revision?: number;
+  originalDelivery?: RevisionDelivery;
+  latestDelivery?: RevisionDelivery;
   createdAt: number;
   emergencyType: EmergencyType;
   urgency: Urgency;

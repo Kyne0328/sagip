@@ -78,6 +78,34 @@ class BleChunkCodecTest {
   }
 
   @Test
+  fun `reassembler rejects oversized peer data before completion and resets`() {
+    val data = ByteArray(256) { it.toByte() }
+    // A peer controls chunk headers and is not constrained by our encoder.
+    val template = BleChunkCodec.encodeChunks(data, data.size).single()
+    fun peerFrame(index: Int): ByteArray = template.copyOf().also {
+      java.nio.ByteBuffer.wrap(it).putShort(4, index.toShort()).putShort(6, 34)
+    }
+    val reassembler = BleEnvelopeReassembler()
+    repeat(32) { index ->
+      assertTrue(reassembler.addChunk(peerFrame(index)) is ReassemblyResult.InProgress)
+    }
+    val oversized = reassembler.addChunk(peerFrame(32))
+    assertTrue("Oversized incomplete transfers must fail immediately", oversized is ReassemblyResult.Failed)
+    val recovered = reassembler.addChunk(BleChunkCodec.encodeChunks(byteArrayOf(1, 2, 3)).single())
+    assertTrue(recovered is ReassemblyResult.Complete)
+    assertArrayEquals(byteArrayOf(1, 2, 3), (recovered as ReassemblyResult.Complete).envelopeBytes)
+  }
+
+  @Test
+  fun `reassembler accepts exactly the maximum envelope size`() {
+    val original = ByteArray(BleChunkCodec.MAX_ENVELOPE_SIZE) { it.toByte() }
+    val reassembler = BleEnvelopeReassembler()
+    val result = BleChunkCodec.encodeChunks(original).map(reassembler::addChunk).last()
+    assertTrue(result is ReassemblyResult.Complete)
+    assertArrayEquals(original, (result as ReassemblyResult.Complete).envelopeBytes)
+  }
+
+  @Test
   fun `rejects invalid magic bytes`() {
     val badMagic = byteArrayOf('B'.code.toByte(), 'A'.code.toByte(), 'D'.code.toByte(), '1'.code.toByte()) + ByteArray(15)
     var failed = false

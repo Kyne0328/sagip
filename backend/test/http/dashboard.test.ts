@@ -27,7 +27,7 @@ class TextNodeDouble {
 async function renderingHarness() {
   const response = await handleSagipRequest(new Request('http://localhost/responder/app.js'), deps);
   const javascript = await response.text();
-  const functions = ['createText', 'addFact', 'renderRevisionHistory', 'renderDetail'].map((name) => {
+  const functions = ['formatUrgency', 'incidentTitle', 'createText', 'addFact', 'renderRevisionHistory', 'renderDetail'].map((name) => {
     const start = javascript.indexOf('  function ' + name + '(');
     assert.ok(start >= 0, name + ' exists');
     const end = javascript.indexOf('\n  }', start);
@@ -41,6 +41,8 @@ async function renderingHarness() {
     detailTitle: new TextNodeDouble(), detailSubtitle: new TextNodeDouble(),
     detailStatus: new TextNodeDouble(), urgencyBanner: new TextNodeDouble(),
     ackStatus: new TextNodeDouble(),
+    ackNote: new TextNodeDouble(), ackButton: new TextNodeDouble(),
+    responseDrafts: new Map(), loadedReportId: null, acknowledgementPending: false,
     formatEmergencyType: String, formatRelative: String, formatDate: String,
     formatStatus: String, statusLabel: () => 'PENDING', statusClass: String,
     renderLocation: () => {}, renderAckHistory: () => {},
@@ -99,8 +101,10 @@ test('responder dashboard assets are served with strict browser security headers
   assert.match(body, /Responder Console/u);
   assert.match(body, /locator pin with medical plus/u);
   assert.match(body, /Report revision history/u);
-  assert.match(body, /Start a responder shift/u);
-  assert.match(body, /secure 12-hour browser session/u);
+  assert.match(body, /Responder sign-in/u);
+  assert.match(body, /browser session for up to 12 hours/u);
+  assert.match(body, /SAGIP does not save your token in browser storage/u);
+  assert.match(body, /id="tokenInput"[^>]*type="password"[^>]*autocomplete="off"/u);
   assert.match(body, /Open incidents/u);
   assert.match(body, /Tagum emergency operations/u);
   assert.match(body, /class="operations-stage"/u);

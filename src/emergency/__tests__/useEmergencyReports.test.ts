@@ -11,7 +11,7 @@ const base: EmergencyReportSummary = {
   location: null,
 };
 
-test('keeps syncing reports until responder resolution is persisted', () => {
+test('keeps syncing reports until trusted responder resolution is persisted', () => {
   expect(reportNeedsStatusSync(base)).toBe(true);
   expect(reportNeedsStatusSync({...base, deliveryState: 'RELAYED_TO_PEER'})).toBe(true);
   expect(reportNeedsStatusSync({...base, deliveryState: 'SERVER_ACCEPTED'})).toBe(true);
@@ -44,6 +44,7 @@ test('keeps syncing reports until responder resolution is persisted', () => {
         acknowledgedAt: 3,
       },
     }),
-  ).toBe(false);
+  ).toBe(true);
+  expect(reportNeedsStatusSync({...base, deliveryState: 'RESPONDER_ACKNOWLEDGED', serverStatus: {status: 'RESOLVED', revision: null, statusScope: 'REPORT', updatedAt: 3, callsign: null, note: null}})).toBe(false);
   expect(reportNeedsStatusSync({...base, deliveryState: 'PERMANENT_FAILURE'})).toBe(false);
 });

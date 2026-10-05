@@ -119,6 +119,41 @@ test('cloud incident snapshot is complete, immutable, owner-bound, cursor-bound,
   }
 });
 
+test('cloud incident snapshot retains latest civilian message and explicit absence', async () => {
+  const pool = createMemoryPostgresPool();
+  try {
+    await applyMigrations(pool, MIGRATIONS_DIR);
+    const ingestion = new IngestionService(pool);
+    const origin = createTestIdentity();
+    const reportId = randomUUID();
+    const noMessageReportId = randomUUID();
+    const message = "Please use the side entrance.\nKailangan ng tulong: 'rescue' & <safe>.";
+    await ingestion.ingestEnvelope(buildSignedEnvelope({
+      identity: origin, reportId, messageId: randomUUID(), message: 'Earlier detail',
+    }));
+    await ingestion.ingestEnvelope(buildSignedEnvelope({
+      identity: origin, reportId, messageId: randomUUID(), revision: 2, message,
+    }));
+    await ingestion.ingestEnvelope(buildSignedEnvelope({
+      identity: origin, reportId: noMessageReportId, messageId: randomUUID(),
+    }));
+    const owner: ResponderIdentity = {
+      responderId: randomUUID(), callsign: 'MESSAGE-OWNER', role: 'DISPATCHER',
+      registeredAt: '2026-10-02T12:00:00.000Z',
+    };
+    await seedResponder(pool, owner);
+    const service = new IncidentSnapshotService(pool);
+    const descriptor = await service.createIncidentSnapshot(owner);
+    assert.ok(descriptor.nextCursor);
+    const page = await service.readIncidentSnapshotPage(descriptor.snapshotId, descriptor.nextCursor, owner);
+    const entries = page.entries as Array<{reportId: string; message: string | null}>;
+    assert.equal(entries.find(entry => entry.reportId === reportId)?.message, message);
+    assert.equal(entries.find(entry => entry.reportId === noMessageReportId)?.message, null);
+  } finally {
+    await pool.end();
+  }
+});
+
 test('cloud incident snapshot capacity is bounded per responder', async () => {
   const pool = createMemoryPostgresPool();
   try {

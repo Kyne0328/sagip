@@ -60,13 +60,13 @@ test('HTTP boundary enforces 429 Too Many Requests when rate limit exceeded', as
   const baseUrl = `http://127.0.0.1:${port}`;
 
   try {
-    // 1st request -> 200 / valid
+    // Missing origin proof is rejected, but still consumes rate-limit budget.
     const r1 = await fetch(`${baseUrl}/v1/reports/00000000-0000-0000-0000-000000000003/status`);
-    assert.equal(r1.status, 200);
+    assert.equal(r1.status, 401);
 
-    // 2nd request -> 200
+    // 2nd request remains unauthorized.
     const r2 = await fetch(`${baseUrl}/v1/reports/00000000-0000-0000-0000-000000000003/status`);
-    assert.equal(r2.status, 200);
+    assert.equal(r2.status, 401);
 
     // 3rd request -> 429 Too Many Requests
     const r3 = await fetch(`${baseUrl}/v1/reports/00000000-0000-0000-0000-000000000003/status`);

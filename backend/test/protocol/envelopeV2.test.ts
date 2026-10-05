@@ -41,7 +41,7 @@ function encryptedPayload(): Buffer {
   ]);
 }
 
-function buildSignedEnvelopeV2(): Buffer {
+function buildSignedEnvelopeV2(revision = 1): Buffer {
   const {privateKey, publicKey} = generateKeyPairSync('ec', {namedCurve: 'prime256v1'});
   const publicKeyDer = publicKey.export({type: 'spki', format: 'der'});
   const payload = encryptedPayload();
@@ -50,7 +50,7 @@ function buildSignedEnvelopeV2(): Buffer {
     Buffer.from([2, 1]),
     uuidBytes('11111111-1111-1111-1111-111111111111'),
     uuidBytes('22222222-2222-2222-2222-222222222222'),
-    u32(1),
+    u32(revision),
     i64(1_000n),
     i64(-1n),
     i32(0),
@@ -100,6 +100,13 @@ test('SGP2 verifies P-256 signature and ciphertext digest without decoding SRP1'
   assert.equal(verified.reportId, '22222222-2222-2222-2222-222222222222');
   assert.equal(verified.encryptedPayloadContainer.recipients.length, 1);
   assert.equal(verified.encryptedPayload.subarray(0, 4).toString('ascii'), 'SRE2');
+});
+
+test('SGP2 revision matches the positive signed 32-bit Android and storage range', () => {
+  assert.equal(verifyEnvelopeV2(buildSignedEnvelopeV2(0x7fff_ffff)).revision, 0x7fff_ffff);
+  for (const revision of [0, 0x8000_0000, 0xffff_ffff]) {
+    assert.throws(() => verifyEnvelopeV2(buildSignedEnvelopeV2(revision)), /revision/i);
+  }
 });
 
 test('SGP2 rejects digest/signature tampering and oversized envelopes', () => {

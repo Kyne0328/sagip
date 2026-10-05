@@ -90,3 +90,14 @@ AGENTS.md
 .agents/
 .neon
 .release-private/
+
+# Generated release validation and UI capture artifacts
+/artifacts/complete-ui-tour/
+/artifacts/mobile-design/
+/artifacts/one-tap-sos/
+/backend/artifacts/
+/scripts/mobile-preview/
+/dist/
+*.apk
+*.aab
+*.bundle

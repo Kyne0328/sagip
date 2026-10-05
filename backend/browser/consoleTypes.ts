@@ -42,6 +42,7 @@ export interface IncidentSnapshotEntry {
   originKeyId: Uint8Array;
   observedIncidentVersion: string;
   emergencyType: string;
+  message?: string | null;
   urgency: string;
   location: IncidentLocation | null;
   reportCreatedAtMs: number;

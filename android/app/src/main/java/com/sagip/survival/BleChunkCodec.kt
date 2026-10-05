@@ -140,6 +140,11 @@ class BleEnvelopeReassembler {
       return ReassemblyResult.Failed(err)
     }
 
+    if (frame.data.size > BleChunkCodec.MAX_ENVELOPE_SIZE - accumulated.size()) {
+      reset()
+      return ReassemblyResult.Failed("Envelope exceeds max size of ${BleChunkCodec.MAX_ENVELOPE_SIZE} bytes")
+    }
+
     accumulated.write(frame.data)
     expectedIndex++
 

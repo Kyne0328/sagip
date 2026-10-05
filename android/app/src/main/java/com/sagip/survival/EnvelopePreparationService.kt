@@ -16,11 +16,11 @@ class EnvelopePreparationService(
 
     repository.listEnvelopePreparationSources(limit).forEach { source ->
       try {
-        val payload = EmergencyPayloadV1.encode(
-          emergencyType = source.emergencyType,
-          urgency = source.urgency,
-          location = source.location,
-        )
+        val payload = if (source.message == null) {
+          EmergencyPayloadV1.encode(source.emergencyType, source.urgency, source.location)
+        } else {
+          EmergencyPayloadV2.encode(source.emergencyType, source.urgency, source.location, source.message)
+        }
         val envelope = TransportEnvelopeV1.create(
           EnvelopeUnsignedInput(
             messageId = source.messageId,

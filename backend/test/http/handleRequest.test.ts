@@ -131,7 +131,7 @@ test('different traffic classes do not throttle each other behind the same NAT I
     deps,
     {clientIp},
   );
-  assert.equal(status.status, 200);
+  assert.equal(status.status, 401);
 });
 
 test('fetch handler returns retryable 503 when the shared rate limiter is unavailable', async () => {

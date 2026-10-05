@@ -72,6 +72,19 @@ describe('prepareSosLocation', () => {
     expect(primeLocation).not.toHaveBeenCalled();
   });
 
+  it('contains a permission check failure during best-effort startup', async () => {
+    check.mockRejectedValue(new Error('Permission service unavailable'));
+    await expect(prepareSosLocation(false)).resolves.toBe('UNAVAILABLE');
+    expect(primeLocation).not.toHaveBeenCalled();
+  });
+
+  it('contains a permission prompt failure without interrupting SOS entry', async () => {
+    check.mockResolvedValue(false);
+    requestMultiple.mockRejectedValue(new Error('Activity unavailable'));
+    await expect(prepareSosLocation(true)).resolves.toBe('UNAVAILABLE');
+    expect(primeLocation).not.toHaveBeenCalled();
+  });
+
   it('does not prompt during silent startup warm-up', async () => {
     check.mockResolvedValue(false);
 

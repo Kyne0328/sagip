@@ -6,6 +6,8 @@ jest.mock('react-native', () => ({
   NativeModules: {
     SagipSurvivalCore: {
       createEmergencyReport: jest.fn(),
+      appendEmergencyReportDetails: jest.fn(),
+      newEmergencyDetailsOperationId: jest.fn(),
       listEmergencyReports: jest.fn(),
       primeLocation: jest.fn(),
       triggerDelivery: jest.fn(),
@@ -18,6 +20,8 @@ jest.mock('react-native', () => ({
 
 const nativeCore = NativeModules.SagipSurvivalCore as {
   createEmergencyReport: jest.Mock;
+  appendEmergencyReportDetails: jest.Mock;
+  newEmergencyDetailsOperationId: jest.Mock;
   listEmergencyReports: jest.Mock;
   primeLocation: jest.Mock;
   triggerDelivery: jest.Mock;
@@ -179,4 +183,28 @@ describe('SurvivalCore', () => {
     await expect(SurvivalCore.startBleRelay()).resolves.toBe(true);
     await expect(SurvivalCore.stopBleRelay()).resolves.toBe(true);
   });
+});
+
+test('native-generated operation identities satisfy canonical UUID validation', async () => {
+  nativeCore.newEmergencyDetailsOperationId.mockResolvedValue('00000000-0000-4000-8000-000000000001');
+  await expect(SurvivalCore.newEmergencyDetailsOperationId()).resolves.toBe('00000000-0000-4000-8000-000000000001');
+  nativeCore.newEmergencyDetailsOperationId.mockResolvedValue('details-123');
+  await expect(SurvivalCore.newEmergencyDetailsOperationId()).rejects.toThrow('operation ID is invalid');
+});
+
+test('allows a no-detail SOS and explicit unspecified metadata without inventing choices', async () => {
+  const result = {...nativeSummary, revision: 1, emergencyType: 'UNSPECIFIED', urgency: 'UNSPECIFIED'};
+  nativeCore.createEmergencyReport.mockResolvedValue(result);
+  await expect(SurvivalCore.createEmergencyReport({})).resolves.toEqual(result);
+  expect(nativeCore.createEmergencyReport).toHaveBeenCalledWith({});
+});
+
+test('appends details with report identity and idempotent revision contract', async () => {
+  const result = {...nativeSummary, revision: 2};
+  nativeCore.appendEmergencyReportDetails.mockResolvedValue(result);
+  const input = {expectedRevision: 1, operationId: 'synthetic-edit-1', urgency: 'IMMEDIATE_DANGER' as const};
+  await expect(SurvivalCore.appendEmergencyReportDetails('report-1', input)).resolves.toEqual(result);
+  expect(nativeCore.appendEmergencyReportDetails).toHaveBeenCalledWith('report-1', input);
+  nativeCore.appendEmergencyReportDetails.mockResolvedValue({...result, reportId: 'another-report'});
+  await expect(SurvivalCore.appendEmergencyReportDetails('report-1', input)).rejects.toThrow('another report');
 });

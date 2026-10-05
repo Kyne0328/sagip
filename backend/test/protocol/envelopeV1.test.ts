@@ -37,7 +37,7 @@ function i64(value: bigint): Buffer {
   return bytes;
 }
 
-function buildSignedEnvelope(overrides?: {messageId?: string; reportId?: string; payload?: Buffer}): Buffer {
+function buildSignedEnvelope(overrides?: {messageId?: string; reportId?: string; payload?: Buffer; revision?: number}): Buffer {
   const messageId = overrides?.messageId ?? '11111111-1111-1111-1111-111111111111';
   const reportId = overrides?.reportId ?? '22222222-2222-2222-2222-222222222222';
   const {privateKey, publicKey} = generateKeyPairSync('ec', {namedCurve: 'prime256v1'});
@@ -51,7 +51,7 @@ function buildSignedEnvelope(overrides?: {messageId?: string; reportId?: string;
     Buffer.from([1, 1]),
     uuidBytes(messageId),
     uuidBytes(reportId),
-    u32(1),
+    u32(overrides?.revision ?? 1),
     i64(1_000n),
     i64(-1n),
     i32(0),
@@ -106,6 +106,13 @@ test('verifies a valid P-256 envelope and decodes its SRP1 payload', () => {
     location: null,
     message: null,
   });
+});
+
+test('SGP1 revision matches the positive signed 32-bit Android and storage range', () => {
+  assert.equal(verifyEnvelopeV1(buildSignedEnvelope({revision: 0x7fff_ffff})).revision, 0x7fff_ffff);
+  for (const revision of [0, 0x8000_0000, 0xffff_ffff]) {
+    assert.throws(() => verifyEnvelopeV1(buildSignedEnvelope({revision})), /revision/i);
+  }
 });
 
 test('rejects unsupported protocol versions', () => {
