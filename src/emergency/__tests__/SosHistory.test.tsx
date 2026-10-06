@@ -1,6 +1,6 @@
 import React from 'react';
 import ReactTestRenderer, {act} from 'react-test-renderer';
-import {SosHistory, StatusFreshness} from '../SosHistory';
+import {RecentSosUpdates, SosHistory, StatusFreshness} from '../SosHistory';
 import {reportIsResolved, reportNeedsStatusSync} from '../useEmergencyReports';
 import type {EmergencyReportSummary, ServerStatusInfo} from '../types';
 
@@ -143,4 +143,27 @@ test('conflicting current providers preserve the active SOS and show uncertainty
 test('empty history has an offline-readable explanation', async () => {
   await act(async () => {renderer = ReactTestRenderer.create(<SosHistory reports={[]} />);});
   expect(JSON.stringify(renderer.toJSON())).toContain('No saved SOS yet.');
+});
+
+test('recent updates use only the newest saved events and retain version and trust labels', async () => {
+  const events: NonNullable<EmergencyReportSummary['history']> = [
+    {id:'old',kind:'LOCAL_COMMIT',occurredAt:1,revision:1,status:null,provenance:'LOCAL',callsign:null,note:null},
+    {id:'details',kind:'DETAILS_SAVED',occurredAt:4,revision:2,status:null,provenance:'LOCAL',callsign:null,note:null},
+    {id:'unverified',kind:'RESPONDER_UPDATE',occurredAt:3,revision:1,status:'ACKNOWLEDGED',provenance:'UNVERIFIED',callsign:null,note:null},
+    {id:'server',kind:'SERVER_ACCEPTED',occurredAt:2,revision:1,status:null,provenance:'SERVER_AUTHENTICATED',callsign:null,note:null},
+  ];
+  const original = JSON.stringify(events);
+  await act(async () => {renderer = ReactTestRenderer.create(<RecentSosUpdates report={{...base,history:events}} />);});
+  const text=JSON.stringify(renderer.toJSON());
+  expect(text.indexOf('Details saved')).toBeLessThan(text.indexOf('Responder acknowledged SOS'));
+  expect(text).toContain('Unverified update');
+  expect(text).toContain('Server verified');
+  expect(text).not.toContain('SOS saved on this device');
+  expect(text).not.toContain('Responder says they are on the way');
+  expect(JSON.stringify(events)).toBe(original);
+});
+
+test('recent updates do not invent an event when saved history is absent', async () => {
+  await act(async () => {renderer = ReactTestRenderer.create(<RecentSosUpdates report={base} />);});
+  expect(renderer.toJSON()).toBeNull();
 });

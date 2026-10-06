@@ -25,7 +25,7 @@ import {SurvivalCore} from './src/emergency/SurvivalCore';
 import {prepareSosLocation} from './src/emergency/prepareSosLocation';
 import {useBleRelayStatus} from './src/emergency/useBleRelayStatus';
 import {activeEmergencyReport, reportIsResolved, useEmergencyReports} from './src/emergency/useEmergencyReports';
-import {AuthenticatedServerStatus, historyDate, offlineSnapshotText, SosHistory, StatusFreshness} from './src/emergency/SosHistory';
+import {AuthenticatedServerStatus, historyDate, offlineSnapshotText, RecentSosUpdates, ResponderDetails, SosHistory, StatusFreshness} from './src/emergency/SosHistory';
 
 const emergencyLabels: Record<EmergencyType, string> = {
   UNSPECIFIED: 'Type not specified',
@@ -34,7 +34,7 @@ const emergencyLabels: Record<EmergencyType, string> = {
   FIRE: 'Fire',
   TRAPPED: 'Trapped',
   VIOLENCE: 'Violence / threat',
-  OTHER: 'Other emergency',
+  OTHER: 'Other',
 };
 
 const urgencyLabels: Record<Urgency, string> = {
@@ -88,16 +88,6 @@ function verifiedResponderHeadline(receipt: VerifiedReceiptInfo, currentRevision
   }
 }
 
-function verifiedResponderText(receipt: VerifiedReceiptInfo, currentRevision: number, serverConfirmed = false): string {
-  return [
-    verifiedResponderHeadline(receipt, currentRevision, serverConfirmed),
-    receipt.callsign ? `· ${receipt.callsign}` : null,
-    receipt.note ? `(${receipt.note})` : null,
-  ]
-    .filter(Boolean)
-    .join(' ');
-}
-
 function verifiedAuthorityText(receipt: VerifiedReceiptInfo, serverConfirmed = false): string {
   if (receipt.verificationKind === 'VERIFIED_OFFLINE_ROOT_SNAPSHOT') return offlineSnapshotText(receipt, serverConfirmed);
   return `Responder approval was verified offline. Current approval cannot be checked. Checked: ${historyDate(receipt.authorityCheckedAt)}.`;
@@ -119,6 +109,7 @@ export default function App() {
   const compactCategories = width >= 360 && fontScale <= 1.3;
   const [showHelp, setShowHelp] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [showStatusDetails, setShowStatusDetails] = useState(false);
   const [showForm, setShowForm] = useState(false);
 
   const [detailsTarget, setDetailsTarget] = useState<{reportId: string; revision: number} | null>(null);
@@ -134,6 +125,7 @@ export default function App() {
   const latest = activeSos ?? reports[0];
   const hasActiveSos = !!activeSos;
   const latestServerConfirmed = latest?.serverResolutionConfirmed === true && reportIsResolved(latest);
+  const responseFirst = hasActiveSos && !!(latest?.serverStatus || latest?.verifiedReceipt || latest?.responderAck || latest?.deliveryState === 'RESPONDER_ACKNOWLEDGED');
   const detailsReport = reports.find(report => report.reportId === detailsTarget?.reportId);
   const detailsTargetClosed = !!detailsReport && reportIsResolved(detailsReport);
   const originalDeliveryState = latest?.originalDelivery?.deliveryState ?? latest?.deliveryState;
@@ -242,30 +234,43 @@ export default function App() {
   };
 
   const statusCard = (
-    <View style={styles.statusCard}>
-      <Text accessibilityRole="header" style={styles.sectionTitle}>{hasActiveSos ? 'Active SOS' : 'Latest SOS'}</Text>
+    <View style={[styles.statusCard, responseFirst && styles.responseStatusCard]}>
+      <View style={responseFirst ? styles.statusHeader : undefined}>
+        <Text accessibilityRole="header" style={responseFirst ? styles.statusKicker : styles.sectionTitle}>{hasActiveSos ? 'Active SOS' : 'Latest SOS'}</Text>
+        {responseFirst ? <Text accessibilityLiveRegion="polite" style={styles.savedText}>Saved on this device</Text> : null}
+      </View>
       {loading ? (
         <Text style={styles.statusText}>Checking…</Text>
       ) : latest ? (
         <>
-          <Text style={styles.savedText}>Saved on this device</Text>
-          <StatusFreshness report={latest} syncing={syncing} />
+          {!responseFirst ? <Text accessibilityLiveRegion="polite" style={styles.savedText}>Saved on this device</Text> : null}
+
+          {latest.statusSync?.state === 'FAILED' ? <StatusFreshness report={latest} syncing={syncing} compact={!showStatusDetails} /> : null}
           {latest.providerConflict ? <Text style={styles.pendingText}>Responder updates conflict. SOS stays active.</Text> : null}
           {latest.offlineSnapshotClosureHold ? <Text style={styles.pendingText}>Offline responder proof cannot confirm closure. SOS stays active.</Text> : null}
           {!hasActiveSos ? <Text style={styles.statusDetailText}>Resolved. You can send a new SOS.</Text> : null}
-          {latest.serverStatus ? <AuthenticatedServerStatus status={latest.serverStatus} /> : null}
+          {latest.serverStatus ? <AuthenticatedServerStatus status={latest.serverStatus} prominent={responseFirst} /> : null}
           {latest.verifiedReceipt ? (
-            <View style={styles.verifiedReceiptBlock}>
+            <View style={[styles.verifiedReceiptBlock, responseFirst && styles.prominentReceipt]}>
               <Text style={styles.responderText}>{latest.verifiedReceipt.verificationKind === 'VERIFIED_OFFLINE_ROOT_SNAPSHOT' ? 'Saved responder update' : 'Responder update'}</Text>
               {latest.verifiedReceipt.revision !== (latest.revision ?? 1) ? <Text style={styles.evidenceText}>For SOS version {latest.verifiedReceipt.revision}</Text> : null}
-              <Text style={styles.statusDetailText}>
-                {verifiedResponderText(latest.verifiedReceipt, latest.revision ?? 1, latestServerConfirmed)}
+              <Text accessibilityRole="header" style={responseFirst ? [styles.responseHeadline, fontScale > 1.5 && styles.largeFontResponseHeadline] : styles.statusDetailText}>
+                {verifiedResponderHeadline(latest.verifiedReceipt, latest.revision ?? 1, latestServerConfirmed)}
               </Text>
               {latest.verifiedReceipt.verificationKind !== 'VERIFIED_CURRENT' ? (
                 <Text style={styles.evidenceText}>
                   {verifiedAuthorityText(latest.verifiedReceipt, latestServerConfirmed)}
                 </Text>
               ) : null}
+              <ResponderDetails callsign={latest.verifiedReceipt.callsign} note={latest.verifiedReceipt.note} />
+              <Text style={styles.evidenceText}>Source · Signed responder update</Text>
+              {latest.verifiedReceipt.verificationKind === 'VERIFIED_CURRENT' ? <>
+                <Text style={styles.evidenceText}>Approval checked {historyDate(latest.verifiedReceipt.authorityCheckedAt)}</Text>
+                {latest.verifiedReceipt.status === 'ACKNOWLEDGED' ? <Text style={styles.statusDetailText}>
+                  This update does not confirm that responders are on the way.
+                </Text> : null}
+              </> : null}
+
             </View>
           ) : null}
           {latest.serverStatus && (originalDeliveryState === 'DELIVERY_PENDING' || originalDeliveryState === 'RELAYED_TO_PEER' || originalDeliveryState === 'PERMANENT_FAILURE') ? (
@@ -282,26 +287,18 @@ export default function App() {
                     : 'SAGIP will keep retrying.'}
               </Text>
             </>
-          ) : latest.serverStatus && originalDeliveryState === 'RESPONDER_ACKNOWLEDGED' ? (
-            <Text style={styles.deliveryEvidenceText}>Server-confirmed responder status is shown above.</Text>
-          ) : originalDeliveryState === 'RESPONDER_ACKNOWLEDGED' ? (
-            <>
-              <Text
-                style={
-                  latest.verifiedReceipt
-                    ? styles.deliveryEvidenceText
-                    : styles.pendingText
-                }>
-                {latest.verifiedReceipt
-                  ? 'Responder update recorded'
-                  : 'Unverified responder update'}
-              </Text>
+          ) : originalDeliveryState === 'RESPONDER_ACKNOWLEDGED' && (latest.serverStatus || latest.verifiedReceipt) ? null : originalDeliveryState === 'RESPONDER_ACKNOWLEDGED' ? (
+            <View style={styles.unverifiedBlock}>
+              <Text accessibilityRole="header" style={styles.unverifiedHeadline}>Unverified responder update</Text>
               <Text style={styles.statusDetailText}>
-                {latest.verifiedReceipt
-                  ? 'Verified responder status is shown above.'
-                  : `${responderAcknowledgementText(latest.responderAck)}. This update is not verified.`}
+                {latest.responderAck ? responderAcknowledgementText(latest.responderAck) : 'Responder details are not available.'}
               </Text>
-            </>
+              <Text style={styles.pendingText}>This update is not verified. SOS stays active.</Text>
+              <Text style={styles.evidenceText}>Source · Unverified saved update</Text>
+              {latest.responderAck ? <Text style={styles.evidenceText}>Recorded {historyDate(latest.responderAck.acknowledgedAt)}</Text> : null}
+            </View>
+          ) : originalDeliveryState === 'SERVER_ACCEPTED' && (latest.serverStatus || latest.verifiedReceipt) ? (
+            <Text style={styles.deliveryEvidenceText}>Server accepted SOS</Text>
           ) : originalDeliveryState === 'SERVER_ACCEPTED' ? (
             <>
               <Text style={styles.acceptedText}>Server accepted SOS</Text>
@@ -327,7 +324,7 @@ export default function App() {
             <>
               <Text style={styles.pendingText}>Waiting to send</Text>
               <Text style={styles.statusDetailText}>
-                SOS is saved. SAGIP will keep trying.
+                SAGIP will keep trying.
               </Text>
             </>
           )}
@@ -339,14 +336,14 @@ export default function App() {
               </Text>
             </View>
           ) : null}
-          <Text style={styles.statusText}>
-            {emergencyLabels[latest.emergencyType]} · {urgencyLabels[latest.urgency]}
-          </Text>
-          <Text style={styles.statusDetailText}>
-            {latest.location
-              ? `Location · ${latest.location.source} · ${latest.location.freshness === 'FRESH' ? 'recent' : 'older'}${latest.location.accuracyMeters === null ? '' : ` · ±${Math.round(latest.location.accuracyMeters)} m`}`
-              : 'No location attached.'}
-          </Text>
+          {latest.statusSync?.state !== 'FAILED' ? <StatusFreshness report={latest} syncing={syncing} compact={!showStatusDetails} /> : null}
+          <Pressable accessibilityRole="button" accessibilityLabel="SOS delivery details"
+            accessibilityState={{expanded: showStatusDetails}}
+            onPress={() => setShowStatusDetails(current => !current)} style={styles.evidenceToggle}>
+            <Text style={styles.evidenceToggleText}>{showStatusDetails ? 'Hide delivery details' : 'Show delivery details'}</Text>
+            <Text accessibilityElementsHidden importantForAccessibility="no" style={styles.evidenceToggleText}>{showStatusDetails ? '−' : '+'}</Text>
+          </Pressable>
+          {showStatusDetails ? <Text selectable style={styles.evidenceText}>Report {latest.reportId} · Version {latest.revision ?? 1}</Text> : null}
         </>
       ) : (
         <Text style={styles.statusText}>No SOS saved yet.</Text>
@@ -354,31 +351,48 @@ export default function App() {
     </View>
   );
 
-  return (
-    <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="dark-content" />
-      {showForm || showCompactSos ? (
-        <Pressable testID="compact-sos-button" accessibilityRole="button"
+  const compactSosControl = (
+    <Pressable testID="compact-sos-button" accessibilityRole="button"
           accessibilityLabel={hasActiveSos ? 'Active SOS. Check status' : 'Save emergency SOS'}
           accessibilityHint={hasActiveSos ? 'Checks this SOS. It does not create a new one.' : 'Saves the SOS on this phone first.'}
           disabled={saving} accessibilityState={{disabled: saving, busy: saving}}
           onPress={pressSos}
           style={({pressed}) => [styles.compactSosButton, saving && styles.disabledButton, pressed && styles.pressed]}>
-          <Text style={styles.compactSosText}>{saving ? 'Saving SOS…' : hasActiveSos ? 'SOS already active' : 'SOS'}</Text>
-          <Text style={styles.compactSosHint}>{hasActiveSos ? 'Check status' : 'Tap to save SOS'}</Text>
+          <Text style={styles.compactSosText}>{saving ? 'Saving SOS…' : hasActiveSos ? 'SOS active' : 'SOS'}</Text>
+          <Text style={styles.compactSosHint}>{hasActiveSos ? (syncing ? 'Checking status…' : 'Check status') : 'Tap to save SOS'}</Text>
         </Pressable>
-      ) : null}
-      <ScrollView ref={scrollRef} contentContainerStyle={styles.container}
+  );
+
+  const reportFacts = latest ? <View style={styles.card} testID="sos-report-facts">
+    <Text accessibilityRole="header" style={styles.sectionTitle}>Your report</Text>
+    <View style={styles.factGrid}>
+      <View style={styles.fact}><Text style={styles.factLabel}>Emergency</Text><Text style={styles.factValue}>{emergencyLabels[latest.emergencyType]}</Text></View>
+      <View style={styles.fact}><Text style={styles.factLabel}>Urgency</Text><Text style={styles.factValue}>{urgencyLabels[latest.urgency]}</Text></View>
+    </View>
+    <View style={styles.locationFact}>
+      <Text style={styles.factLabel}>Location</Text>
+      <Text style={styles.factValue}>{latest.location ? (latest.location.freshness === 'FRESH' ? 'Recent location attached' : 'Older location attached') : 'No location attached.'}</Text>
+      {latest.location ? <Text selectable style={styles.statusText}>{latest.location.latitude.toFixed(5)}, {latest.location.longitude.toFixed(5)}</Text> : null}
+      {latest.location ? <Text style={styles.statusText}>{latest.location.source} · {latest.location.accuracyMeters === null ? 'Accuracy unknown' : `±${Math.round(latest.location.accuracyMeters)} m`} · Captured {historyDate(latest.location.capturedAt)}</Text> : null}
+    </View>
+    <Text style={styles.evidenceText}>Saved {historyDate(latest.createdAt)} · Version {latest.revision ?? 1}</Text>
+  </View> : null;
+
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      <StatusBar barStyle="dark-content" />
+      {showForm || (showCompactSos && !responseFirst) ? compactSosControl : null}
+      <ScrollView ref={scrollRef} contentContainerStyle={[styles.container, responseFirst && styles.responseContainer, showForm && styles.formContainer]}
         scrollEventThrottle={16}
         onScroll={event => setShowCompactSos(primarySosBottom.current > 0 && event.nativeEvent.contentOffset.y >= primarySosBottom.current)}>
-        <View style={styles.brandRow}>
-          <SagipMark />
+        {!showForm ? <View style={styles.brandRow}>
+          <SagipMark size={responseFirst ? 28 : 44} />
           <View style={styles.brandCopy}>
-            <Text style={styles.brand}>SAGIP</Text>
-            <Text style={styles.brandTagline}>Emergency communication that keeps trying</Text>
+            <Text style={[styles.brand, responseFirst && styles.responseBrand]}>SAGIP</Text>
+
           </View>
-        </View>
-        {message ? (
+        </View> : null}
+        {message && message !== 'SOS saved on this device.' ? (
           <View
             accessibilityRole={messageIsError ? 'alert' : undefined}
             accessibilityLiveRegion={messageIsError ? 'assertive' : 'polite'}
@@ -389,13 +403,13 @@ export default function App() {
         {showForm || !latest ? (
           <View style={styles.introduction}>
             <Text accessibilityRole="header" style={styles.title}>
-              {showForm ? 'Add optional details' : 'Need help now?'}
+              {showForm ? 'Add details' : 'Need help?'}
             </Text>
-            <Text style={styles.subtitle}>{showForm ? 'SOS is already saved. Add details if you can.' : 'SOS saves even without internet.'}</Text>
+            <Text style={styles.subtitle}>{showForm ? 'Optional. Your SOS is already saved.' : 'SOS saves even without internet.'}</Text>
           </View>
         ) : null}
 
-        {!showForm ? (
+        {!showForm && !responseFirst ? (
           <Pressable
             accessibilityRole="button"
             testID="primary-sos-button"
@@ -414,7 +428,7 @@ export default function App() {
               {syncing ? 'Checking status…' : 'Tap to check status'}
             </Text> : null}
           </Pressable>
-        ) : (
+        ) : showForm ? (
           <View style={styles.card}>
             <Text accessibilityRole="header" style={styles.sectionTitle}>Emergency type</Text>
             <View style={styles.optionGrid}>
@@ -440,25 +454,19 @@ export default function App() {
               />
             ))}
           </View>
-        )}
-        {!showForm ? statusCard : null}
+        ) : null}
+        {!showForm && (latest || loading) ? statusCard : null}
+        {!showForm ? reportFacts : null}
         {latest && hasActiveSos && !showForm ? (
           <Pressable accessibilityRole="button" accessibilityLabel="Add optional SOS details"
             disabled={saving} accessibilityState={{disabled: saving}}
-            onPress={openDetails} style={styles.secondaryButton}>
-            <Text style={styles.secondaryButtonText}>Add optional details</Text>
+            onPress={openDetails} style={styles.detailsButton}>
+            <Text style={styles.secondaryButtonText}>Add details · optional</Text>
           </Pressable>
         ) : null}
         {showForm ? statusCard : null}
+        {responseFirst && latest && !showForm ? <RecentSosUpdates report={latest} /> : null}
 
-        {!showForm ? <>
-          <Pressable accessibilityRole="button" accessibilityLabel="SOS history"
-            accessibilityState={{expanded: showHistory}} style={styles.secondaryButton}
-            onPress={() => setShowHistory(current => !current)}>
-            <Text style={styles.secondaryButtonText}>{showHistory ? 'Hide history' : `SOS history (${reports.length})`}</Text>
-          </Pressable>
-          {showHistory ? <SosHistory reports={reports} /> : null}
-        </> : null}
         <NearbyRelayCard
           status={relayStatus}
           loading={relayLoading}
@@ -470,6 +478,12 @@ export default function App() {
             void refreshRelay();
           }}
         />
+        <View style={styles.navigationRow}>
+          {!showForm ? <Pressable accessibilityRole="button" accessibilityLabel="SOS history"
+            accessibilityState={{expanded: showHistory}} style={styles.secondaryButton}
+            onPress={() => setShowHistory(current => !current)}>
+            <Text style={styles.secondaryButtonText}>{showHistory ? 'Hide history' : `History (${reports.length})`}</Text>
+          </Pressable> : null}
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="How SOS works"
@@ -478,6 +492,8 @@ export default function App() {
           style={({pressed}) => [styles.secondaryButton, pressed && styles.pressed]}>
           <Text style={styles.secondaryButtonText}>{showHelp ? 'Hide help' : 'How SOS works'}</Text>
         </Pressable>
+        </View>
+        {showHistory && !showForm ? <SosHistory reports={reports} /> : null}
         {showHelp ? (
           <View style={styles.card}>
             <Text style={styles.deliveryHelpText}>
@@ -489,6 +505,7 @@ export default function App() {
           </View>
         ) : null}
       </ScrollView>
+      {responseFirst && !showForm ? <View style={styles.sosDock}>{compactSosControl}</View> : null}
       {showForm ? (
         <View style={styles.formActions}>
           {detailsTargetClosed ? <Text style={styles.statusDetailText}>This SOS was resolved. Close these unsaved details.</Text> : null}
@@ -591,19 +608,19 @@ function NearbyRelayCard({
       case 'PERMISSION_REQUIRED':
         stateText = 'Nearby relay needs permission';
         detail =
-          'Allow nearby-device access to relay SOS messages when internet is unavailable.';
+          'Allow nearby-device access to relay SOS messages without internet.';
         actionLabel = requesting ? 'Requesting permission…' : 'Allow nearby relay';
         action = onEnable;
         break;
       case 'BLUETOOTH_OFF':
         stateText = 'Nearby relay unavailable';
-        detail = 'Bluetooth is off. Turn on Bluetooth to use nearby relay.';
+        detail = 'Turn on Bluetooth to use nearby relay.';
         actionLabel = 'Check Bluetooth again';
         action = onRefresh;
         break;
       case 'NOT_SUPPORTED':
         stateText = 'Nearby relay unavailable';
-        detail = 'This phone does not support SAGIP nearby relay.';
+        detail = 'This phone cannot relay SOS messages.';
         break;
       case 'READY':
         if (status.isDutyCyclePaused) {
@@ -644,8 +661,7 @@ function NearbyRelayCard({
 
   return (
     <View style={styles.relayCard}>
-      <Text accessibilityRole="header" style={styles.sectionTitle}>Nearby relay</Text>
-      <Text accessibilityLiveRegion="polite" style={styles.relayStateText}>
+      <Text accessibilityRole="header" accessibilityLiveRegion="polite" style={styles.relayStateText}>
         {stateText}
       </Text>
       <Text style={styles.relayDetailText}>{detail}</Text>
@@ -696,23 +712,45 @@ function OptionButton({
 }
 
 const styles = StyleSheet.create({
-  safeArea: {flex: 1, backgroundColor: '#F7F5F0'},
-  container: {padding: 16, gap: 12},
+  safeArea: {flex: 1, backgroundColor: '#F5F6F2'},
+  container: {padding: 20, gap: 16},
   introduction: {gap: 8},
-  formActions: {paddingHorizontal: 16, paddingBottom: 8, gap: 8, borderTopWidth: 1, borderTopColor: '#BCC4C0', backgroundColor: '#F7F5F0'},
-  secondaryButton: {minHeight: 48, justifyContent: 'center'},
+  formContainer: {gap: 12, paddingTop: 12},
+  responseContainer: {paddingTop: 8, gap: 12},
+  responseBrand: {fontSize: 16, letterSpacing: 1.5},
+  sosDock: {paddingBottom: 8, paddingTop: 4, backgroundColor: '#F5F6F2', borderTopWidth: 1, borderTopColor: '#DCE1DB'},
+  factGrid: {flexDirection: 'row', flexWrap: 'wrap', gap: 16},
+  fact: {minWidth: 120, flexGrow: 1, flexBasis: 120, gap: 4},
+  factLabel: {fontSize: 13, lineHeight: 20, color: '#52635B', fontWeight: '600'},
+  factValue: {fontSize: 17, lineHeight: 25, color: '#21302B', fontWeight: '700'},
+  locationFact: {borderTopWidth: 1, borderTopColor: '#E3E8E1', paddingTop: 12, gap: 4},
+  responseStatusCard: {padding: 16, gap: 6},
+  statusHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 6, paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: '#E3E8E1', marginBottom: 6},
+  statusKicker: {fontSize: 13, lineHeight: 20, fontWeight: '800', color: '#21302B'},
+  largeFontResponseHeadline: {fontSize: 21, lineHeight: 29},
+  responseHeadline: {fontSize: 25, lineHeight: 32, fontWeight: '800', color: '#145747'},
+  prominentReceipt: {padding: 0, borderWidth: 0, backgroundColor: '#FFFFFF', gap: 8},
+  unverifiedBlock: {gap: 8, borderLeftWidth: 3, borderLeftColor: '#AD7B28', paddingLeft: 12},
+  unverifiedHeadline: {fontSize: 24, lineHeight: 31, fontWeight: '800', color: '#8A5B18'},
+  formActions: {paddingHorizontal: 20, paddingBottom: 8, gap: 8, borderTopWidth: 1, borderTopColor: '#DCE1DB', backgroundColor: '#F5F6F2'},
+  secondaryButton: {minHeight: 48, justifyContent: 'center', flexShrink: 1},
+  detailsButton: {minHeight: 52, alignItems: 'center', justifyContent: 'center', borderRadius: 14, borderWidth: 1, borderColor: '#BECBC3', backgroundColor: '#FFFFFF'},
+  navigationRow: {flexDirection: 'row', justifyContent: 'space-between', flexWrap: 'wrap', columnGap: 24},
+  evidenceToggle: {minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, borderTopWidth: 1, borderTopColor: '#E5E9E3', marginTop: 4},
+  evidenceToggleText: {fontSize: 14, lineHeight: 21, fontWeight: '700', color: '#43554B'},
+  deliveryDetails: {gap: 6},
   secondaryButtonText: {fontSize: 16, fontWeight: '700', color: '#35423D'},
   brandRow: {flexDirection: 'row', alignItems: 'center', gap: 12},
   brandCopy: {flex: 1, gap: 2},
   brand: {fontSize: 20, fontWeight: '900', letterSpacing: 2, color: '#21302B'},
-  brandTagline: {fontSize: 12, lineHeight: 17, fontWeight: '700', color: '#56615D'},
-  title: {fontSize: 28, lineHeight: 34, fontWeight: '800', color: '#18211E'},
-  subtitle: {fontSize: 17, lineHeight: 25, color: '#4B5752'},
+
+  title: {fontSize: 30, lineHeight: 38, fontWeight: '800', color: '#18211E'},
+  subtitle: {fontSize: 16, lineHeight: 24, color: '#4B5752'},
   deliveryHelpText: {fontSize: 14, lineHeight: 21, fontWeight: '600', color: '#56615D'},
-  sosButton: {minHeight: 190, borderRadius: 28, backgroundColor: '#B33A32', alignItems: 'center', justifyContent: 'center', padding: 24, marginVertical: 8},
-  sosButtonText: {fontSize: 56, fontWeight: '900', color: '#FFFFFF', letterSpacing: 3},
+  sosButton: {minHeight: 208, borderRadius: 28, backgroundColor: '#AD332B', alignItems: 'center', justifyContent: 'center', padding: 24, marginVertical: 4},
+  sosButtonText: {fontSize: 64, lineHeight: 76, fontWeight: '900', color: '#FFFFFF', letterSpacing: 3},
   sosButtonSubtext: {fontSize: 16, lineHeight: 23, textAlign: 'center', fontWeight: '700', color: '#FFFFFF', marginTop: 8},
-  compactSosButton: {minHeight: 64, marginHorizontal: 16, marginTop: 8, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 14, backgroundColor: '#B33A32', justifyContent: 'center'},
+  compactSosButton: {minHeight: 64, marginHorizontal: 20, marginTop: 8, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 14, backgroundColor: '#B33A32', justifyContent: 'center'},
   compactSosText: {fontSize: 20, lineHeight: 26, fontWeight: '800', color: '#FFFFFF'},
   compactSosHint: {fontSize: 13, lineHeight: 19, color: '#FFFFFF'},
   sosButtonHint: {fontSize: 14, lineHeight: 21, textAlign: 'center', color: '#FFFFFF', marginTop: 6},
@@ -732,13 +770,13 @@ const styles = StyleSheet.create({
   cancelButtonText: {fontSize: 16, fontWeight: '800', color: '#35423D'},
   messageCard: {borderRadius: 16, padding: 16, backgroundColor: '#E8ECEA'},
   messageText: {fontSize: 16, lineHeight: 23, fontWeight: '700', color: '#21302B'},
-  relayCard: {borderRadius: 20, padding: 18, backgroundColor: '#FFFFFF', gap: 8, marginTop: 4, borderWidth: 1, borderColor: '#DCE1DB'},
-  relayStateText: {fontSize: 16, lineHeight: 22, fontWeight: '800', color: '#21302B'},
-  relayDetailText: {fontSize: 15, lineHeight: 22, color: '#56615D'},
+  relayCard: {borderRadius: 16, padding: 16, backgroundColor: '#EBEFE9', gap: 6},
+  relayStateText: {fontSize: 15, lineHeight: 22, fontWeight: '700', color: '#21302B'},
+  relayDetailText: {fontSize: 14, lineHeight: 21, color: '#4B5752'},
   relayActionButton: {minHeight: 50, borderRadius: 14, backgroundColor: '#21302B', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16, marginTop: 4},
   relayActionText: {fontSize: 16, fontWeight: '800', color: '#FFFFFF'},
   statusCard: {borderRadius: 20, padding: 18, backgroundColor: '#FFFFFF', gap: 8, marginTop: 4, borderWidth: 1, borderColor: '#DCE1DB'},
-  savedText: {fontSize: 18, fontWeight: '800', color: '#21302B'},
+  savedText: {fontSize: 14, lineHeight: 21, fontWeight: '500', color: '#56615D'},
   pendingText: {fontSize: 16, fontWeight: '800', color: '#8A5B18'},
   relayedText: {fontSize: 16, fontWeight: '800', color: '#805016'},
   acceptedText: {fontSize: 16, fontWeight: '800', color: '#1B6B38'},
@@ -747,6 +785,6 @@ const styles = StyleSheet.create({
   evidenceText: {fontSize: 14, lineHeight: 20, color: '#56615D'},
   deliveryEvidenceText: {fontSize: 15, lineHeight: 21, fontWeight: '700', color: '#56615D'},
   failedText: {fontSize: 16, fontWeight: '800', color: '#B33A32'},
-  statusDetailText: {fontSize: 15, lineHeight: 22, fontWeight: '600', color: '#44524D'},
+  statusDetailText: {fontSize: 15, lineHeight: 22, fontWeight: '400', color: '#44524D'},
   statusText: {fontSize: 15, lineHeight: 22, color: '#56615D'},
 });

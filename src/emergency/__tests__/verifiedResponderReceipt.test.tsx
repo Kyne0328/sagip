@@ -240,3 +240,17 @@ test('durable notification claim prevents replay and restart announcements', asy
   expect(announce).toHaveBeenCalledTimes(1);
   expect(JSON.stringify(reopened.toJSON())).toContain('Responder acknowledged this SOS');
 });
+
+test('signed acknowledgement labels the authority check without inventing a response time', async () => {
+  setReports([reportWithVerifiedReceipt()]);
+  const renderer = await renderApp();
+  const text = JSON.stringify(renderer.toJSON());
+  expect(text).toContain('Source · Signed responder update');
+  expect(text).toContain('Approval checked');
+  expect(text).not.toContain('Updated ');
+  expect(text).not.toContain('Recorded ');
+  expect(text).toContain('This update does not confirm that responders are on the way.');
+  expect(renderer.root.findByProps({testID: 'compact-sos-button'})).toBeTruthy();
+  expect(renderer.root.findAllByProps({testID: 'primary-sos-button'})).toHaveLength(0);
+  act(() => renderer.unmount());
+});

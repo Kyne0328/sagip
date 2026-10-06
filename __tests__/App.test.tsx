@@ -13,11 +13,11 @@ jest.mock('../src/emergency/prepareSosLocation', () => ({
 jest.mock('../src/emergency/SurvivalCore', () => ({
   SurvivalCore: {
     createEmergencyReport: jest.fn(),
+    claimVerifiedReceiptNotification: jest.fn().mockResolvedValue(false),
     appendEmergencyReportDetails: jest.fn(),
     newEmergencyDetailsOperationId: jest.fn(),
     listEmergencyReports: jest.fn(),
     triggerDelivery: jest.fn().mockResolvedValue(0),
-    claimVerifiedReceiptNotification: jest.fn().mockResolvedValue(false),
     getRelayStatus: jest.fn(),
     startBleRelay: jest.fn().mockResolvedValue(true),
     stopBleRelay: jest.fn().mockResolvedValue(true),
@@ -132,7 +132,7 @@ test('requests location permission only after the SOS is durably saved', async (
     expect(sos.props.accessibilityState.busy).toBe(true);
     expect(prepareLocation).not.toHaveBeenCalled();
     expect(JSON.stringify(renderer.toJSON())).not.toContain(
-      'SOS saved on this device.',
+      'Saved on this device',
     );
 
     await act(async () => {
@@ -142,7 +142,7 @@ test('requests location permission only after the SOS is durably saved', async (
     expect(prepareLocation).toHaveBeenCalledTimes(1);
     expect(prepareLocation).toHaveBeenCalledWith(true);
     expect(JSON.stringify(renderer.toJSON())).toContain(
-      'SOS saved on this device.',
+      'Saved on this device',
     );
   } finally {
     act(() => renderer.unmount());
@@ -168,7 +168,7 @@ test.each(['DENIED', 'UNAVAILABLE'] as const)(
       expect(prepareLocation).toHaveBeenCalledWith(true);
       expect(core.triggerDelivery).toHaveBeenCalled();
       const rendered = JSON.stringify(renderer.toJSON());
-      expect(rendered).toContain('SOS saved on this device.');
+      expect(rendered).toContain('Saved on this device');
       expect(rendered).toContain('Waiting to send');
       expect(rendered).not.toContain('Could not save SOS. Try again.');
       expect(renderer.root.findAllByProps({accessibilityRole: 'alert'})).toHaveLength(0);
@@ -225,10 +225,10 @@ test('creates a local SOS and tells the user it is pending delivery', async () =
   await act(async () => renderer.root.findByProps({accessibilityLabel: 'Save emergency SOS'}).props.onPress());
 
   expect(core.createEmergencyReport).toHaveBeenCalledWith({});
-  expect(JSON.stringify(renderer.toJSON())).toContain('SOS saved on this device.');
+  expect(JSON.stringify(renderer.toJSON())).toContain('Saved on this device');
   const rendered = JSON.stringify(renderer.toJSON());
   expect(rendered).toContain('Waiting to send');
-  expect(rendered).toContain('SOS is saved. SAGIP will keep trying.');
+  expect(rendered).toContain('SAGIP will keep trying.');
   expect(rendered.indexOf('SOS already active')).toBeLessThan(
     rendered.indexOf('Saved on this device'),
   );
@@ -258,7 +258,7 @@ test('does not request location permission or claim success when persistence fai
     expect(prepareLocation).not.toHaveBeenCalled();
     expect(core.triggerDelivery).not.toHaveBeenCalled();
     expect(JSON.stringify(renderer.toJSON())).toContain('Could not save SOS. Try again.');
-    expect(JSON.stringify(renderer.toJSON())).not.toContain('SOS saved on this device.');
+    expect(JSON.stringify(renderer.toJSON())).not.toContain('Saved on this device');
     const alert = renderer.root.findByProps({accessibilityRole: 'alert'});
     expect(alert.props.accessibilityLiveRegion).toBe('assertive');
   } finally {
@@ -366,7 +366,7 @@ test('shows relay permission as separate from local SOS persistence', async () =
 
   const rendered = JSON.stringify(renderer.toJSON());
   expect(rendered).toContain('Nearby relay needs permission');
-  expect(rendered).toContain('Allow nearby-device access to relay SOS messages when internet is unavailable.');
+  expect(rendered).toContain('Allow nearby-device access to relay SOS messages without internet.');
   expect(
     renderer.root.findByProps({accessibilityLabel: 'Allow nearby relay'}),
   ).toBeTruthy();
@@ -453,8 +453,9 @@ test('renders responder acknowledged delivery state with callsign and note', asy
   expect(rendered).toContain('Saved on this device');
   expect(rendered).toContain('Unverified responder update');
   expect(rendered).toContain(
-    'Responder acknowledged your SOS · RESCUE-ALPHA-1 (Boat team deployed). This update is not verified.',
+    'Responder acknowledged your SOS · RESCUE-ALPHA-1 (Boat team deployed)',
   );
+  expect(rendered).toContain('This update is not verified. SOS stays active.');
   expect(rendered).not.toContain('Responders say they are on the way');
 });
 
@@ -475,7 +476,7 @@ test('uses persisted responder status before saying responders are on the way', 
   const renderer = await renderApp();
 
   expect(JSON.stringify(renderer.toJSON())).toContain(
-    'Responders say they are on the way · RESCUE-ALPHA-1 (Boat team dispatched). This update is not verified.',
+    'Responders say they are on the way · RESCUE-ALPHA-1 (Boat team dispatched)',
   );
 });
 
@@ -514,6 +515,8 @@ test('one tap persists without category, urgency or a permission prompt and no m
   expect(core.createEmergencyReport).toHaveBeenCalledTimes(1);
   expect(core.createEmergencyReport).toHaveBeenCalledWith({});
   expect(core.triggerDelivery).toHaveBeenCalled();
+  expect(JSON.stringify(renderer.toJSON())).toContain('Type not specified');
+  await act(async () => renderer.root.findByProps({accessibilityLabel: 'SOS delivery details'}).props.onPress());
   const rendered = JSON.stringify(renderer.toJSON());
   expect(rendered).toContain('Type not specified');
   expect(rendered).toContain('Urgency not specified');
@@ -634,7 +637,7 @@ test.each(['DELIVERY_PENDING', 'RELAYED_TO_PEER', 'PERMANENT_FAILURE'] as const)
     expect(text).toContain('The server has this SOS.');
     expect(text).toContain('is still missing the original delivery receipt');
     expect(text).toContain('Latest details are saved here. Waiting to send.');
-    expect(text).not.toContain('SOS is saved. SAGIP will keep trying.');
+    expect(text).not.toContain('SAGIP will keep trying.');
     expect(text).not.toContain('Server receipt is not confirmed yet.');
     expect(text).not.toContain('Delivery failed permanently');
     expect(core.createEmergencyReport).not.toHaveBeenCalled();
@@ -750,6 +753,38 @@ test('a captured SOS handler cannot create again after an awaited save', async (
   expect(core.triggerDelivery).toHaveBeenCalled();
 });
 
+
+test('report facts stay visible while connection details can expand', async () => {
+  core.listEmergencyReports.mockResolvedValue([{...report, emergencyType: 'UNSPECIFIED', urgency: 'UNSPECIFIED'}]);
+  const renderer = await renderApp();
+  const toggle = renderer.root.findByProps({accessibilityLabel: 'SOS delivery details'});
+  expect(toggle.props.accessibilityState.expanded).toBe(false);
+  expect(JSON.stringify(renderer.toJSON())).toContain('Waiting to send');
+  expect(JSON.stringify(renderer.toJSON())).toContain('No location attached.');
+  await act(async () => toggle.props.onPress());
+  expect(toggle.props.accessibilityState.expanded).toBe(true);
+  const text = JSON.stringify(renderer.toJSON());
+  expect(text).toContain('No location attached.');
+  expect(text).toContain('Type not specified');
+  expect(text).toContain('Urgency not specified');
+  expect(text).toContain('No server check yet.');
+  expect(core.createEmergencyReport).not.toHaveBeenCalled();
+  expect(core.triggerDelivery).not.toHaveBeenCalled();
+});
+
+test('a collapsed status card keeps failed checks and conflicting updates visible', async () => {
+  core.listEmergencyReports.mockResolvedValue([{...report, providerConflict: true,
+    statusSync: {state: 'FAILED', lastSuccessAt: 2000, lastAttemptAt: 3000, historyPending: true}}]);
+  const renderer = await renderApp();
+  expect(renderer.root.findByProps({accessibilityLabel: 'SOS delivery details'}).props.accessibilityState.expanded).toBe(false);
+  const text = JSON.stringify(renderer.toJSON());
+  expect(text).toContain('Status may be out of date.');
+  expect(text).toContain('Last server check:');
+  expect(text).toContain('Responder updates conflict. SOS stays active.');
+  expect(text).toContain('More history is syncing.');
+  expect(renderer.root.findAllByProps({accessibilityLabel: 'Save emergency SOS'})).toHaveLength(0);
+});
+
 test('confirmed resolution permits one new SOS and rapid repeats keep the new incident', async () => {
   const resolved = {...report, serverStatus: {status: 'RESOLVED' as const, revision: null,
     statusScope: 'REPORT' as const, updatedAt: 2000, callsign: null, note: null}};
@@ -762,4 +797,67 @@ test('confirmed resolution permits one new SOS and rapid repeats keep the new in
   await act(async () => {await press();});
   expect(core.createEmergencyReport).toHaveBeenCalledTimes(1);
   expect(renderer.root.findByProps({accessibilityLabel: 'Active SOS. Check status'})).toBeTruthy();
+});
+
+test('acknowledged SOS shows the response and report facts before its persistent check control', async () => {
+  core.listEmergencyReports.mockResolvedValue([{...report,
+    deliveryState: 'RESPONDER_ACKNOWLEDGED',
+    serverStatus: {status: 'ACKNOWLEDGED', revision: null, statusScope: 'REPORT', updatedAt: 2000,
+      callsign: 'RESCUE-04', note: 'We received your report.'},
+    statusSync: {state: 'SUCCESS', lastSuccessAt: 3000, lastAttemptAt: 3000, historyPending: false},
+    history: [{id: 'ack', kind: 'RESPONDER_UPDATE', occurredAt: 2000, revision: null,
+      status: 'ACKNOWLEDGED', provenance: 'SERVER_AUTHENTICATED', callsign: 'RESCUE-04', note: 'We received your report.'}],
+  }]);
+  const renderer = await renderApp();
+  const text = JSON.stringify(renderer.toJSON());
+  expect(text).toContain('Responder acknowledged SOS');
+  expect(text).toContain('RESCUE-04');
+  expect(text).toContain('We received your report.');
+  expect(text).toContain('Source · Server');
+  expect(text).toContain('This update does not confirm that responders are on the way.');
+  expect(text).toContain('Medical');
+  expect(text).toContain('Immediate danger');
+  expect(text).toContain('No location attached.');
+  expect(text).toContain('Recent updates');
+  expect(text).not.toContain('Responder says they are on the way');
+  expect(text).not.toContain('Approval checked');
+  expect(renderer.root.findAllByProps({testID: 'primary-sos-button'})).toHaveLength(0);
+  const compact = renderer.root.findByProps({testID: 'compact-sos-button'});
+  let ancestor = compact.parent;
+  while (ancestor) {
+    expect(ancestor.type).not.toBe(ScrollView);
+    expect(ancestor.type).not.toBe('RCTScrollView');
+    ancestor = ancestor.parent;
+  }
+  await act(async () => {compact.props.onPress(); compact.props.onPress();});
+  expect(core.createEmergencyReport).not.toHaveBeenCalled();
+  expect(core.triggerDelivery).toHaveBeenCalled();
+});
+
+test('acknowledged screen leaves missing responder identity and update metadata unknown', async () => {
+  core.listEmergencyReports.mockResolvedValue([{...report, deliveryState: 'RESPONDER_ACKNOWLEDGED'}]);
+  const renderer = await renderApp();
+  const text = JSON.stringify(renderer.toJSON());
+  expect(text).toContain('Unverified responder update');
+  expect(text).toContain('Responder details are not available.');
+  expect(text).toContain('SOS stays active.');
+  expect(text).not.toContain('Responder acknowledged your SOS');
+  expect(text).not.toContain('ETA');
+  expect(renderer.root.findAllByProps({testID: 'recent-sos-updates'})).toHaveLength(0);
+});
+
+test.each(['server', 'signed'] as const)('responder evidence from %s qualifies an older server-accepted delivery state', async source => {
+  core.listEmergencyReports.mockResolvedValue([{...report, deliveryState: 'SERVER_ACCEPTED',
+    ...(source === 'server' ? {serverStatus: {status:'ACKNOWLEDGED' as const,revision:null,statusScope:'REPORT' as const,updatedAt:2000,callsign:'UNIT',note:null}} :
+      {verifiedReceipt:{eventId:'signed',revision:1,verificationKind:'VERIFIED_CURRENT' as const,authorityCheckedAt:2000,status:'ACKNOWLEDGED' as const,callsign:'UNIT',note:'',requesterDeliveryState:'UNKNOWN' as const}}),
+    location:{latitude:7.447,longitude:125.807,accuracyMeters:24,capturedAt:1000,source:'GPS',freshness:'STALE'},
+  }]);
+  const renderer=await renderApp();
+  const text=JSON.stringify(renderer.toJSON());
+  expect(text).toContain('Server accepted SOS');
+  expect(text).not.toContain('Responder acknowledgement is not confirmed yet.');
+  expect(text).toContain('7.44700');
+  expect(text).toContain('125.80700');
+  expect(text).toContain('Older location attached');
+  expect(core.createEmergencyReport).not.toHaveBeenCalled();
 });

@@ -1,5 +1,5 @@
 import React, {useState} from 'react';
-import {Pressable, StyleSheet, Text, View} from 'react-native';
+import {Pressable, StyleSheet, Text, View, useWindowDimensions} from 'react-native';
 
 import type {EmergencyHistoryEvent, EmergencyReportSummary, ServerStatusInfo} from './types';
 
@@ -26,43 +26,63 @@ export function historyDate(timestamp: number | null | undefined): string {
   return Number.isNaN(date.getTime()) ? 'not available' : date.toLocaleString();
 }
 
-export function StatusFreshness({report, syncing = false}: {
+export function StatusFreshness({report, syncing = false, compact = false}: {
   report: EmergencyReportSummary;
   syncing?: boolean;
+  compact?: boolean;
 }) {
   const sync = report.statusSync;
   return (
     <View style={styles.freshness}>
       {syncing ? <Text style={styles.detail} accessibilityLiveRegion="polite">Checking for updates…</Text> : null}
-      <Text style={styles.detail}>
+      {!compact || report.serverStatus || report.verifiedReceipt || report.responderAck || (sync?.lastSuccessAt !== null && sync?.lastSuccessAt !== undefined) ? <Text style={styles.detail}>
         {sync?.lastSuccessAt !== null && sync?.lastSuccessAt !== undefined
           ? `Last server check: ${historyDate(sync.lastSuccessAt)}`
           : 'No server check yet.'}
-      </Text>
+      </Text> : null}
       {sync?.historyPending ? <Text style={styles.detail}>More history is syncing.</Text> : null}
       {sync?.state === 'FAILED' ? (
         <Text style={styles.warning}>Last server check failed at {historyDate(sync.lastAttemptAt)}. Status may be out of date.</Text>
       ) : null}
-      <Text style={styles.detail}>
+      {!compact || report.receiptReturnState === 'WAITING_FOR_QUALIFICATION' ? <Text style={styles.detail}>
         {report.receiptReturnState === 'READY'
           ? 'A nearby SAGIP phone must connect before a new responder update can arrive.'
           : report.receiptReturnState === 'WAITING_FOR_QUALIFICATION'
             ? 'Nearby responder updates cannot be verified yet.'
             : 'Connect to the internet for new responder updates.'}
-      </Text>
+      </Text> : null}
     </View>
   );
 }
 
-export function AuthenticatedServerStatus({status}: {status: ServerStatusInfo}) {
+export function ResponderDetails({callsign, note}: {callsign: string | null; note: string | null}) {
+  return <>
+    {callsign ? <View style={styles.identityRow}>
+      <Text style={styles.detail}>Callsign</Text>
+      <Text selectable style={styles.callsign}>{callsign}</Text>
+    </View> : null}
+    {note ? <View style={styles.note}>
+      <Text style={styles.noteLabel}>Message from responder</Text>
+      <Text selectable style={styles.body}>{note}</Text>
+    </View> : null}
+  </>;
+}
+
+export function AuthenticatedServerStatus({status, prominent = false}: {status: ServerStatusInfo; prominent?: boolean}) {
+  const {fontScale} = useWindowDimensions();
   return (
-    <View style={styles.serverStatus}>
-      <Text style={styles.title}>Responder update</Text>
-      <Text style={styles.body}>{statusLabels[status.status]}</Text>
-      {status.callsign ? <Text style={styles.body}>{status.callsign}</Text> : null}
-      {status.note ? <Text style={styles.body}>{status.note}</Text> : null}
+    <View style={[styles.serverStatus, prominent && styles.prominentStatus]}>
+      {!prominent ? <Text style={styles.kicker}>Responder update</Text> : null}
+      <Text accessibilityRole={prominent ? 'header' : undefined} accessibilityLabel={statusLabels[status.status]} style={prominent ? [styles.headline, fontScale > 1.5 && styles.largeFontHeadline] : styles.title}>
+        {prominent && status.status === 'ACKNOWLEDGED' ? 'SOS acknowledged' : statusLabels[status.status]}
+      </Text>
+      <Text style={styles.detail}>{prominent ? 'Source · Server · Whole SOS' : 'Source · Server'}</Text>
       <Text style={styles.detail}>Updated {historyDate(status.updatedAt)}</Text>
-      <Text style={styles.detail}>Applies to the whole SOS.</Text>
+      {!prominent ? <Text style={styles.detail}>Applies to the whole SOS.</Text> : null}
+      <ResponderDetails callsign={status.callsign} note={status.note} />
+      {status.status === 'ACKNOWLEDGED' ? <Text style={styles.expectation}>
+        This update does not confirm that responders are on the way.
+      </Text> : null}
     </View>
   );
 }
@@ -107,11 +127,12 @@ function HistoryReport({report}: {report: EmergencyReportSummary}) {
         onPress={() => setExpanded(current => !current)}
         style={styles.toggle}>
         <Text style={styles.title}>SOS · {historyDate(report.createdAt)}</Text>
-        <Text style={styles.detail}>Report {report.reportId} · Version {report.revision ?? 1}</Text>
+
         <Text style={styles.link}>{expanded ? 'Hide timeline' : 'Show timeline'}</Text>
       </Pressable>
       {expanded ? (
         <View style={styles.timeline}>
+          <Text selectable style={styles.detail}>Report {report.reportId} · Version {report.revision ?? 1}</Text>
           <StatusFreshness report={report} />
           {report.providerConflict ? <Text style={styles.warning}>Responder updates conflict. SOS stays active.</Text> : null}
           {report.offlineSnapshotClosureHold ? <Text style={styles.warning}>Offline responder proof cannot confirm closure. SOS stays active.</Text> : null}
@@ -157,6 +178,24 @@ function HistoryReport({report}: {report: EmergencyReportSummary}) {
   );
 }
 
+export function RecentSosUpdates({report}: {report: EmergencyReportSummary}) {
+  const serverConfirmed = report.serverResolutionConfirmed === true && !report.providerConflict && report.serverStatus?.status === 'RESOLVED';
+  const events = [...(report.history ?? [])]
+    .sort((a, b) => b.occurredAt - a.occurredAt || a.id.localeCompare(b.id))
+    .slice(0, 3);
+  if (!events.length) return null;
+  return <View style={styles.recent} testID="recent-sos-updates">
+    <Text accessibilityRole="header" style={styles.heading}>Recent updates</Text>
+    {events.map(event => <View key={event.id} style={styles.event}>
+      <Text style={styles.title}>{event.kind === 'RESPONDER_UPDATE' && event.status
+        ? statusLabels[event.status] ?? event.status : eventLabels[event.kind]}</Text>
+      <Text style={styles.detail}>{historyDate(event.occurredAt)} · {event.revision === null ? 'Whole SOS' : `Version ${event.revision}`}</Text>
+      <Text style={event.provenance === 'UNVERIFIED' ? styles.warning : styles.detail}>{provenanceText(event, serverConfirmed)}</Text>
+    </View>)}
+    {report.statusSync?.historyPending ? <Text style={styles.warning}>More history is syncing.</Text> : null}
+  </View>;
+}
+
 export function SosHistory({reports}: {reports: EmergencyReportSummary[]}) {
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const ordered = [...reports].sort((a, b) => b.createdAt - a.createdAt || a.reportId.localeCompare(b.reportId));
@@ -178,8 +217,18 @@ export function SosHistory({reports}: {reports: EmergencyReportSummary[]}) {
 
 const styles = StyleSheet.create({
   history: {gap: 12},
+  recent: {gap: 14, padding: 18, backgroundColor: '#FFFFFF', borderRadius: 20, borderWidth: 1, borderColor: '#DCE1DB'},
+  identityRow: {flexDirection: 'row', alignItems: 'baseline', flexWrap: 'wrap', gap: 8},
+  callsign: {flexShrink: 1, maxWidth: '100%', fontSize: 17, lineHeight: 25, fontWeight: '700', color: '#21302B'},
+  kicker: {fontSize: 13, lineHeight: 20, fontWeight: '700', color: '#52635B'},
+  largeFontHeadline: {fontSize: 21, lineHeight: 29},
+  headline: {fontSize: 26, lineHeight: 34, fontWeight: '800', color: '#145747'},
+  note: {gap: 5, padding: 12, borderLeftWidth: 3, borderLeftColor: '#9DBAAC', backgroundColor: '#EFF4F0', borderRadius: 8},
+  noteLabel: {fontSize: 12, lineHeight: 18, fontWeight: '700', color: '#52635B'},
+  expectation: {fontSize: 15, lineHeight: 22, color: '#44524D', paddingTop: 4},
+  prominentStatus: {borderWidth: 0, padding: 0, backgroundColor: '#FFFFFF', gap: 8},
   heading: {fontSize: 18, fontWeight: '800', color: '#18211E'},
-  report: {backgroundColor: '#FFFFFF', borderRadius: 16, borderWidth: 1, borderColor: '#DCE1DB', padding: 14},
+  report: {backgroundColor: '#FFFFFF', borderRadius: 16, borderWidth: 1, borderColor: '#DCE1DB', padding: 16},
   toggle: {minHeight: 48, justifyContent: 'center', gap: 6},
   title: {fontSize: 15, lineHeight: 22, fontWeight: '700', color: '#21302B'},
   body: {fontSize: 15, lineHeight: 22, color: '#35423D'},
