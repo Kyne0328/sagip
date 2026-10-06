@@ -5,6 +5,7 @@ import {handleSagipRequest} from '../../src/http/handleRequest.js';
 import type {ResponderService} from '../../src/responder/service.js';
 import type {ActionIntent, ReceiptService} from '../../src/responder/receiptService.js';
 import type {GatewayGrantRequest, GrantProvisioningService, TimeChallenge} from '../../src/responder/grantProvisioning.js';
+import type {OfflineRootSnapshotService} from '../../src/responder/offlineRootSnapshotService.js';
 
 const responder = {
   responderId: '33333333-3333-4333-8333-333333333333',
@@ -389,6 +390,59 @@ test('v2 authority routes authenticate roles and preserve signed bytes', async (
   }), deps);
   assert.equal(time.status, 200);
   assert.deepEqual(Buffer.from(await time.arrayBuffer()), timeBytes);
+});
+
+test('v2 offline-root enrollment requires authority admin and is idempotent', async () => {
+  let enrollCalls = 0;
+  const snapshots = {
+    enrollDomain: async (actor: typeof admin) => {
+      enrollCalls += 1;
+      assert.equal(actor.responderId, admin.responderId);
+      assert.equal(actor.role, 'AUTHORITY_ADMIN');
+    },
+  } as unknown as OfflineRootSnapshotService;
+  const deps = {
+    ingestEnvelope: async () => { throw new Error('unused'); },
+    responderService: responderService(),
+    offlineRootSnapshotService: snapshots,
+    refreshAuthorityTime: async () => undefined,
+  };
+  const path = 'https://sagip.example/v2/authority/offline-root/enroll';
+
+  const anonymous = await handleSagipRequest(new Request(path, {method:'POST'}), deps);
+  assert.equal(anonymous.status, 401);
+  assert.equal(enrollCalls, 0);
+
+  const denied = await handleSagipRequest(new Request(path, {
+    method:'POST', headers:{authorization:'Bearer valid-token'},
+  }), deps);
+  assert.equal(denied.status, 403);
+  assert.equal(enrollCalls, 0);
+
+  const wrongMethod = await handleSagipRequest(new Request(path, {
+    method:'GET', headers:{authorization:'Bearer valid-admin-token'},
+  }), deps);
+  assert.equal(wrongMethod.status, 405);
+  assert.equal(wrongMethod.headers.get('allow'), 'POST');
+
+  const unavailableDeps = {
+    ingestEnvelope: deps.ingestEnvelope,
+    responderService: deps.responderService,
+    refreshAuthorityTime: deps.refreshAuthorityTime,
+  };
+  const unavailable = await handleSagipRequest(new Request(path, {
+    method:'POST', headers:{authorization:'Bearer valid-admin-token'},
+  }), unavailableDeps);
+  assert.equal(unavailable.status, 501);
+
+  for (let index = 0; index < 2; index += 1) {
+    const response = await handleSagipRequest(new Request(path, {
+      method:'POST', headers:{authorization:'Bearer valid-admin-token'},
+    }), deps);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {state:'ENROLLED'});
+  }
+  assert.equal(enrollCalls, 2);
 });
 
 test('v2 authority domain errors map to explicit R01 responses', async () => {

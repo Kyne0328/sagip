@@ -22,10 +22,12 @@ import {
 } from './rateLimiter.js';
 
 import type {OriginAuthorityTimeService} from '../responder/originAuthorityTimeService.js';
+import type {OfflineRootSnapshotService} from '../responder/offlineRootSnapshotService.js';
 
 export interface SagipServerDependencies {
   refreshAuthorityTime?: () => Promise<void>;
   originAuthorityTimeService?: OriginAuthorityTimeService;
+  offlineRootSnapshotService?: OfflineRootSnapshotService;
   ingestEnvelope(bytes: Buffer): Promise<ServerReceipt>;
   responderService?: ResponderService;
   receiptService?: ReceiptService;
@@ -65,6 +67,7 @@ const AUTHORITY_GRANTS_PATH = '/v2/authority/grants';
 const AUTHORITY_REVOKE_RE = new RegExp(`^/v2/authority/grants/(${UUID_SEGMENT})/revoke$`, 'u');
 const AUTHORITY_STATUS_PATH = '/v2/authority/status';
 const AUTHORITY_TIME_PATH = '/v2/authority/time';
+const AUTHORITY_OFFLINE_ROOT_ENROLL_PATH = '/v2/authority/offline-root/enroll';
 const UUID_VALUE_RE = new RegExp(`^${UUID_SEGMENT}$`, 'u');
 const NIL_UUID = '00000000-0000-0000-0000-000000000000';
 const MAX_U64 = 18446744073709551615n;
@@ -121,6 +124,34 @@ export async function handleSagipRequest(
       const bytes = await readBoundedBody(request, MAX_ENVELOPE_BYTES);
       const receipt = await deps.ingestEnvelope(bytes);
       return jsonResponse(200, receipt);
+    }
+
+    if (pathname === AUTHORITY_OFFLINE_ROOT_ENROLL_PATH) {
+      if (method !== 'POST') {
+        discardRequestBody(context);
+        return jsonResponse(405, {error: 'METHOD_NOT_ALLOWED'}, {allow: 'POST'});
+      }
+      if (parsedUrl.searchParams.size !== 0) {
+        discardRequestBody(context);
+        return jsonResponse(400, {error: 'INVALID_FIELDS'});
+      }
+      if (!deps.responderService || !deps.offlineRootSnapshotService) {
+        discardRequestBody(context);
+        return jsonResponse(501, {error: 'NOT_IMPLEMENTED'});
+      }
+      const responder = await extractAndAuthResponder(request, deps.responderService);
+      if (!responder) {
+        discardRequestBody(context);
+        return jsonResponse(401, {error: 'SESSION_REQUIRED'});
+      }
+      if (responder.role !== 'AUTHORITY_ADMIN') {
+        discardRequestBody(context);
+        return jsonResponse(403, {error: 'ROLE_REQUIRED'});
+      }
+      discardRequestBody(context);
+      await deps.refreshAuthorityTime?.();
+      await deps.offlineRootSnapshotService.enrollDomain(responder);
+      return jsonResponse(200, {state: 'ENROLLED'});
     }
 
     if (pathname === AUTHORITY_GRANTS_PATH || AUTHORITY_REVOKE_RE.test(pathname) || pathname === AUTHORITY_STATUS_PATH || pathname === AUTHORITY_TIME_PATH) {
