@@ -137,6 +137,15 @@ describe('verified receipt bridge', () => {
     expect(result.verifiedReceipt).toEqual(snapshot);
   });
 
+  it.each([true,false])('preserves native online resolution confirmation %p', async serverResolutionConfirmed => {
+    nativeCore.listEmergencyReports.mockResolvedValue([{...baseSummary,serverResolutionConfirmed}]);
+    expect((await SurvivalCore.listEmergencyReports())[0].serverResolutionConfirmed).toBe(serverResolutionConfirmed);
+  });
+  it.each(['true',null,1])('rejects malformed online resolution confirmation %p', async serverResolutionConfirmed => {
+    nativeCore.listEmergencyReports.mockResolvedValue([{...baseSummary,serverResolutionConfirmed}]);
+    await expect(SurvivalCore.listEmergencyReports()).rejects.toThrow('Invalid emergency report response from native core');
+  });
+
   it.each([
     {issuedAt: undefined}, {issuedAt: -1}, {authorityExpiresAt: 2000},
     {authorityCheckedAt: null}, {offlineEvidenceState: undefined},

@@ -148,6 +148,8 @@ export interface EmergencyReportSummary {
   providerConflict?: boolean;
   /** Native report-wide closure hold, even when another provider's receipt is selected. */
   offlineSnapshotClosureHold?: boolean;
+  /** Native confirmation of the exact resolved snapshot event through completed authenticated online status sync. */
+  serverResolutionConfirmed?: boolean;
   /** Qualified delegated receipt capability; READY does not imply an available contact path. */
   receiptReturnState?: 'DISABLED' | 'WAITING_FOR_QUALIFICATION' | 'READY';
   serverStatus?: ServerStatusInfo;

@@ -475,6 +475,32 @@ class OfflineRootSnapshotCustodyTest {
     n.reopen();assertEquals(2,count(n,"offline_root_evidence"))
   }
 
+  @Test fun matching_online_resolution_releases_native_active_guard_and_survives_reopen() {
+    val n=node()
+    val repository=EmergencyRepository(n.db)
+    val input=CreateEmergencyReportInput(EmergencyType.MEDICAL,Urgency.NEED_ASSISTANCE)
+    val initial=repository.createReport(input,null,90_000L)
+    val env=TransportEnvelopeV1.create(EnvelopeUnsignedInput(UUID.randomUUID().toString(),initial.reportId,
+      1,90_000L,550_000L,0,EmergencyPayloadV1.encode(EmergencyType.MEDICAL,Urgency.NEED_ASSISTANCE,null)),n.identity)
+    reportTo(n,env)
+    val bytes=snapshot(n,env,status=4)
+    val fields=ReceiptV2Codec.decode(OfflineRootSnapshotCodec.decodeBundle(bytes).receipt).fields as ReceiptFields.Responder
+    assertEquals(CustodyResultKind.COMMITTED,n.service.admit(ObjectKind.OFFLINE_ROOT_BUNDLE,bytes).kind)
+    assertFalse(VictimStatusStore.isResolved(n.db.readableDatabase,initial.reportId,1))
+    assertEquals(initial.reportId,repository.createReport(input,null,100_000L).reportId)
+    val ack=ResponderAck(fields.actionId,initial.reportId,fields.responderId,fields.callsign,"RESOLVED",null,100_000L)
+    val store=VictimStatusStore(n.db)
+    store.record(PrivateStatusPage(initial.reportId,1,100_100L,listOf(ack),ack,null),100_100L)
+    assertTrue(store.serverResolutionConfirmed(initial.reportId,1))
+    assertTrue(VictimStatusStore.isResolved(n.db.readableDatabase,initial.reportId,1))
+    n.reopen()
+    assertTrue(VictimStatusStore.isResolved(n.db.readableDatabase,initial.reportId,1))
+    val next=EmergencyRepository(n.db).createReport(input,null,101_000L)
+    assertNotEquals(initial.reportId,next.reportId)
+    assertEquals(2,EmergencyRepository(n.db).listReports().size)
+    assertEquals(next.reportId,EmergencyRepository(n.db).createReport(input,null,101_001L).reportId)
+  }
+
   private fun assertPending(n:Node,bytes:ByteArray) {
     assertEquals(CustodyResultKind.PENDING_VERIFICATION,n.service.admit(ObjectKind.OFFLINE_ROOT_BUNDLE,bytes).kind)
     assertFalse(n.service.canForward(ObjectKind.OFFLINE_ROOT_BUNDLE,bytes))

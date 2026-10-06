@@ -67,7 +67,7 @@ export function AuthenticatedServerStatus({status}: {status: ServerStatusInfo}) 
   );
 }
 
-export function offlineSnapshotText(receipt: NonNullable<EmergencyReportSummary['verifiedReceipt']>): string {
+export function offlineSnapshotText(receipt: NonNullable<EmergencyReportSummary['verifiedReceipt']>, serverConfirmed = false): string {
   const state = receipt.offlineEvidenceState;
   const qualification = state === 'VALID_AT_LAST_CHECK'
     ? 'Responder approval was valid at the last check.'
@@ -78,16 +78,17 @@ export function offlineSnapshotText(receipt: NonNullable<EmergencyReportSummary[
   const authority = state === 'REVOKED'
     ? 'This saved update is not trusted.'
     : 'Current responder approval cannot be confirmed offline.';
-  return `Saved signed responder update. ${qualification} ${authority} Issued: ${historyDate(receipt.issuedAt ?? null)}. Checked: ${historyDate(receipt.authorityCheckedAt)}. Valid until: ${historyDate(receipt.authorityExpiresAt ?? null)}. SOS stays active.`;
+  return `Saved signed responder update. ${qualification} ${authority} Issued: ${historyDate(receipt.issuedAt ?? null)}. Checked: ${historyDate(receipt.authorityCheckedAt)}. Valid until: ${historyDate(receipt.authorityExpiresAt ?? null)}. ${serverConfirmed ? 'Server confirmed this SOS resolved.' : 'SOS stays active.'}`;
 }
 
-function provenanceText(event: EmergencyHistoryEvent): string {
+function provenanceText(event: EmergencyHistoryEvent, serverConfirmed = false): string {
   switch (event.provenance) {
     case 'SERVER_AUTHENTICATED': return 'Server verified';
     case 'UNVERIFIED': return 'Unverified update';
     case 'VERIFIED_CURRENT': return 'Signed and verified when received';
     case 'VERIFIED_OFFLINE_AUTHORITY': return 'Signed and verified offline. Current approval cannot be checked.';
-    case 'VERIFIED_OFFLINE_ROOT_SNAPSHOT': return 'Signed from an earlier approval check. Current approval cannot be checked. SOS stays active.';
+    case 'VERIFIED_OFFLINE_ROOT_SNAPSHOT': return 'Signed from an earlier approval check. Current approval cannot be checked.' +
+      (serverConfirmed ? '' : ' SOS stays active.');
     default: return 'Recorded on this device';
   }
 }
@@ -97,6 +98,7 @@ function HistoryReport({report}: {report: EmergencyReportSummary}) {
   const [visibleEvents, setVisibleEvents] = useState(EVENT_PAGE_SIZE);
   const events = [...(report.history ?? [])].sort((a, b) => b.occurredAt - a.occurredAt || a.id.localeCompare(b.id));
   const receipt = report.verifiedReceipt;
+  const serverConfirmed = report.serverResolutionConfirmed === true && !report.providerConflict && report.serverStatus?.status === 'RESOLVED';
   return (
     <View style={styles.report}>
       <Pressable accessibilityRole="button"
@@ -121,7 +123,7 @@ function HistoryReport({report}: {report: EmergencyReportSummary}) {
               <Text style={styles.detail}>{receipt.callsign}{receipt.note ? ` · ${receipt.note}` : ''}</Text>
               <Text style={styles.detail}>
                 {receipt.verificationKind === 'VERIFIED_OFFLINE_ROOT_SNAPSHOT'
-                  ? offlineSnapshotText(receipt)
+                  ? offlineSnapshotText(receipt, serverConfirmed)
                   : receipt.verificationKind === 'VERIFIED_OFFLINE_AUTHORITY'
                     ? 'Verified offline. Current approval cannot be checked.'
                     : 'Responder approval was checked when received.'}
@@ -138,7 +140,7 @@ function HistoryReport({report}: {report: EmergencyReportSummary}) {
               <Text style={styles.title}>{eventLabels[event.kind]}</Text>
               <Text style={styles.detail}>{historyDate(event.occurredAt)} · {event.revision === null ? 'Report-wide' : `Version ${event.revision}`}</Text>
               {event.status ? <Text style={styles.body}>{statusLabels[event.status] ?? event.status}</Text> : null}
-              <Text style={event.provenance === 'UNVERIFIED' ? styles.warning : styles.detail}>{provenanceText(event)}</Text>
+              <Text style={event.provenance === 'UNVERIFIED' ? styles.warning : styles.detail}>{provenanceText(event, serverConfirmed)}</Text>
               {event.callsign ? <Text style={styles.body}>{event.callsign}</Text> : null}
               {event.note ? <Text style={styles.body}>{event.note}</Text> : null}
             </View>

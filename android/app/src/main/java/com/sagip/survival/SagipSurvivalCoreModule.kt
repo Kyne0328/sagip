@@ -216,7 +216,9 @@ class SagipSurvivalCoreModule(
       "SELECT 1 FROM receipt_projections WHERE report_id=? AND revision=? AND verification_kind='VERIFIED_OFFLINE_ROOT_SNAPSHOT' LIMIT 1",
       arrayOf(inputSummary.reportId,inputSummary.latestRevision.toString()),
     ).use { it.moveToFirst() }
-    val summary = inputSummary.copy(offlineSnapshotClosureHold = hold)
+    val confirmed=victimStatusStore.serverResolutionConfirmed(inputSummary.reportId,inputSummary.latestRevision)
+    val summary = inputSummary.copy(offlineSnapshotClosureHold = hold && !confirmed,
+      serverResolutionConfirmed = confirmed)
     val projection = receiptRepository.projection(summary.reportId) ?: return summary
     if (projection.verificationKind !in VERIFIED_RECEIPT_KINDS) return summary
     if (projection.requesterDeliveryState !in REQUESTER_DELIVERY_STATES) return summary
@@ -309,6 +311,7 @@ class SagipSurvivalCoreModule(
       putBoolean("providerConflict", victimStatusStore.providerConflict(summary.reportId, summary.latestRevision))
       putString("reportId", summary.reportId)
       putBoolean("offlineSnapshotClosureHold", summary.offlineSnapshotClosureHold)
+      putBoolean("serverResolutionConfirmed", summary.serverResolutionConfirmed)
       putDouble("createdAt", summary.createdAt.toDouble())
       putString("emergencyType", summary.emergencyType.name)
       putString("urgency", summary.urgency.name)

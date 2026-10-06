@@ -12,7 +12,9 @@ const STATUS_SYNC_INTERVAL_MS = 10_000;
 const LOAD_ERROR = 'Could not load saved SOS reports.';
 
 export function reportIsResolved(report: EmergencyReportSummary): boolean {
-  if (report.providerConflict === true || report.offlineSnapshotClosureHold === true ||
+  if (report.providerConflict === true) return false;
+  if (report.serverResolutionConfirmed === true && report.serverStatus?.status === 'RESOLVED') return true;
+  if (report.offlineSnapshotClosureHold === true ||
       report.verifiedReceipt?.verificationKind === 'VERIFIED_OFFLINE_ROOT_SNAPSHOT') return false;
   return report.serverStatus?.status === 'RESOLVED' ||
     (report.verifiedReceipt?.status === 'RESOLVED' && report.verifiedReceipt.revision === (report.revision ?? 1));

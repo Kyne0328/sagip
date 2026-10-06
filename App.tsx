@@ -66,8 +66,9 @@ function responderAcknowledgementText(ack: ResponderAckInfo | null | undefined) 
     .join(' ');
 }
 
-function verifiedResponderHeadline(receipt: VerifiedReceiptInfo, currentRevision = receipt.revision): string {
+function verifiedResponderHeadline(receipt: VerifiedReceiptInfo, currentRevision = receipt.revision, serverConfirmed = false): string {
   if (receipt.verificationKind === 'VERIFIED_OFFLINE_ROOT_SNAPSHOT') {
+    if (serverConfirmed) return 'Server confirmed this SOS resolved.';
     if (receipt.offlineEvidenceState !== 'VALID_AT_LAST_CHECK') {
       return 'Saved responder update needs a fresh check. SOS stays active.';
     }
@@ -87,9 +88,9 @@ function verifiedResponderHeadline(receipt: VerifiedReceiptInfo, currentRevision
   }
 }
 
-function verifiedResponderText(receipt: VerifiedReceiptInfo, currentRevision: number): string {
+function verifiedResponderText(receipt: VerifiedReceiptInfo, currentRevision: number, serverConfirmed = false): string {
   return [
-    verifiedResponderHeadline(receipt, currentRevision),
+    verifiedResponderHeadline(receipt, currentRevision, serverConfirmed),
     receipt.callsign ? `· ${receipt.callsign}` : null,
     receipt.note ? `(${receipt.note})` : null,
   ]
@@ -97,8 +98,8 @@ function verifiedResponderText(receipt: VerifiedReceiptInfo, currentRevision: nu
     .join(' ');
 }
 
-function verifiedAuthorityText(receipt: VerifiedReceiptInfo): string {
-  if (receipt.verificationKind === 'VERIFIED_OFFLINE_ROOT_SNAPSHOT') return offlineSnapshotText(receipt);
+function verifiedAuthorityText(receipt: VerifiedReceiptInfo, serverConfirmed = false): string {
+  if (receipt.verificationKind === 'VERIFIED_OFFLINE_ROOT_SNAPSHOT') return offlineSnapshotText(receipt, serverConfirmed);
   return `Responder approval was verified offline. Current approval cannot be checked. Checked: ${historyDate(receipt.authorityCheckedAt)}.`;
 }
 
@@ -132,6 +133,7 @@ export default function App() {
   const activeSos = activeEmergencyReport(reports);
   const latest = activeSos ?? reports[0];
   const hasActiveSos = !!activeSos;
+  const latestServerConfirmed = latest?.serverResolutionConfirmed === true && reportIsResolved(latest);
   const detailsReport = reports.find(report => report.reportId === detailsTarget?.reportId);
   const detailsTargetClosed = !!detailsReport && reportIsResolved(detailsReport);
   const originalDeliveryState = latest?.originalDelivery?.deliveryState ?? latest?.deliveryState;
@@ -141,7 +143,7 @@ export default function App() {
   const latestVerifiedHeadline = latestVerifiedReceipt
     ? latest?.providerConflict
       ? 'Responder updates conflict. SOS stays active.'
-      : verifiedResponderHeadline(latestVerifiedReceipt, latest?.revision ?? 1)
+      : verifiedResponderHeadline(latestVerifiedReceipt, latest?.revision ?? 1, latestServerConfirmed)
     : null;
 
   useEffect(() => {
@@ -257,11 +259,11 @@ export default function App() {
               <Text style={styles.responderText}>{latest.verifiedReceipt.verificationKind === 'VERIFIED_OFFLINE_ROOT_SNAPSHOT' ? 'Saved responder update' : 'Responder update'}</Text>
               {latest.verifiedReceipt.revision !== (latest.revision ?? 1) ? <Text style={styles.evidenceText}>For SOS version {latest.verifiedReceipt.revision}</Text> : null}
               <Text style={styles.statusDetailText}>
-                {verifiedResponderText(latest.verifiedReceipt, latest.revision ?? 1)}
+                {verifiedResponderText(latest.verifiedReceipt, latest.revision ?? 1, latestServerConfirmed)}
               </Text>
               {latest.verifiedReceipt.verificationKind !== 'VERIFIED_CURRENT' ? (
                 <Text style={styles.evidenceText}>
-                  {verifiedAuthorityText(latest.verifiedReceipt)}
+                  {verifiedAuthorityText(latest.verifiedReceipt, latestServerConfirmed)}
                 </Text>
               ) : null}
             </View>

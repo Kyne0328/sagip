@@ -71,6 +71,7 @@ data class EmergencyReportSummary(
   val responderAck: ResponderAck? = null,
   val verifiedReceipt: VerifiedReceiptSummary? = null,
   val offlineSnapshotClosureHold: Boolean = false,
+  val serverResolutionConfirmed: Boolean = false,
   val latestRevision: Int = 1,
   val message: String? = null,
   val originalDelivery: RevisionDeliverySummary? = null,

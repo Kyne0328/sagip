@@ -164,6 +164,24 @@ test('server-confirmed closure stops polling while legacy closure continues', as
   expect(core.triggerDelivery).toHaveBeenCalledTimes(count);
 });
 
+test('matching online resolution after a relayed snapshot permits a new SOS and preserves the resolved history', async () => {
+  const resolved:EmergencyReportSummary={...report,deliveryState:'SERVER_ACCEPTED',offlineSnapshotClosureHold:false,
+    serverResolutionConfirmed:true,serverStatus:{status:'RESOLVED',revision:null,statusScope:'REPORT',updatedAt:3000,callsign:'TEAM',note:null},
+    verifiedReceipt:{eventId:'resolved-event',revision:1,verificationKind:'VERIFIED_OFFLINE_ROOT_SNAPSHOT',
+      authorityCheckedAt:2000,issuedAt:2000,authorityExpiresAt:2500,offlineEvidenceState:'EXPIRED',
+      status:'RESOLVED',callsign:'TEAM',note:'',requesterDeliveryState:'UNKNOWN'}};
+  core.listEmergencyReports.mockResolvedValue([resolved]);
+  await mount();
+  const next={...report,reportId:'new-report',createdAt:4000};
+  core.createEmergencyReport.mockResolvedValue(next);
+  core.listEmergencyReports.mockResolvedValue([next,resolved]);
+  await act(async()=>{await current.create(input);});
+  expect(core.createEmergencyReport).toHaveBeenCalledTimes(1);
+  expect(current.reports.map(r=>r.reportId)).toEqual(['new-report','report-1']);
+  await act(async()=>{await current.create(input);});
+  expect(core.createEmergencyReport).toHaveBeenCalledTimes(1);
+});
+
 test('resolved history continues paging until native marks the saved history complete', async () => {
   const resolved: EmergencyReportSummary = {...report, deliveryState: 'SERVER_ACCEPTED',
     serverStatus: {status: 'RESOLVED', revision: null, statusScope: 'REPORT', updatedAt: 3000, callsign: null, note: null},

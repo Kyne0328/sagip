@@ -91,6 +91,9 @@ class VictimStatusStore(private val database: SagipDatabase) {
   fun providerConflict(reportId: String, revision: Int): Boolean = providerConflict(database.readableDatabase, reportId, revision)
 
   fun serverStatus(reportId: String): VictimServerStatus? = serverStatus(database.readableDatabase, reportId)
+  fun serverResolutionConfirmed(reportId: String, revision: Int): Boolean =
+    !providerConflict(database.readableDatabase, reportId, revision) &&
+      serverResolutionConfirmed(database.readableDatabase, reportId, revision)
 
   fun history(reportId: String): List<VictimHistoryEvent> {
     val db = database.readableDatabase
@@ -165,12 +168,43 @@ class VictimStatusStore(private val database: SagipDatabase) {
       return statuses.any { it == 4 } && statuses.any { it in 1..3 }
     }
 
+    internal fun serverResolutionConfirmed(db: SQLiteDatabase, reportId: String, revision: Int): Boolean {
+      val observation=db.rawQuery("""
+        SELECT a.ack_id,a.status,s.current_revision,s.server_checked_at,s.state,s.cursor,s.last_success_at
+        FROM victim_status_sync s JOIN victim_server_acks a ON a.report_id=s.report_id
+        WHERE s.report_id=? ORDER BY $SERVER_ORDER LIMIT 1
+      """.trimIndent(),arrayOf(reportId)).use { c ->
+        if(!c.moveToFirst() || c.isNull(2) || c.isNull(3) || c.isNull(6) ||
+          c.getString(4)!="SUCCESS" || !c.isNull(5)) return false
+        Triple(c.getString(0) to c.getString(1),c.getInt(2),c.getLong(3))
+      }
+      return db.rawQuery("""
+        SELECT p.event_id,p.sequence,p.issuer_provider_id,r.object_bytes
+        FROM receipt_projections p JOIN receipt_records r ON r.event_id=p.event_id
+        WHERE p.report_id=? AND p.revision=?
+          AND p.verification_kind='VERIFIED_OFFLINE_ROOT_SNAPSHOT'
+          AND r.verification_kind='VERIFIED_OFFLINE_ROOT_SNAPSHOT'
+      """.trimIndent(),arrayOf(reportId,revision.toString())).use { c ->
+        if(!ReceiptRepository.hasConsistentReportOrigin(db,reportId)) return false
+        while(c.moveToNext()) {
+          val fields=runCatching {ReceiptV2Codec.decode(c.getBlob(3)).fields as? ReceiptFields.Responder}.getOrNull() ?: continue
+          if(fields.actionId!=c.getString(0) || fields.sequence!=c.getLong(1) ||
+            !java.security.MessageDigest.isEqual(fields.issuerProviderId,c.getBlob(2))) continue
+          if(ServerResolutionConfirmation.matches(reportId,revision,observation.first.first,
+              observation.first.second,observation.second,observation.third,true,fields)) return true
+        }
+        false
+      }
+    }
+
     internal fun isResolved(db: SQLiteDatabase, reportId: String, revision: Int): Boolean {
-      // Root snapshots never authorize automatic closure, including alongside legacy server RESOLVED.
-      if(db.rawQuery("SELECT 1 FROM receipt_projections WHERE report_id=? AND revision=? AND verification_kind='VERIFIED_OFFLINE_ROOT_SNAPSHOT' LIMIT 1",
-        arrayOf(reportId,revision.toString())).use { it.moveToFirst() }) return false
       // Independent provider streams have no shared ordering or implicit supersession.
       if (providerConflict(db, reportId, revision)) return false
+      // A matching live server observation is closure evidence distinct from the saved snapshot.
+      if (serverResolutionConfirmed(db, reportId, revision)) return true
+      // Offline snapshots and unmatched/cached server rows alone still cannot authorize closure.
+      if(db.rawQuery("SELECT 1 FROM receipt_projections WHERE report_id=? AND revision=? AND verification_kind='VERIFIED_OFFLINE_ROOT_SNAPSHOT' LIMIT 1",
+        arrayOf(reportId,revision.toString())).use { it.moveToFirst() }) return false
       if (serverStatus(db, reportId)?.status == "RESOLVED") return true
       return currentProviderStatuses(db, reportId, revision).any { it == 4 }
     }

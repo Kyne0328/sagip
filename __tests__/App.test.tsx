@@ -17,6 +17,7 @@ jest.mock('../src/emergency/SurvivalCore', () => ({
     newEmergencyDetailsOperationId: jest.fn(),
     listEmergencyReports: jest.fn(),
     triggerDelivery: jest.fn().mockResolvedValue(0),
+    claimVerifiedReceiptNotification: jest.fn().mockResolvedValue(false),
     getRelayStatus: jest.fn(),
     startBleRelay: jest.fn().mockResolvedValue(true),
     stopBleRelay: jest.fn().mockResolvedValue(true),
@@ -87,6 +88,28 @@ test('shows SAGIP branding and an offline-safe SOS entry point with accessibilit
     renderer.root.findAllByProps({accessibilityLiveRegion: 'polite'}).length,
   ).toBeGreaterThan(0);
   expect(prepareLocation).toHaveBeenCalledWith(false);
+});
+
+test('a server-confirmed resolved snapshot enables Send SOS and creates a separate report', async () => {
+  const resolved={...report,deliveryState:'SERVER_ACCEPTED' as const,serverResolutionConfirmed:true,
+    serverStatus:{status:'RESOLVED' as const,revision:null,statusScope:'REPORT' as const,updatedAt:3000,callsign:'TEAM',note:null},
+    verifiedReceipt:{eventId:'resolved-event',revision:1,verificationKind:'VERIFIED_OFFLINE_ROOT_SNAPSHOT' as const,
+      authorityCheckedAt:2000,issuedAt:2000,authorityExpiresAt:2500,offlineEvidenceState:'EXPIRED' as const,
+      status:'RESOLVED' as const,callsign:'TEAM',note:'',requesterDeliveryState:'UNKNOWN' as const}};
+  core.listEmergencyReports.mockResolvedValue([resolved]);
+  const renderer=await renderApp();
+  try {
+    const sos=renderer.root.findByProps({accessibilityLabel:'Save emergency SOS'});
+    expect(sos.props.accessibilityHint).toContain('Saves the SOS on this phone');
+    const text=JSON.stringify(renderer.toJSON());
+    expect(text).toContain('Server confirmed this SOS resolved.');
+    expect(text).not.toContain('SOS stays active');
+    const next={...report,reportId:'new-report',createdAt:4000};
+    core.createEmergencyReport.mockResolvedValue(next);
+    core.listEmergencyReports.mockResolvedValue([next,resolved]);
+    await act(async()=>{await sos.props.onPress();});
+    expect(core.createEmergencyReport).toHaveBeenCalledTimes(1);
+  } finally {act(()=>renderer.unmount());}
 });
 
 test('requests location permission only after the SOS is durably saved', async () => {

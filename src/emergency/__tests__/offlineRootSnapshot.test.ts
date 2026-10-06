@@ -31,6 +31,14 @@ test('report-wide snapshot hold defeats selected non-snapshot and cached server 
   expect(reportNeedsStatusSync(mixed)).toBe(true);
 });
 
+test('native-confirmed online resolution releases snapshot hold while genuine provider conflict remains active', () => {
+  const confirmed={...report,offlineSnapshotClosureHold:true,serverResolutionConfirmed:true};
+  expect(reportIsResolved(confirmed)).toBe(true);
+  expect(reportNeedsStatusSync(confirmed)).toBe(false);
+  expect(reportIsResolved({...confirmed,providerConflict:true})).toBe(false);
+  expect(reportIsResolved({...confirmed,serverStatus:{...report.serverStatus!,status:'EN_ROUTE'}})).toBe(false);
+});
+
 test('saved snapshot text separates report issuance, authority age and current revocation uncertainty', () => {
   const text = offlineSnapshotText(receipt);
   expect(text).toContain('Saved signed responder update');
