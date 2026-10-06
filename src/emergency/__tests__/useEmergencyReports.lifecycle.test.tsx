@@ -116,7 +116,8 @@ test('a failed startup restore retries while the app remains open', async () => 
   core.listEmergencyReports.mockRejectedValueOnce(new Error('Temporary database failure'));
   await mount();
   await act(async () => {jest.advanceTimersByTime(10_000);});
-  expect(core.listEmergencyReports).toHaveBeenCalledTimes(2);
+  // One startup read, then local-before-delivery and local-after-delivery reconciliation.
+  expect(core.listEmergencyReports).toHaveBeenCalledTimes(3);
   expect(current.message).toBeNull();
 });
 
@@ -127,6 +128,38 @@ test('slow native delivery cannot accumulate overlapping status polls', async ()
   await mount();
   await act(async () => {jest.advanceTimersByTime(30_000);});
   expect(core.triggerDelivery).toHaveBeenCalledTimes(1);
+});
+
+test('persisted offline resolution unlocks a new SOS before slow delivery completes', async () => {
+  const delivery = deferred<number>();
+  const resolved: EmergencyReportSummary = {...report,
+    verifiedReceipt: {eventId: 'offline-resolved', revision: 1,
+      verificationKind: 'VERIFIED_OFFLINE_AUTHORITY', authorityCheckedAt: null,
+      status: 'RESOLVED', callsign: 'OFFLINE-UNIT', note: '', requesterDeliveryState: 'UNKNOWN'}};
+  const next: EmergencyReportSummary = {...report, reportId: 'report-2', createdAt: 3000};
+  core.listEmergencyReports
+    .mockResolvedValueOnce([report])
+    .mockResolvedValueOnce([resolved])
+    .mockResolvedValue([next, resolved]);
+  core.triggerDelivery.mockReturnValue(delivery.promise);
+  core.createEmergencyReport.mockResolvedValue(next);
+  await mount();
+
+  let refresh!: Promise<void>;
+  await act(async () => {
+    refresh = current.refresh();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  expect(current.reports).toEqual([resolved]);
+  await act(async () => {
+    expect((await current.create(input))?.reportId).toBe(next.reportId);
+  });
+  expect(core.createEmergencyReport).toHaveBeenCalledTimes(1);
+  expect(current.reports[0].reportId).toBe(next.reportId);
+
+  await act(async () => {delivery.resolve(0); await refresh;});
 });
 
 test('failed status delivery keeps cached history and successful reconnect updates status', async () => {

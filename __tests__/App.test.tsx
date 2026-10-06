@@ -325,7 +325,8 @@ test('reconciles a server-accepted report even when delivery processes no new en
     });
 
     expect(core.triggerDelivery).toHaveBeenCalled();
-    expect(core.listEmergencyReports).toHaveBeenCalledTimes(2);
+    // Refresh reads persisted SQLite state before and after the delivery pass.
+    expect(core.listEmergencyReports).toHaveBeenCalledTimes(3);
     expect(JSON.stringify(renderer.toJSON())).toContain('Responders say they are on the way');
   } finally {
     if (renderer) {

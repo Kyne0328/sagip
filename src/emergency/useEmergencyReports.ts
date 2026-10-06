@@ -76,11 +76,15 @@ export function useEmergencyReports() {
 
   const hasStatusSyncWork = restoreFailed || reports.some(reportNeedsStatusSync);
 
-  const syncFromNative = useCallback(async () => {
+  const syncFromNative = useCallback(async (readLocalFirst = true) => {
     if (syncInFlight.current) return;
     syncInFlight.current = true;
     setSyncing(true);
     try {
+      // BLE/offline receipt handling can update SQLite without waking React Native.
+      // Read durable local state before transport work so an already-resolved SOS
+      // becomes usable immediately even when the delivery pass is slow or offline.
+      if (readLocalFirst) await restore();
       try {
         await SurvivalCore.triggerDelivery();
       } catch {
@@ -143,7 +147,9 @@ export function useEmergencyReports() {
     }
 
     // Best-effort delivery plus immediate reconciliation from authoritative SQLite.
-    void syncFromNative();
+    // The committed identity is already authoritative in memory. Do not let a
+    // reconciliation read race backward over it before delivery gets a chance to run.
+    void syncFromNative(false);
     return savedReport;
   }, [syncFromNative]);
 
@@ -158,7 +164,7 @@ export function useEmergencyReports() {
       reportsRef.current = reportsRef.current.map(item => item.reportId === reportId ? updated : item);
       setReports(reportsRef.current);
       setMessage('Details saved on this device.');
-      void syncFromNative();
+      void syncFromNative(false);
       return updated;
     } catch {
       setMessage('Could not save details. SOS is still saved. Refresh the SOS and try again.');
