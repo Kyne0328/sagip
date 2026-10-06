@@ -7,6 +7,7 @@ import {decodeOfflineRootBundle} from '../../src/protocol/offlineRootSnapshot.js
 import {custodyRequestSigningInput, type CustodyOperation} from '../../src/responder/reportCustodyAccess.js';
 import type {GatewayReceiptPage} from '../../src/responder/gatewayReceiptFeed.js';
 import {createTestIdentity} from '../support/envelopeFactory.js';
+import {deviceTimeSigningInput} from '../../src/responder/deviceTimeAccess.js';
 import {offlineRootServiceFixture, T} from '../support/offlineRootServiceFixture.js';
 
 test('accepted SOS custody automatically obtains verifier-bound time and note-free signed return without a responder token', async () => {
@@ -82,5 +83,39 @@ test('dashboard status signs a new note-free receipt and includes its matching o
     assert.equal(fields.note, ''); assert.equal(fields.status, 2);
     const bundle = await f.snapshots.issueCommitted(actionId);
     assert.ok(bundle); assert.deepEqual(decodeOfflineRootBundle(bundle).receipt, bytes);
+  } finally {await f.close();}
+});
+
+test('first-launch device time binds the installation key and boot without a report, account or bearer', async () => {
+  const f=await offlineRootServiceFixture();
+  try {
+    await f.snapshots.enrollDomain(f.admin);
+    const device=createTestIdentity(),boot=randomUUID(),nonce=randomBytes(32);
+    const verifierId=createHash('sha256').update(device.publicKeyDer).digest();
+    const body=Buffer.from(JSON.stringify({verifierId:verifierId.toString('base64'),verifierBootSessionId:boot,
+      nonce:nonce.toString('base64'),verifierPublicKeyDer:device.publicKeyDer.toString('base64')}));
+    const sig=canonicalizeNewReceiptSignature(sign('sha256',deviceTimeSigningInput(body),
+      {key:device.privateKey,dsaEncoding:'ieee-p1363'})).toString('base64');
+    let refreshes=0;
+    const deps:SagipServerDependencies={ingestEnvelope:async()=>{throw Error('no ingestion');},
+      ...f.runtime,refreshAuthorityTime:async()=>{refreshes++;}};
+    const request=(signature:string|null=sig,payload=body)=>new Request('https://sagip.test/v2/authority/device-time',{
+      method:'POST',headers:{'content-type':'application/json',...(signature?{'x-sagip-device-time-signature':signature}:{})},body:payload});
+    assert.equal((await handleSagipRequest(request(null),deps)).status,401);
+    assert.equal((await handleSagipRequest(request(sig,Buffer.from(body.toString().replace(boot,randomUUID()))),deps)).status,401);
+    assert.equal(refreshes,0);
+    const response=await handleSagipRequest(request(),deps);assert.equal(response.status,200);
+    const proof=Buffer.from(await response.arrayBuffer()),decoded=decodeReceipt(proof);
+    assert.ok(verifyReceiptSignature(decoded,f.root.publicKeyDer));
+    if(decoded.fields.purpose!==4)throw Error('time proof expected');
+    assert.deepEqual(decoded.fields.verifierId,verifierId);assert.equal(decoded.fields.verifierBootSessionId,boot);
+    assert.deepEqual(decoded.fields.nonce,nonce);
+    assert.deepEqual(Buffer.from(await (await handleSagipRequest(request(),deps)).arrayBuffer()),proof);
+    const stored=(await f.pool.query('SELECT report_id FROM custody_authority_time_proofs WHERE verifier_id=$1',[verifierId])).rows;
+    assert.equal(stored.length,1);assert.equal(stored[0].report_id,null);
+    // Time proof possession is deliberately unrelated to report feed authorization.
+    const denied=new Request('https://sagip.test/v2/custody/reports/'+f.envelope.reportId+'/receipts',{
+      method:'POST',headers:{'content-type':'application/json','x-sagip-custody-signature':sig},body});
+    assert.equal((await handleSagipRequest(denied,deps)).status,401);
   } finally {await f.close();}
 });

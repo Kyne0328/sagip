@@ -72,6 +72,7 @@ export class OriginAuthorityTimeService {
         await this.signer.assertActive?.(c);
         const challenge=await this.authenticateUsing(c,reportId,body,signature);
         if (!challenge) throw new Error('ORIGIN_PROOF_REQUIRED');
+        const boundReportId=this.challengeAuthenticator && reportId===NIL ? null : reportId;
         await c.query('SELECT pg_advisory_xact_lock($1)',[
           hash(Buffer.from('SAGIP-ORIGIN-TIME-CAPACITY-V1')).readBigInt64BE().toString()]);
         await c.query('SELECT pg_advisory_xact_lock($1)',[hash(challenge.verifierId).readBigInt64BE().toString()]);
@@ -79,11 +80,11 @@ export class OriginAuthorityTimeService {
         if (![t.timeMs,t.uncertaintyMs,t.validForMs,low,high].every(Number.isSafeInteger) ||
           t.uncertaintyMs<0 || t.uncertaintyMs>60000 || low<0 || t.validForMs<=t.uncertaintyMs ||
           t.validForMs+t.uncertaintyMs>86400000) throw new Error('TIME_UNAVAILABLE');
-        const existing=(await c.query<{verifier_boot_id:string; report_id:string; valid_until_ms:string; object_bytes:Buffer}>(
+        const existing=(await c.query<{verifier_boot_id:string; report_id:string | null; valid_until_ms:string; object_bytes:Buffer}>(
           `SELECT * FROM ${this.proofTable} WHERE verifier_id=$1 AND nonce=$2`,
           [Buffer.from(challenge.verifierId),Buffer.from(challenge.nonce)])).rows[0];
         if(existing) {
-          if(existing.verifier_boot_id!==challenge.verifierBootSessionId || existing.report_id!==reportId ||
+          if(existing.verifier_boot_id!==challenge.verifierBootSessionId || existing.report_id!==boundReportId ||
             high>=Number(existing.valid_until_ms)) throw new Error('TIME_CHALLENGE_REUSED');
           await c.query('COMMIT'); return Buffer.from(existing.object_bytes);
         }
@@ -112,7 +113,7 @@ export class OriginAuthorityTimeService {
         if(Number(budget.bytes)+bytes.length+128>64*1024*1024) throw new Error('CAPACITY_FULL');
         await c.query(`INSERT INTO ${this.proofTable} VALUES ($1,$2,$3,$4,$5,$6,$7)`,[
           Buffer.from(challenge.verifierId),Buffer.from(challenge.nonce),challenge.verifierBootSessionId,
-          reportId,t.timeMs,fields.validUntilMs,bytes]);
+          boundReportId,t.timeMs,fields.validUntilMs,bytes]);
         await c.query('INSERT INTO receipt_authority_time_state VALUES ($1,$2) ON CONFLICT (verifier_id) DO UPDATE SET high_water_earliest_ms=EXCLUDED.high_water_earliest_ms',
           [Buffer.from(challenge.verifierId),low]);
         await c.query('COMMIT'); return bytes;

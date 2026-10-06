@@ -11,6 +11,7 @@ import {OriginAuthorityTimeService} from './originAuthorityTimeService.js';
 import {ReceiptService, type AuthoritySigner} from './receiptService.js';
 import {OfflineRootSnapshotService, type OfflineRootSnapshotAdapter} from './offlineRootSnapshotService.js';
 import {authenticateCustodyRequest} from './reportCustodyAccess.js';
+import {authenticateDeviceTimeRequest} from './deviceTimeAccess.js';
 
 const WEEK = 604800000;
 
@@ -32,6 +33,7 @@ export interface OfflineReceiptRuntime {
   authorityService?: GrantProvisioningService;
   originAuthorityTimeService?: OriginAuthorityTimeService;
   custodyAuthorityTimeService?: OriginAuthorityTimeService;
+  deviceAuthorityTimeService?: OriginAuthorityTimeService;
   gatewayReceiptFeed?: GatewayReceiptFeed;
   offlineRootSnapshotService?: OfflineRootSnapshotService;
 }
@@ -102,6 +104,8 @@ export function createOfflineReceiptRuntime(
     ...(snapshots?.policy.disseminationAudience === 'ORIGIN_AND_CUSTODY_RELAYS' ? {
       custodyAuthorityTimeService: new OriginAuthorityTimeService(pool, signer, time,
         (c, reportId, body, signature) => authenticateCustodyRequest(c, reportId, 'authority/time', body, signature)),
+      deviceAuthorityTimeService: new OriginAuthorityTimeService(pool, signer, time,
+        (_c, _reportId, body, signature) => authenticateDeviceTimeRequest(body, signature)),
     } : {}),
     gatewayReceiptFeed: new GatewayReceiptFeed(pool, publicKeyDer, interval, {
       allowedRoles: adapter.gatewayAccess.allowedRoles,

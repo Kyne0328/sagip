@@ -29,6 +29,7 @@ export interface SagipServerDependencies {
   refreshAuthorityTime?: () => Promise<void>;
   originAuthorityTimeService?: OriginAuthorityTimeService;
   custodyAuthorityTimeService?: OriginAuthorityTimeService;
+  deviceAuthorityTimeService?: OriginAuthorityTimeService;
   offlineRootSnapshotService?: OfflineRootSnapshotService;
   ingestEnvelope(bytes: Buffer): Promise<ServerReceipt>;
   responderService?: ResponderService;
@@ -225,6 +226,19 @@ export async function handleSagipRequest(
         await deps.refreshAuthorityTime?.();
         return binaryResponse(200, await deps.authorityService.issueAuthorityTimeProof(challenge, responder));
       }
+    }
+    if (pathname === '/v2/authority/device-time') {
+      if (method !== 'POST') { discardRequestBody(context); return jsonResponse(405, {error: 'METHOD_NOT_ALLOWED'}, {allow: 'POST'}); }
+      if (!deps.deviceAuthorityTimeService) { discardRequestBody(context); return jsonResponse(501, {error: 'NOT_IMPLEMENTED'}); }
+      if (parsedUrl.searchParams.size !== 0) { discardRequestBody(context); return jsonResponse(400, {error: 'INVALID_FIELDS'}); }
+      if ((request.headers.get('content-type') ?? '').split(';')[0]?.trim().toLowerCase() !== 'application/json') {
+        discardRequestBody(context); return jsonResponse(415, {error: 'UNSUPPORTED_MEDIA_TYPE'});
+      }
+      const body = await readBoundedBody(request, 4096), signature = request.headers.get('x-sagip-device-time-signature');
+      if (!await deps.deviceAuthorityTimeService.authenticate(NIL_UUID, body, signature))
+        return jsonResponse(401, {error: 'ORIGIN_PROOF_REQUIRED'});
+      await deps.refreshAuthorityTime?.();
+      return binaryResponse(200, await deps.deviceAuthorityTimeService.issue(NIL_UUID, body, signature));
     }
     const custodyMatch = new RegExp('^/v2/custody/reports/(' + UUID_SEGMENT + ')/(receipts|authority/time)$', 'u').exec(pathname);
     if (custodyMatch) {

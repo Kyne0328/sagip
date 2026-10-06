@@ -78,12 +78,13 @@ class SurvivalCoreRuntime private constructor(context: Context) {
     val inventory=CustodyReceiptInventory(database)
     val transport=HttpCustodyReceiptReturnTransport(manifest.endpoint,inventory::envelope,inventory::reports,
       identity,{returnClockFor(identity.keyId)})
+    val timeTransport=HttpDeviceReceiptTimeTransport(manifest.endpoint,identity)
     val feed=ReceiptReturnFeedConfig("neon-custody-"+OfflineRootSnapshotCodec.digest(
-      manifest.endpoint.toByteArray(Charsets.UTF_8)).take(16),emptySet(),transport,transport,inventory::reports)
+      manifest.endpoint.toByteArray(Charsets.UTF_8)).take(16),emptySet(),transport,timeTransport,inventory::reports)
     val config=TrustedReceiptReturnConfig(identity.keyId,manifest.rootPins,manifest.policy.allowedScopes.toSet(),
       qualified={ runCatching { clockProfile()!=null }.getOrDefault(false) },
       offlineRoot=OfflineRootConfig(manifest.policy,manifest.checkpointSignerPins,::clockProfile),
-      timeTransport=transport,feed=feed,maximumClockDriftPpm=clockProfile()!!.maximumDriftPpm.coerceAtLeast(100))
+      timeTransport=timeTransport,feed=feed,maximumClockDriftPpm=clockProfile()!!.maximumDriftPpm.coerceAtLeast(100))
     configureReceiptReturn(config)
     val owner=receiptReturn ?: return
     if(!owner.ensureOfflineRootDomain(manifest.initialEpoch,manifest.initialAuthorityStateDigest)) {

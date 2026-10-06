@@ -57,4 +57,22 @@ class CustodyReceiptReturnTransportTest {
     assertNull(ReceiptAuthority.advanceCheckpoint(checkpoint,MonotonicClock(boot,999L),1000))
     assertNull(ReceiptAuthority.advanceCheckpoint(checkpoint,MonotonicClock(boot,101000L),1001))
   }
+  @Test fun first_launch_device_time_request_requires_no_SOS_or_responder_credential() {
+    val request=HttpDeviceReceiptTimeTransport("https://sagip.example",identity).prepareRequest(challenge())
+    assertEquals("/v2/authority/device-time",request.path)
+    val body=request.body.toString(Charsets.UTF_8)
+    assertFalse(body.contains("envelope"));assertFalse(body.contains("reportId"));assertFalse(body.contains("token"))
+    assertTrue(body.contains("verifierPublicKeyDer"));assertTrue(body.contains(boot))
+    val signature=java.util.Base64.getDecoder().decode(request.signature)
+    val r=java.math.BigInteger(1,signature.copyOfRange(0,32)).toByteArray()
+    val s=java.math.BigInteger(1,signature.copyOfRange(32,64)).toByteArray()
+    val der=byteArrayOf(0x30,(r.size+s.size+4).toByte(),0x02,r.size.toByte())+r+byteArrayOf(0x02,s.size.toByte())+s
+    val hash=MessageDigest.getInstance("SHA-256").digest(request.body).joinToString("") { "%02x".format(it.toInt() and 255) }
+    val verifier=Signature.getInstance("SHA256withECDSA")
+    verifier.initVerify(pair.public)
+    verifier.update(("SAGIP-DEVICE-TIME-REQUEST-V1\nPOST\n${request.path}\n$hash\n").toByteArray(Charsets.US_ASCII))
+    assertTrue(verifier.verify(der))
+    assertThrows(Exception::class.java) {HttpDeviceReceiptTimeTransport("https://sagip.example",identity)
+      .prepareRequest(challenge().copy(verifierId=ByteArray(32)))}
+  }
 }
