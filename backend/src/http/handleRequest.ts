@@ -23,10 +23,12 @@ import {
 
 import type {OriginAuthorityTimeService} from '../responder/originAuthorityTimeService.js';
 import type {OfflineRootSnapshotService} from '../responder/offlineRootSnapshotService.js';
+import {MAX_CUSTODY_REQUEST_BYTES} from '../responder/reportCustodyAccess.js';
 
 export interface SagipServerDependencies {
   refreshAuthorityTime?: () => Promise<void>;
   originAuthorityTimeService?: OriginAuthorityTimeService;
+  custodyAuthorityTimeService?: OriginAuthorityTimeService;
   offlineRootSnapshotService?: OfflineRootSnapshotService;
   ingestEnvelope(bytes: Buffer): Promise<ServerReceipt>;
   responderService?: ResponderService;
@@ -223,6 +225,30 @@ export async function handleSagipRequest(
         await deps.refreshAuthorityTime?.();
         return binaryResponse(200, await deps.authorityService.issueAuthorityTimeProof(challenge, responder));
       }
+    }
+    const custodyMatch = new RegExp('^/v2/custody/reports/(' + UUID_SEGMENT + ')/(receipts|authority/time)$', 'u').exec(pathname);
+    if (custodyMatch) {
+      if (method !== 'POST') { discardRequestBody(context); return jsonResponse(405, {error: 'METHOD_NOT_ALLOWED'}, {allow: 'POST'}); }
+      if (parsedUrl.searchParams.size !== 0) { discardRequestBody(context); return jsonResponse(400, {error: 'INVALID_FIELDS'}); }
+      if ((request.headers.get('content-type') ?? '').split(';')[0]?.trim().toLowerCase() !== 'application/json') {
+        discardRequestBody(context); return jsonResponse(415, {error: 'UNSUPPORTED_MEDIA_TYPE'});
+      }
+      if (!deps.gatewayReceiptFeed || !deps.custodyAuthorityTimeService) {
+        discardRequestBody(context); return jsonResponse(501, {error: 'NOT_IMPLEMENTED'});
+      }
+      const body = await readBoundedBody(request, MAX_CUSTODY_REQUEST_BYTES);
+      const reportId = custodyMatch[1]!.toLowerCase(), signature = request.headers.get('x-sagip-custody-signature');
+      // Authenticate before contacting the external clock or issuing signatures.
+      if (custodyMatch[2] === 'authority/time') {
+        if (!await deps.custodyAuthorityTimeService.authenticate(reportId, body, signature))
+          return jsonResponse(401, {error: 'ORIGIN_PROOF_REQUIRED'});
+        await deps.refreshAuthorityTime?.();
+        return binaryResponse(200, await deps.custodyAuthorityTimeService.issue(reportId, body, signature));
+      }
+      if (!await deps.gatewayReceiptFeed.authenticateCustody(reportId, body, signature))
+        return jsonResponse(401, {error: 'ORIGIN_PROOF_REQUIRED'});
+      await deps.refreshAuthorityTime?.();
+      return jsonResponse(200, await deps.gatewayReceiptFeed.listForCustody(reportId, body, signature));
     }
     const originTimeMatch = new RegExp('^/v2/reports/(' + UUID_SEGMENT + ')/authority/time$', 'u').exec(pathname);
     if (originTimeMatch) {
@@ -624,6 +650,19 @@ export async function handleSagipRequest(
           status,
           parsedBody.note,
         );
+        if (deps.receiptService) {
+          const receiptStatus = ['ACKNOWLEDGED', 'EN_ROUTE', 'ON_SCENE', 'RESOLVED'].indexOf(status) + 1;
+          if (receiptStatus > 0) {
+            try {
+              await deps.refreshAuthorityTime?.();
+              const result = await deps.receiptService.prepareDashboardStatus(ack.ackId, reportId, receiptStatus, responder);
+              return jsonResponse(200, {...ack, offlineReceiptState: result.state,
+                offlineSnapshotState: result.reason ?? 'READY'});
+            } catch {
+              return jsonResponse(200, {...ack, offlineReceiptState: 'PENDING'});
+            }
+          }
+        }
         return jsonResponse(200, ack);
       }
 
@@ -678,6 +717,7 @@ export async function handleSagipRequest(
       if (code === 'CAPACITY_FULL' || code === 'OFFLINE_ROOT_CAPACITY') return jsonResponse(429, {error: code});
       if (code === 'ROOT_AUTHORITY_REVOKED') return jsonResponse(403, {error: code});
       if (code === 'ORIGIN_PROOF_REQUIRED') return jsonResponse(401, {error: code});
+      if (code === 'TIME_CHALLENGE_REUSED') return jsonResponse(409, {error: code});
       if (code.startsWith('ROUGHTIME_') || code.startsWith('OFFLINE_ROOT_') || code === 'AUTHORITY_UNAVAILABLE')
         return jsonResponse(503, {error: 'AUTHORITY_UNAVAILABLE'});
       if (code === 'SIGNER_UNAVAILABLE' || code === 'TIME_UNAVAILABLE' || code === 'STORAGE_UNAVAILABLE') {
@@ -705,6 +745,7 @@ function isRateLimitedEndpointPath(pathname: string): boolean {
     pathname.startsWith('/v2/responder/actions') ||
     pathname.startsWith('/v2/responder/snapshots') ||
     pathname.startsWith('/v2/reports/') ||
+    pathname.startsWith('/v2/custody/reports/') ||
     pathname.startsWith('/v2/authority/') ||
     REPORT_STATUS_RE.test(pathname) ||
     pathname.startsWith('/v1/incidents')

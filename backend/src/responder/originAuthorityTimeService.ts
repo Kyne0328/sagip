@@ -30,11 +30,15 @@ function parse(body: Buffer): TimeChallenge {
 }
 export class OriginAuthorityTimeService {
   private readonly root: Buffer; private readonly rootId: Buffer;
+  private readonly proofTable: 'origin_authority_time_proofs' | 'custody_authority_time_proofs';
   constructor(private readonly pool: Pick<Pool,'connect'>, private readonly signer: AuthoritySigner,
-    private readonly qualifiedTime: () => QualifiedAuthorityTime) {
+    private readonly qualifiedTime: () => QualifiedAuthorityTime,
+    private readonly challengeAuthenticator?: (c: PoolClient, reportId: string, body: Buffer, signature: string | null) => Promise<TimeChallenge | null>) {
     this.root=Buffer.from(signer.publicKeyDer); validateReceiptPublicKey(this.root); this.rootId=hash(this.root);
+    this.proofTable=challengeAuthenticator ? 'custody_authority_time_proofs' : 'origin_authority_time_proofs';
   }
   private async authenticateUsing(c: PoolClient, reportId: string, body: Buffer, signature: string | null) {
+    if (this.challengeAuthenticator) return this.challengeAuthenticator(c, reportId, body, signature);
     try {
       const challenge=parse(body);
       if (!signature || signature.length!==88) return null;
@@ -76,7 +80,7 @@ export class OriginAuthorityTimeService {
           t.uncertaintyMs<0 || t.uncertaintyMs>60000 || low<0 || t.validForMs<=t.uncertaintyMs ||
           t.validForMs+t.uncertaintyMs>86400000) throw new Error('TIME_UNAVAILABLE');
         const existing=(await c.query<{verifier_boot_id:string; report_id:string; valid_until_ms:string; object_bytes:Buffer}>(
-          'SELECT * FROM origin_authority_time_proofs WHERE verifier_id=$1 AND nonce=$2',
+          `SELECT * FROM ${this.proofTable} WHERE verifier_id=$1 AND nonce=$2`,
           [Buffer.from(challenge.verifierId),Buffer.from(challenge.nonce)])).rows[0];
         if(existing) {
           if(existing.verifier_boot_id!==challenge.verifierBootSessionId || existing.report_id!==reportId ||
@@ -88,10 +92,10 @@ export class OriginAuthorityTimeService {
           [Buffer.from(challenge.verifierId)])).rows[0];
         if(state && low<Number(state.high_water_earliest_ms)) throw new Error('TIME_ROLLBACK');
         const recent=(await c.query<{count:string}>(
-          'SELECT COUNT(*) AS count FROM origin_authority_time_proofs WHERE verifier_id=$1 AND signed_time_ms >= $2',
+          `SELECT COUNT(*) AS count FROM ${this.proofTable} WHERE verifier_id=$1 AND signed_time_ms >= $2`,
           [Buffer.from(challenge.verifierId),Math.max(0,t.timeMs-60000)])).rows[0]!;
         const budget=(await c.query<{count:string; bytes:string}>(
-          'SELECT COUNT(*) AS count,COALESCE(SUM(octet_length(object_bytes)+128),0) AS bytes FROM origin_authority_time_proofs')).rows[0]!;
+          `SELECT COUNT(*) AS count,COALESCE(SUM(octet_length(object_bytes)+128),0) AS bytes FROM ${this.proofTable}`)).rows[0]!;
         if(Number(recent.count)>=128 || Number(budget.count)>=10000) throw new Error('CAPACITY_FULL');
         const fields:TimeProofFields={
           purpose:4,proofId:randomUUID(),signerProviderId:issuerProviderId(1,this.rootId,NIL),
@@ -106,7 +110,7 @@ export class OriginAuthorityTimeService {
         if(final.timeMs-final.uncertaintyMs<low || final.timeMs+final.uncertaintyMs>=fields.validUntilMs)
           throw new Error('TIME_UNAVAILABLE');
         if(Number(budget.bytes)+bytes.length+128>64*1024*1024) throw new Error('CAPACITY_FULL');
-        await c.query('INSERT INTO origin_authority_time_proofs VALUES ($1,$2,$3,$4,$5,$6,$7)',[
+        await c.query(`INSERT INTO ${this.proofTable} VALUES ($1,$2,$3,$4,$5,$6,$7)`,[
           Buffer.from(challenge.verifierId),Buffer.from(challenge.nonce),challenge.verifierBootSessionId,
           reportId,t.timeMs,fields.validUntilMs,bytes]);
         await c.query('INSERT INTO receipt_authority_time_state VALUES ($1,$2) ON CONFLICT (verifier_id) DO UPDATE SET high_water_earliest_ms=EXCLUDED.high_water_earliest_ms',

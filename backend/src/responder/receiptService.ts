@@ -216,6 +216,31 @@ export class ReceiptService {
       throw new Error('INVALID_TIME');
     return n;
   }
+
+  /** A new status-only action for the authenticated dashboard; private notes stay in its v1 audit. */
+  async prepareDashboardStatus(actionId: string, reportId: string, status: number,
+    responder: ResponderIdentity): Promise<ActionCommitResult> {
+    const c = await this.pool.connect();
+    let intent: ActionIntent;
+    try {
+      const report = await this.report(c, reportId);
+      const incident = (await c.query<{receipt_version: string}>(
+        'SELECT receipt_version FROM incidents WHERE report_id=$1', [reportId])).rows[0];
+      if (!incident) throw new Error('REPORT_IDENTITY_CONFLICT');
+      const fields: ResponderReceiptFields = {
+        purpose: 1, actionId, providerKind: 1, issuerKeyId: this.keyId, issuerProviderId: this.provider,
+        grantId: NIL, reportId, reportProtocolVersion: report.reportProtocolVersion, revision: report.revision,
+        payloadDigest: Buffer.from(report.payloadDigest), originKeyId: Buffer.from(report.originKeyId),
+        responderId: responder.responderId, callsign: responder.callsign,
+        observedIncidentVersion: BigInt(incident.receipt_version), sequence: 1n, status, note: '',
+        issuedAtMs: this.clock(), forwardingExpiresAtMs: this.clock() + WEEK, actionDigest: Buffer.alloc(32),
+      };
+      fields.actionDigest = actionDigest(fields);
+      intent = fields;
+    } finally { c.release(); }
+    await this.allocateAction(intent, responder);
+    return this.prepareReceipt(actionId);
+  }
   private verificationTime(now: number): TimeInterval {
     const time = this.qualifiedInterval?.() ?? {earliestMs: now, latestMs: now};
     if (!Number.isSafeInteger(time.earliestMs) || !Number.isSafeInteger(time.latestMs) ||

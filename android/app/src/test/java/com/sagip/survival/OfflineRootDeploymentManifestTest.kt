@@ -68,6 +68,21 @@ class OfflineRootDeploymentManifestTest {
     assertNull(deployment.clockQualification("synthetic/test/device:1/build/user",35,boot))
   }
 
+  @Test fun v2_android_policy_activates_without_a_device_whitelist_and_rejects_unbounded_clock_policy() {
+    val f=fixture()
+    val policy="\"androidClockPolicy\":{\"mode\":\"ANDROID_ELAPSED_REALTIME\",\"maximumDriftPpm\":1000,\"maximumCheckpointAgeMs\":86400000},"
+    val json=f.json.replace("\"version\":1","\"version\":2").replace(profile,"").replaceFirst("{","{"+policy)
+    val deployment=parse(json)
+    val q=deployment.clockQualification("any/manufacturer/any-build",35,boot)!!
+    assertEquals(1000,q.maximumDriftPpm);assertEquals(86400000L,q.maximumCheckpointAgeMs)
+    assertNull(deployment.clockQualification("any",23,boot))
+    assertNull(deployment.clockQualification("any",35,"00000000-0000-0000-0000-000000000000"))
+    rejects(json.replace("\"maximumDriftPpm\":1000","\"maximumDriftPpm\":1001"))
+    rejects(json.replace("ANDROID_ELAPSED_REALTIME","DEVICE_WALL_CLOCK"))
+    rejects(json.replace("86400000","86400001"))
+    rejects(json.replace("\"qualifiedElapsedClockProfiles\":[]","\"qualifiedElapsedClockProfiles\":["+profile+"]"))
+  }
+
   @Test fun returned_pins_and_policy_lists_cannot_change_the_parsed_deployment() {
     val f=fixture();val deployment=parse(f.json)
     deployment.rootPins.getValue(f.rootId).fill(0)

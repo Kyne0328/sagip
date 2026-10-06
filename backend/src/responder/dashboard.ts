@@ -2685,7 +2685,10 @@ const DASHBOARD_JS = `(() => {
       latestIncidents = latestIncidents.map(incident => incident.reportId === reportId && statusStage(ack.status) >= statusStage(statusLabel(incident)) ? {...incident, latestAck: ack} : incident);
       if (ack.status === 'RESOLVED') pendingResolutions.delete(reportId);
       renderIncidents(latestIncidents);
-      if (selectedReportId === reportId) ackResult.textContent = 'Saved: ' + formatStatus(ack.status);
+      if (selectedReportId === reportId) ackResult.textContent = 'Saved: ' + formatStatus(ack.status) +
+        (ack.offlineReceiptState === 'SIGNED' && ack.offlineSnapshotState === 'READY'
+          ? '. Signed update is ready for offline delivery.'
+          : ack.offlineReceiptState ? '. Signed offline delivery is pending.' : '');
       clearSubmittedDraft();
       if (generation === sessionGeneration) {
         activeRefresh?.controller.abort();

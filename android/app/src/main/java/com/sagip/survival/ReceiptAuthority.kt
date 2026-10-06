@@ -175,11 +175,14 @@ object ReceiptAuthority {
     catch (e: Unavailable) { TimeAcceptance("REJECTED", reason = e.reason) }
     catch (_: Exception) { TimeAcceptance("REJECTED", reason = "MALFORMED_TIME") }
 
-  fun advanceCheckpoint(checkpoint: TimeCheckpoint, clock: MonotonicClock): TimeInterval? {
+  fun advanceCheckpoint(checkpoint: TimeCheckpoint, clock: MonotonicClock, maximumDriftPpm: Int = 100): TimeInterval? {
+    if(maximumDriftPpm !in 100..1000) return null
     if (clock.bootId != checkpoint.bootId || clock.elapsedMs !in 0..MAX_TIME || checkpoint.receivedElapsedMs !in 0..MAX_TIME) return null
     val elapsed = clock.elapsedMs - checkpoint.receivedElapsedMs
     if (elapsed < 0) return null
-    val drift = (elapsed + 9999) / 10000
+    // Split multiplication to avoid overflowing for a malformed large elapsed value.
+    val drift = (elapsed / 1_000_000L) * maximumDriftPpm +
+      ((elapsed % 1_000_000L) * maximumDriftPpm + 999_999L) / 1_000_000L
     val interval = TimeInterval(checkpoint.earliestMs + elapsed - drift, checkpoint.latestMs + elapsed + drift)
     return interval.takeIf { within(it, 0, checkpoint.validUntilMs) }
   }

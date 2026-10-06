@@ -9,7 +9,8 @@ import {originTimeRequestSigningInput} from '../../src/responder/originAuthority
 import {handleSagipRequest, type SagipServerDependencies} from '../../src/http/handleRequest.js';
 const hash=(b:Uint8Array)=>createHash('sha256').update(b).digest('hex');
 
-test('max-one connection pool supports two concurrent relay feed reads without nested checkout', {timeout:5000}, async()=>{
+test('max-one connection pool supports two concurrent relay feed reads without nested checkout',
+  {timeout:process.env.SAGIP_TEST_DATABASE_URL ? 30000 : 5000}, async()=>{
   const f=await offlineRootServiceFixture();
   try {
     await f.snapshots.enrollDomain(f.admin); await f.createAction();

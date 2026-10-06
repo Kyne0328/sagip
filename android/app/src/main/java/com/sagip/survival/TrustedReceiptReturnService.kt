@@ -23,6 +23,7 @@ data class TrustedReceiptReturnConfig(
   val feed: ReceiptReturnFeedConfig? = null,
   val offlineRoot: OfflineRootConfig? = null,
   val timeTransport: ReceiptReturnTimeTransport? = null,
+  val maximumClockDriftPpm: Int = 100,
 )
 
 /**
@@ -51,6 +52,7 @@ class TrustedReceiptReturnService(
   private val offlineSnapshots = config.offlineRoot?.let { OfflineRootSnapshotStore(database, queue, it) }
   init {
     require(config.currentAuthorityMaxAgeMs in 0..60_000L)
+    require(config.maximumClockDriftPpm in 100..1000)
     require(config.verifierId.size == 32 && config.roots.isNotEmpty() && config.scopes.isNotEmpty())
     config.roots.forEach { (id, key) ->
       ReceiptV2Codec.validatePublicKey(key)
@@ -73,7 +75,7 @@ class TrustedReceiptReturnService(
     check(MessageDigest.isEqual(fields.verifierId, config.verifierId))
     check(ReceiptV2Codec.verifySignature(decoded, root))
     val clock = monotonicClock()
-    val interval = ReceiptAuthority.advanceCheckpoint(checkpoint, clock) ?: return null
+    val interval = ReceiptAuthority.advanceCheckpoint(checkpoint, clock, config.maximumClockDriftPpm) ?: return null
     val db = database.writableDatabase
     receiptEligibilityTransaction(db) {
       // Serialize authority use with proof renewal: a stale observer cannot commit against a new checkpoint.
@@ -157,7 +159,15 @@ class TrustedReceiptReturnService(
     return true
   }
 
-  fun refreshTime(): Boolean = config.timeTransport?.let { refreshReceiptReturnTime(it, ::feedActive, ::trustedTime, ::beginTimeChallenge, ::acceptTimeProof) } ?: (trustedTime() != null)
+  fun refreshTime(): Boolean {
+    val checkpoint=receipts.latestTimeCheckpoint(config.verifierId)
+    val clock=monotonicClock()
+    val renew=checkpoint==null || checkpoint.bootId!=clock.bootId ||
+      clock.elapsedMs-checkpoint.receivedElapsedMs !in 0 until 300_000L
+    return config.timeTransport?.let {
+      refreshReceiptReturnTime(it,::feedActive,::trustedTime,::beginTimeChallenge,::acceptTimeProof,renew)
+    } ?: (trustedTime()!=null)
+  }
 
   private fun refreshRevocationCache(limit:Int) {
     if(!qualified()) return
@@ -179,7 +189,8 @@ class TrustedReceiptReturnService(
     val proof = receipts.latestTimeProof(config.verifierId) ?: return null
     val timeFields = ReceiptV2Codec.decode(proof).fields as? ReceiptFields.Time ?: return null
     check(q.sourceId in snapshot.policy.qualifiedTimeSourceIds && q.bootId == clock.bootId &&
-      q.timeSignerKeyId == hex(timeFields.signerKeyId) && q.maximumDriftPpm in 0..100 &&
+      q.timeSignerKeyId == hex(timeFields.signerKeyId) && q.maximumDriftPpm in 0..1000 &&
+      q.maximumDriftPpm <= config.maximumClockDriftPpm &&
       q.maximumCheckpointAgeMs in 1..86_400_000L)
     check(checkpoint.bootId == clock.bootId && clock.elapsedMs >= checkpoint.receivedElapsedMs &&
       clock.elapsedMs-checkpoint.receivedElapsedMs < q.maximumCheckpointAgeMs &&

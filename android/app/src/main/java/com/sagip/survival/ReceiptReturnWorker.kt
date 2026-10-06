@@ -24,9 +24,10 @@ internal fun refreshReceiptReturnTime(
   trustedTime: () -> TimeInterval?,
   begin: () -> TimeChallenge,
   accept: (String, ByteArray) -> TimeAcceptance,
+  force: Boolean = false,
 ): Boolean = runCatching {
   check(active())
-  if (trustedTime() != null) return@runCatching true
+  if (!force && trustedTime() != null) return@runCatching true
   val challenge = begin()
   check(active())
   val bytes = transport.fetch(challenge)
@@ -37,6 +38,7 @@ internal fun refreshReceiptReturnTime(
 data class ReceiptReturnFeedConfig(
   val sourceId: String, val reportIds: Set<String>, val transport: ReceiptReturnTransport,
   val timeTransport: ReceiptReturnTimeTransport? = null,
+  val reportIdsProvider: (() -> Set<String>)? = null,
 )
 data class ReceiptReturnBatch(val enabled: Boolean = false, val stored: Int = 0, val pending: Int = 0, val retryable: Int = 0)
 
@@ -178,14 +180,15 @@ class ReceiptReturnWorker(
     val config = configuration() ?: return ReceiptReturnBatch()
     val receiver = service() ?: return ReceiptReturnBatch()
     if (!receiver.feedActive()) return ReceiptReturnBatch()
-    require(config.sourceId.matches(Regex("[A-Za-z0-9_-]{1,64}")) && config.reportIds.size <= 10_000)
-    config.reportIds.forEach { require(UUID.fromString(it).toString() == it) }
-    enqueue(config)
+    val reports = config.reportIdsProvider?.invoke() ?: config.reportIds
+    require(config.sourceId.matches(Regex("[A-Za-z0-9_-]{1,64}")) && reports.size <= 10_000)
+    reports.forEach { require(UUID.fromString(it).toString() == it) }
+    enqueue(config, reports)
     var stored = 0; var pending = 0; var retryable = 0
     var timeRefreshAttempted = false
     repeat(16) {
       if (!current(config, receiver)) return ReceiptReturnBatch(false, stored, pending, retryable)
-      val attempt = claim(config, checkedClock()) ?: return ReceiptReturnBatch(true, stored, pending, retryable)
+      val attempt = claim(config, checkedClock(), reports) ?: return ReceiptReturnBatch(true, stored, pending, retryable)
       var next: String? = attempt.cursor
       var success = false
       var waiting = false
@@ -246,12 +249,12 @@ class ReceiptReturnWorker(
   }
   private fun current(config: ReceiptReturnFeedConfig, receiver: TrustedReceiptReturnService) =
     configuration() === config && service() === receiver && receiver.feedActive()
-  private fun enqueue(config: ReceiptReturnFeedConfig) {
+  private fun enqueue(config: ReceiptReturnFeedConfig, reports: Set<String>) {
     val db = database.writableDatabase
     db.beginTransaction()
     try {
       var count = db.rawQuery("SELECT COUNT(*) FROM receipt_return_sync", null).use { it.moveToFirst(); it.getInt(0) }
-      for (report in config.reportIds) {
+      for (report in reports) {
         val exists = db.rawQuery("SELECT 1 FROM receipt_return_sync WHERE source_id=? AND report_id=?",
           arrayOf(config.sourceId, report)).use { it.moveToFirst() }
         if (exists) continue
@@ -267,7 +270,7 @@ class ReceiptReturnWorker(
   private fun checkedClock() = monotonicClock().also {
     require(UUID.fromString(it.bootId).toString() == it.bootId && it.elapsedMs in 0..9_007_199_194_991L)
   }
-  private fun claim(config: ReceiptReturnFeedConfig, clock: MonotonicClock): Attempt? {
+  private fun claim(config: ReceiptReturnFeedConfig, clock: MonotonicClock, reports: Set<String>): Attempt? {
     val db = database.writableDatabase
     db.beginTransaction()
     try {
@@ -279,7 +282,7 @@ class ReceiptReturnWorker(
       ).use { c ->
         var found: Attempt? = null
         while (c.moveToNext()) {
-          if (c.getString(0) !in config.reportIds) continue
+          if (c.getString(0) !in reports) continue
           found = Attempt(c.getString(0), if (c.isNull(1)) null else c.getString(1), UUID.randomUUID().toString(), clock.bootId, clock.elapsedMs)
           break
         }

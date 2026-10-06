@@ -1,0 +1,3 @@
+# Preserve the bytes bound by the native projection's fixture provenance hash.
+fixtures/offline-root-v1/three-node.json text eol=lf
+android/app/src/androidTest/assets/offline-root-three-node.json text eol=lf

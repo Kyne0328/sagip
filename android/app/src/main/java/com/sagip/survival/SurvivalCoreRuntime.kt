@@ -7,6 +7,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -74,16 +75,15 @@ class SurvivalCoreRuntime private constructor(context: Context) {
     fun clockProfile()=manifest.clockQualification(android.os.Build.FINGERPRINT,android.os.Build.VERSION.SDK_INT,
       returnClockFor(identity.keyId).bootId)
     if(runCatching { clockProfile() }.getOrNull()==null) return
-    val transport=HttpOriginReceiptTimeTransport(manifest.endpoint,{
-      database.readableDatabase.rawQuery(
-        "SELECT r.report_id FROM reports r WHERE EXISTS(SELECT 1 FROM server_receipts s WHERE s.report_id=r.report_id) ORDER BY r.created_at DESC LIMIT 1",
-        null,
-      ).use { if(it.moveToFirst())it.getString(0) else null }
-    },identity)
+    val inventory=CustodyReceiptInventory(database)
+    val transport=HttpCustodyReceiptReturnTransport(manifest.endpoint,inventory::envelope,inventory::reports,
+      identity,{returnClockFor(identity.keyId)})
+    val feed=ReceiptReturnFeedConfig("neon-custody-"+OfflineRootSnapshotCodec.digest(
+      manifest.endpoint.toByteArray(Charsets.UTF_8)).take(16),emptySet(),transport,transport,inventory::reports)
     val config=TrustedReceiptReturnConfig(identity.keyId,manifest.rootPins,manifest.policy.allowedScopes.toSet(),
       qualified={ runCatching { clockProfile()!=null }.getOrDefault(false) },
       offlineRoot=OfflineRootConfig(manifest.policy,manifest.checkpointSignerPins,::clockProfile),
-      timeTransport=transport)
+      timeTransport=transport,feed=feed,maximumClockDriftPpm=clockProfile()!!.maximumDriftPpm.coerceAtLeast(100))
     configureReceiptReturn(config)
     val owner=receiptReturn ?: return
     if(!owner.ensureOfflineRootDomain(manifest.initialEpoch,manifest.initialAuthorityStateDigest)) {
@@ -244,6 +244,13 @@ class SurvivalCoreRuntime private constructor(context: Context) {
   init {
     // Trust/bootstrap failure cannot block local SOS creation or the normal upload worker.
     deliveryScope.launch { runCatching { installPackagedReceiptReturn() } }
+    deliveryScope.launch {
+      while(true) {
+        delay(30_000L)
+        // Existing lifetime is process-wide. Offline idle polling sends no requests.
+        if(receiptReturn!=null && hasValidatedInternet()) returnSync.trigger()
+      }
+    }
   }
 
   companion object {

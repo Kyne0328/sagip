@@ -15,6 +15,9 @@ internal data class OfflineRootElapsedClockProfile(
   val evidenceId: String,
 )
 
+/** Explicit prototype deployment tolerance, not a claim of device laboratory qualification. */
+internal data class AndroidElapsedClockPolicy(val maximumDriftPpm: Int, val maximumCheckpointAgeMs: Long)
+
 /** Public trust data from the signed APK only. Returned pins cannot mutate this deployment. */
 internal class OfflineRootDeployment(
   val policy: OfflineRootPolicy,
@@ -26,6 +29,7 @@ internal class OfflineRootDeployment(
   val timeSignerKeyId: String,
   val timeSourceId: String,
   profiles: List<OfflineRootElapsedClockProfile>,
+  val androidClockPolicy: AndroidElapsedClockPolicy? = null,
 ) {
   private val roots = roots.mapValues { it.value.copyOf() }
   private val signers = signers.mapValues { it.value.copyOf() }
@@ -36,6 +40,11 @@ internal class OfflineRootDeployment(
   fun clockQualification(buildFingerprint: String, sdkInt: Int, bootId: String): OfflineRootClockQualification? {
     if (bootId == "00000000-0000-0000-0000-000000000000" ||
       runCatching { UUID.fromString(bootId).toString() == bootId }.getOrDefault(false).not()) return null
+    androidClockPolicy?.let {
+      if (sdkInt < 24) return null
+      return OfflineRootClockQualification(timeSourceId, timeSignerKeyId, bootId,
+        it.maximumDriftPpm, it.maximumCheckpointAgeMs)
+    }
     val profile = qualifiedElapsedClockProfiles.singleOrNull {
       it.buildFingerprint == buildFingerprint && it.sdkInt == sdkInt
     } ?: return null
@@ -73,10 +82,13 @@ internal object OfflineRootDeploymentManifest {
     val source = Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
       .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString()
     if (source.all { it in " \r\n\t" }) return null
-    val root = fields(Json(source).read(), setOf("format","version","mode","endpoint","policy","rootPins",
+    val parsed = Json(source).read()
+    val version = (parsed as? Map<*, *>)?.get("version")
+    require(version == 1L || version == 2L)
+    val root = fields(parsed, setOf("format","version","mode","endpoint","policy","rootPins",
       "checkpointSignerPins","initialEpoch","initialAuthorityStateDigest","timeSignerKeyId",
-      "timeSourceId","qualifiedElapsedClockProfiles"))
-    require(text(root,"format") == "SAGIP_OFFLINE_ROOT_DEPLOYMENT" && number(root,"version") == 1L)
+      "timeSourceId","qualifiedElapsedClockProfiles") + if(version == 2L) setOf("androidClockPolicy") else emptySet())
+    require(text(root,"format") == "SAGIP_OFFLINE_ROOT_DEPLOYMENT")
     val mode = text(root,"mode")
     require(mode == "BOUNDED_OFFLINE_ROOT_SNAPSHOT")
     val policy = policy(root.getValue("policy"))
@@ -117,7 +129,14 @@ internal object OfflineRootDeploymentManifest {
       OfflineRootElapsedClockProfile(fingerprint,sdk.toInt(),drift.toInt(),age,evidence)
     }
     require(profiles.map { it.buildFingerprint to it.sdkInt }.toSet().size == profiles.size)
-    return OfflineRootDeployment(policy,roots,signers,epoch,state,endpoint,timeSigner,timeSource,profiles)
+    val androidPolicy = if(version == 2L) {
+      val p=fields(root.getValue("androidClockPolicy"),setOf("mode","maximumDriftPpm","maximumCheckpointAgeMs"))
+      require(text(p,"mode")=="ANDROID_ELAPSED_REALTIME")
+      val drift=number(p,"maximumDriftPpm");val age=number(p,"maximumCheckpointAgeMs")
+      require(drift in 100..1000 && age in 1..86_400_000L && profiles.isEmpty())
+      AndroidElapsedClockPolicy(drift.toInt(),age)
+    } else null
+    return OfflineRootDeployment(policy,roots,signers,epoch,state,endpoint,timeSigner,timeSource,profiles,androidPolicy)
   }
 
   private fun policy(value: Any): OfflineRootPolicy {

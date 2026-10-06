@@ -1,0 +1,58 @@
+{
+  "format": "SAGIP_OFFLINE_ROOT_DEPLOYMENT",
+  "version": 2,
+  "mode": "BOUNDED_OFFLINE_ROOT_SNAPSHOT",
+  "endpoint": "https://br-shy-brook-b3mhu6ho-api.compute.c-4.ap-southeast-1.aws.neon.tech",
+  "policy": {
+    "mode": "BOUNDED_OFFLINE_ROOT_SNAPSHOT",
+    "authorityDomainId": "SAGIP_TAGUM_PILOT",
+    "signerBindings": [
+      {
+        "checkpointSignerKeyId": "0d49fe60c39343c1bca88116a33010ce0b1cfe37ea76fe5f5268f59c62755993",
+        "receiptRootKeyId": "063a14be0235e2a3e93792ad9750d04f70f438b4822430d516ff172cd2fd26d1",
+        "issuerProviderId": "7b7c267e089bfdefcef6658014f7159561daff5c95fd4136dcef6d48fe987dcb"
+      }
+    ],
+    "allowedScopes": [
+      "TAGUM_PILOT"
+    ],
+    "allowedStatuses": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "maxAuthorityStalenessMs": 900000,
+    "maxReceiptIssuanceAgeMs": 86400000,
+    "maxProofValidityMs": 900000,
+    "qualifiedTimeSourceIds": [
+      "CLOUDFLARE_ROUGHTIME_2026"
+    ],
+    "disseminationAudience": "ORIGIN_AND_CUSTODY_RELAYS",
+    "providerConflictHandling": "KEEP_SEPARATE_NO_AUTOMATIC_CLOSURE",
+    "resolvedHandling": "REPORTED_STATUS_ONLY_NO_AUTOMATIC_CLOSURE",
+    "maxReplayRecords": 10000
+  },
+  "rootPins": [
+    {
+      "keyId": "063a14be0235e2a3e93792ad9750d04f70f438b4822430d516ff172cd2fd26d1",
+      "publicKeyDerBase64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE4H85IaKdzCIF/0kNtzdRpj+OUqLMU7U61vB8eE2ovdiBsekLE2Y3KHKJ/sRq1kAVb/MbYyMdT7/F36iyk7Dtyg=="
+    }
+  ],
+  "checkpointSignerPins": [
+    {
+      "keyId": "0d49fe60c39343c1bca88116a33010ce0b1cfe37ea76fe5f5268f59c62755993",
+      "publicKeyDerBase64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAENtDjG8XNFrczwrXWorz5WrQj9HHzfUGJW3vxWmijpMycKhsJet832N4PjtH9mTau03C68FHDU6a/9MDnYVOXJw=="
+    }
+  ],
+  "initialEpoch": "1",
+  "initialAuthorityStateDigest": "b987e599a4b813f82dc06a68f9efdd3fbc39b0e8e0e1660665e0f2dc5952642e",
+  "timeSignerKeyId": "063a14be0235e2a3e93792ad9750d04f70f438b4822430d516ff172cd2fd26d1",
+  "timeSourceId": "CLOUDFLARE_ROUGHTIME_2026",
+  "qualifiedElapsedClockProfiles": [],
+  "androidClockPolicy": {
+    "mode": "ANDROID_ELAPSED_REALTIME",
+    "maximumDriftPpm": 1000,
+    "maximumCheckpointAgeMs": 86400000
+  }
+}

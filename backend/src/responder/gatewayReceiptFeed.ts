@@ -4,6 +4,7 @@ import {decodeReceipt, MAX_RECEIPT_BYTES, validateReceiptPublicKey} from '../pro
 import {verifyReceipt, type ReportIdentity, type TimeInterval, type VerificationContext} from './receiptAuthority.js';
 import type {ResponderIdentity} from './types.js';
 import type {OfflineRootSnapshotService} from './offlineRootSnapshotService.js';
+import {authenticateCustodyRequest} from './reportCustodyAccess.js';
 
 export const MAX_GATEWAY_RECEIPT_PAGE_BYTES = 262144;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
@@ -54,6 +55,41 @@ export class GatewayReceiptFeed {
     const actor = Object.freeze({...identity});
     if (!this.roles.has(actor.role) || !this.access.isReportAuthorized(actor, reportId))
       throw new Error('SCOPE_DENIED');
+    return this.listAuthorized(reportId, cursor, async c => {
+      if (!this.roles.has(actor.role) || !this.access.isReportAuthorized(actor, reportId)) throw new Error('SCOPE_DENIED');
+      if (c) {
+        const registered = (await c.query<{callsign: string; role: string}>(
+          'SELECT callsign,role FROM responder_identities WHERE responder_id=$1', [actor.responderId])).rows[0];
+        if (!registered || registered.callsign !== actor.callsign || registered.role !== actor.role) throw new Error('UNAUTHORIZED');
+      }
+    });
+  }
+
+  async listForCustody(reportId: string, body: Buffer, signature: string | null): Promise<GatewayReceiptPage> {
+    if (!this.snapshots || this.snapshots.policy.disseminationAudience !== 'ORIGIN_AND_CUSTODY_RELAYS')
+      throw new Error('SCOPE_DENIED');
+    const authClient = await this.pool.connect();
+    let cursor: string | null;
+    try {
+      const auth = await authenticateCustodyRequest(authClient, reportId, 'receipts', body, signature);
+      if (!auth) throw new Error('ORIGIN_PROOF_REQUIRED');
+      cursor = auth.cursor;
+    } finally { authClient.release(); }
+    return this.listAuthorized(reportId, cursor, async c => {
+      if (c && !await authenticateCustodyRequest(c, reportId, 'receipts', body, signature))
+        throw new Error('ORIGIN_PROOF_REQUIRED');
+    });
+  }
+
+  async authenticateCustody(reportId: string, body: Buffer, signature: string | null): Promise<boolean> {
+    if (this.snapshots?.policy.disseminationAudience !== 'ORIGIN_AND_CUSTODY_RELAYS') return false;
+    const c = await this.pool.connect();
+    try { return await authenticateCustodyRequest(c, reportId, 'receipts', body, signature) !== null; }
+    finally { c.release(); }
+  }
+
+  private async listAuthorized(reportId: string, cursor: string | null,
+    authorize: (c?: import('pg').PoolClient) => Promise<void>): Promise<GatewayReceiptPage> {
     if (!UUID.test(reportId) ||
         (cursor !== null && !/^[0-9a-f]{64}$/u.test(cursor)))
       throw new Error('INVALID_CURSOR');
@@ -65,12 +101,7 @@ export class GatewayReceiptFeed {
     const c = await this.pool.connect();
     let released = false;
     try {
-      const registered = (await c.query<{callsign: string; role: string}>(
-        'SELECT callsign,role FROM responder_identities WHERE responder_id=$1',
-        [actor.responderId],
-      )).rows[0];
-      if (!registered || registered.callsign !== actor.callsign || registered.role !== actor.role)
-        throw new Error('UNAUTHORIZED');
+      await authorize(c);
       let boundary: Row | undefined;
       if (cursor !== null) {
         boundary = (await c.query<Row>(
@@ -221,6 +252,7 @@ export class GatewayReceiptFeed {
       // No snapshot service call owns another connection while this final client is held.
       const finalClient = await this.pool.connect();
       try {
+        await authorize(finalClient);
         let rootActive = true;
         if (this.snapshots) {
           try { await this.snapshots.assertRootActive(finalClient); }
@@ -263,8 +295,7 @@ export class GatewayReceiptFeed {
           throw new Error('OFFLINE_ROOT_CAPACITY');
       }
       // Recheck current policy after I/O, before disclosure.
-      if (!this.roles.has(actor.role) || !this.access.isReportAuthorized(actor, reportId))
-        throw new Error('SCOPE_DENIED');
+      await authorize();
       return page;
     } finally {
       if (!released) c.release();
