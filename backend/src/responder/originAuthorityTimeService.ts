@@ -98,12 +98,17 @@ export class OriginAuthorityTimeService {
         const budget=(await c.query<{count:string; bytes:string}>(
           `SELECT COUNT(*) AS count,COALESCE(SUM(octet_length(object_bytes)+128),0) AS bytes FROM ${this.proofTable}`)).rows[0]!;
         if(Number(recent.count)>=128 || Number(budget.count)>=10000) throw new Error('CAPACITY_FULL');
+        // Native challenge acceptance expands uncertainty by up to 60 seconds of RTT.
+        // Leave that budget inside the 24-hour checkpoint horizon instead of making every
+        // nonzero-RTT device checkpoint ineligible for offline snapshots.
+        const proofLifetimeMs=t.validForMs-(this.challengeAuthenticator ? 60000 : 0);
+        if(proofLifetimeMs<=t.uncertaintyMs)throw new Error('TIME_UNAVAILABLE');
         const fields:TimeProofFields={
           purpose:4,proofId:randomUUID(),signerProviderId:issuerProviderId(1,this.rootId,NIL),
           signerKeyId:this.rootId,grantId:NIL,signerBootSessionId:NIL,
           verifierId:challenge.verifierId,verifierBootSessionId:challenge.verifierBootSessionId,
           nonce:challenge.nonce,parentCheckpointDigest:Buffer.alloc(32),signedTimeMs:t.timeMs,
-          elapsedSinceCheckpointMs:0,uncertaintyMs:t.uncertaintyMs,validUntilMs:t.timeMs+t.validForMs,
+          elapsedSinceCheckpointMs:0,uncertaintyMs:t.uncertaintyMs,validUntilMs:t.timeMs+proofLifetimeMs,
         };
         const bytes=encodeReceipt(fields,await this.signer.sign(receiptSigningInput(fields,Buffer.alloc(0)),c),Buffer.alloc(0));
         if(!verifyReceiptSignature(decodeReceipt(bytes),this.root)) throw new Error('SIGNER_UNAVAILABLE');

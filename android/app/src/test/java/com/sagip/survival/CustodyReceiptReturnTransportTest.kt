@@ -75,4 +75,25 @@ class CustodyReceiptReturnTransportTest {
     assertThrows(Exception::class.java) {HttpDeviceReceiptTimeTransport("https://sagip.example",identity)
       .prepareRequest(challenge().copy(verifierId=ByteArray(32)))}
   }
+  @Test fun signed_device_checkpoint_reserves_full_network_uncertainty_inside_its_horizon() {
+    val nil="00000000-0000-0000-0000-000000000000"
+    val signedTime=1_700_000_000_000L
+    val uncertainty=5000L
+    val fields=ReceiptFields.Time("44444444-4444-4444-8444-444444444444",
+      ReceiptAuthority.issuerProviderId(1,identity.keyId,nil),identity.keyId,nil,nil,identity.keyId,boot,
+      ByteArray(32){7},ByteArray(32),signedTime,0L,uncertainty,signedTime+86_400_000L-uncertainty-60_000L)
+    val placeholder=ByteArray(64).also { it[31]=1;it[63]=1 }
+    val unsigned=ReceiptV2Codec.encode(fields,placeholder,byteArrayOf())
+    val input="SAGIP-SIGNED-V2\u0000".toByteArray(Charsets.US_ASCII)+unsigned.copyOf(unsigned.size-64)
+    val signature=StatusRequestProof.canonicalSignature(identity.sign(input))
+    val encoded=ReceiptV2Codec.encode(fields,signature,byteArrayOf())
+    var committed:TimeCheckpoint?=null
+    val q=challenge().copy(sentElapsedMs=1000L,
+      context=VerificationContext(mapOf(OfflineRootSnapshotCodec.hex(identity.keyId) to identity.publicKeyDer),
+        emptySet(),setOf("TAGUM_PILOT"),null,null,false,null,null),
+      commitCheckpoint={committed=it;true})
+    val accepted=ReceiptAuthority.acceptTimeProof(encoded,q,MonotonicClock(boot,1600L))
+    assertEquals("ACCEPTED",accepted.kind)
+    assertTrue(committed!!.validUntilMs-committed!!.earliestMs<=86_400_000L)
+  }
 }

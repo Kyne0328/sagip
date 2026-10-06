@@ -110,6 +110,7 @@ test('first-launch device time binds the installation key and boot without a rep
     if(decoded.fields.purpose!==4)throw Error('time proof expected');
     assert.deepEqual(decoded.fields.verifierId,verifierId);assert.equal(decoded.fields.verifierBootSessionId,boot);
     assert.deepEqual(decoded.fields.nonce,nonce);
+    assert.equal(decoded.fields.validUntilMs-decoded.fields.signedTimeMs,3_540_000);
     assert.deepEqual(Buffer.from(await (await handleSagipRequest(request(),deps)).arrayBuffer()),proof);
     const stored=(await f.pool.query('SELECT report_id FROM custody_authority_time_proofs WHERE verifier_id=$1',[verifierId])).rows;
     assert.equal(stored.length,1);assert.equal(stored[0].report_id,null);
